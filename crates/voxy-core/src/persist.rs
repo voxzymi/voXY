@@ -19,7 +19,7 @@ pub const PACKAGE_EXTENSION: &str = "voxyz";
 /// Value of the envelope's `format` field.
 pub const FORMAT_ID: &str = "voxy-project";
 /// The format version this build writes, and the newest it reads.
-pub const FORMAT_VERSION: Version = Version::new(0, 2, 0);
+pub const FORMAT_VERSION: Version = Version::new(0, 3, 0);
 
 #[derive(Debug, thiserror::Error)]
 pub enum LoadError {
@@ -102,6 +102,9 @@ pub fn from_json(json: &str) -> Result<Document, LoadError> {
     // Older versions are migrated here, one step at a time.
     // - 0.1.0 → 0.2.0: 0.2.0 only adds keyframed properties; every 0.1.0 file
     //   is already a valid 0.2.0 document, so no rewrite is needed.
+    // - 0.2.0 → 0.3.0: 0.3.0 only adds video assets and layers (and the
+    //   optional asset fields `duration` and `frame_rate`); likewise no
+    //   rewrite.
     let env: EnvelopeIn = serde_json::from_str(json)?;
     env.project.validate()?;
     Ok(env.project)
@@ -208,19 +211,48 @@ mod tests {
     #[test]
     fn newer_versions_are_refused() {
         let current = format!("\"{FORMAT_VERSION}\"");
-        let json = to_json(&sample()).unwrap().replace(&current, "\"0.3.0\"");
+        let json = to_json(&sample()).unwrap().replace(&current, "\"0.4.0\"");
         assert!(matches!(from_json(&json), Err(LoadError::TooNew { .. })));
         let json = to_json(&sample()).unwrap().replace(&current, "\"banana\"");
         assert!(matches!(from_json(&json), Err(LoadError::BadVersion(_))));
     }
 
     #[test]
-    fn version_0_1_0_files_still_load() {
-        // A 0.1.0 file (static properties only) is valid 0.2.0 content.
+    fn older_versions_still_load() {
+        // A 0.1.0 file (static properties only) or 0.2.0 file (no video) is
+        // valid 0.3.0 content.
         let doc = sample();
         let current = format!("\"{FORMAT_VERSION}\"");
-        let old = to_json(&doc).unwrap().replace(&current, "\"0.1.0\"");
-        assert_eq!(from_json(&old).unwrap(), doc);
+        for old in ["0.1.0", "0.2.0"] {
+            let json = to_json(&doc)
+                .unwrap()
+                .replace(&current, &format!("\"{old}\""));
+            assert_eq!(from_json(&json).unwrap(), doc, "{old}");
+        }
+    }
+
+    #[test]
+    fn video_layers_round_trip() {
+        use crate::command::AddVideoLayer;
+        use crate::{FrameRate, LayerKind, Time};
+        let mut doc = sample();
+        let comp = doc.root_comp;
+        AddVideoLayer {
+            comp,
+            path: "clip.mp4".into(),
+            pixel_size: [1920, 1080],
+            duration: Some(Time::from_secs(2)),
+            frame_rate: Some(FrameRate::FPS_29_97),
+            index: 0,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let layer = &doc.root().layers[0];
+        assert!(matches!(layer.kind, LayerKind::Video { .. }));
+        assert_eq!(layer.out_point, Time::from_secs(2), "ends with the video");
+        let json = to_json(&doc).unwrap();
+        assert!(json.contains("\"type\": \"video\""), "{json}");
+        assert_eq!(from_json(&json).unwrap(), doc);
     }
 
     #[test]

@@ -51,6 +51,15 @@ pub enum EvaluatedContent {
         /// image's size.
         size: Option<DVec2>,
     },
+    /// A video frame drawn at native size from the layer-local origin.
+    Video {
+        asset: AssetId,
+        /// The source time to show.
+        source_time: Time,
+        /// Size recorded with the asset, if any; the renderer uses the
+        /// decoded frame's size.
+        size: Option<DVec2>,
+    },
 }
 
 /// Evaluates `comp` at `time`. Returns `None` if the composition is missing.
@@ -94,12 +103,21 @@ fn content(layer: &Layer, time: Time, assets: &AssetTable) -> EvaluatedContent {
         },
         LayerKind::Image { asset } => EvaluatedContent::Image {
             asset: *asset,
-            size: assets
-                .get(*asset)
-                .and_then(|a| a.pixel_size)
-                .map(|[w, h]| DVec2::new(f64::from(w), f64::from(h))),
+            size: asset_size(assets, *asset),
+        },
+        LayerKind::Video { asset } => EvaluatedContent::Video {
+            asset: *asset,
+            source_time: layer.source_time(time),
+            size: asset_size(assets, *asset),
         },
     }
+}
+
+fn asset_size(assets: &AssetTable, asset: AssetId) -> Option<DVec2> {
+    assets
+        .get(asset)
+        .and_then(|a| a.pixel_size)
+        .map(|[w, h]| DVec2::new(f64::from(w), f64::from(h)))
 }
 
 fn scalar(p: &crate::Property, time: Time, fallback: f64) -> f64 {
@@ -282,5 +300,47 @@ mod tests {
         let a = evaluate(&doc, doc.root_comp, Time::from_millis(500));
         let b = evaluate(&doc, doc.root_comp, Time::from_millis(500));
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn video_layers_map_composition_time_to_source_time() {
+        use crate::command::{AddVideoLayer, SetLayerTiming};
+        let mut doc = Document::new("Video", CompSettings::default());
+        let comp = doc.root_comp;
+        AddVideoLayer {
+            comp,
+            path: "clip.mp4".into(),
+            pixel_size: [64, 32],
+            duration: None,
+            frame_rate: None,
+            index: 0,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let layer = doc.root().layers[0].id;
+        // In at 1 s, showing the source from 0.5 s.
+        SetLayerTiming {
+            layer,
+            in_point: Time::from_secs(1),
+            out_point: Time::from_secs(3),
+            start_offset: Time::from_millis(500),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        assert!(
+            evaluate(&doc, comp, Time::from_millis(999))
+                .unwrap()
+                .layers
+                .is_empty()
+        );
+        let eval = evaluate(&doc, comp, Time::from_millis(1250)).unwrap();
+        let EvaluatedContent::Video {
+            source_time, size, ..
+        } = eval.layers[0].content
+        else {
+            panic!("not a video layer");
+        };
+        assert_eq!(source_time, Time::from_millis(750));
+        assert_eq!(size, Some(DVec2::new(64.0, 32.0)));
     }
 }

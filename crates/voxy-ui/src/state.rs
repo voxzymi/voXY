@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use voxy_core::command::{AddImageLayer, AddSolidLayer, RemoveLayers, SetAssetPath};
+use voxy_core::command::{AddImageLayer, AddSolidLayer, AddVideoLayer, RemoveLayers, SetAssetPath};
 use voxy_core::{Command, CompSettings, Document, History, LayerId, LinearRgba, Time, persist};
 
 /// A message for the status bar.
@@ -224,6 +224,48 @@ impl EditorState {
             }
             Err(e) => self.error(format!("Could not import {}: {e}", path.display())),
         }
+    }
+
+    pub fn import_video_dialog(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .set_title("Import Video")
+            .add_filter(
+                "Video",
+                &[
+                    "mp4", "m4v", "mov", "mkv", "webm", "avi", "ts", "mts", "mxf",
+                ],
+            )
+            .pick_file()
+        else {
+            return;
+        };
+        self.import_video(&path);
+    }
+
+    /// Adds a layer showing the video at `path`.
+    pub fn import_video(&mut self, path: &Path) {
+        let info = match voxy_media::video::probe(path) {
+            Ok(info) => info,
+            Err(e) => {
+                self.error(format!("Could not import {}: {e}", path.display()));
+                return;
+            }
+        };
+        let Some(video) = info.video else {
+            self.error(format!("{} has no video stream", path.display()));
+            return;
+        };
+        let comp = self.history.current().root_comp;
+        let stored = portable_path(path, self.asset_root().as_deref());
+        self.execute(AddVideoLayer {
+            comp,
+            path: stored,
+            pixel_size: [video.width, video.height],
+            duration: video.duration.or(info.duration),
+            frame_rate: video.frame_rate,
+            index: 0,
+        });
+        self.selection = self.history.current().root().layers.first().map(|l| l.id);
     }
 
     /// Deletes selected keyframes if there are any, otherwise the selected layer.

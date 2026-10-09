@@ -1,131 +1,18 @@
-//! Decode tests against clips encoded at test time with FFmpeg's built-in
-//! (LGPL) encoders, so no binary fixtures are committed.
-//!
-//! Every frame encodes its own index as 10 black/white blocks, so a test can
-//! tell exactly which frame it got back, even through lossy compression.
+//! Decode tests against clips encoded at test time (see `common`), so no
+//! binary fixtures are committed.
 
 #![cfg(feature = "ffmpeg")]
 #![allow(clippy::unwrap_used, clippy::many_single_char_names)]
 
-use std::path::{Path, PathBuf};
+mod common;
 
-use ffmpeg::util::format::Pixel;
-use ffmpeg::{Rational, codec, encoder, format, frame, software::scaling};
+use common::{Clip, H, W, encode, index_of, soft};
+use ffmpeg::codec;
 use ffmpeg_next as ffmpeg;
+use std::sync::atomic::AtomicBool;
 use voxy_core::{FrameRate, Time};
-use voxy_media::video::{DecodeOptions, HwAccel, VideoDecoder, VideoFrame, probe};
 
-const W: u32 = 160;
-const H: u32 = 96;
-const BITS: u32 = 10;
-const BLOCK: u32 = W / BITS;
-
-struct Clip {
-    container: &'static str,
-    codec: codec::Id,
-    rate: FrameRate,
-    frames: u32,
-    gop: u32,
-    b_frames: usize,
-}
-
-/// Encodes a clip whose frame `i` shows `i` in binary.
-fn encode(dir: &Path, name: &str, clip: &Clip) -> PathBuf {
-    ffmpeg::init().unwrap();
-    let path = dir.join(format!("{name}.{}", clip.container));
-    let mut octx = format::output(&path).unwrap();
-    let codec = encoder::find(clip.codec).expect("built-in encoder");
-    let global_header = octx.format().flags().contains(format::Flags::GLOBAL_HEADER);
-    let mut ost = octx.add_stream(codec).unwrap();
-    let mut enc = codec::context::Context::new_with_codec(codec)
-        .encoder()
-        .video()
-        .unwrap();
-    let (num, den) = (clip.rate.num() as i32, clip.rate.den() as i32);
-    let enc_tb = Rational::new(den, num);
-    enc.set_width(W);
-    enc.set_height(H);
-    enc.set_format(Pixel::YUV420P);
-    enc.set_time_base(enc_tb);
-    enc.set_frame_rate(Some(Rational::new(num, den)));
-    enc.set_gop(clip.gop);
-    enc.set_max_b_frames(clip.b_frames);
-    enc.set_bit_rate(4_000_000);
-    if global_header {
-        enc.set_flags(codec::Flags::GLOBAL_HEADER);
-    }
-    let mut enc = enc.open_as(codec).unwrap();
-    ost.set_parameters(&enc);
-    ost.set_avg_frame_rate(Rational::new(num, den));
-    octx.write_header().unwrap();
-    let ost_tb = octx.stream(0).unwrap().time_base();
-
-    let mut to_yuv = scaling::Context::get(
-        Pixel::RGB24,
-        W,
-        H,
-        Pixel::YUV420P,
-        W,
-        H,
-        scaling::Flags::BILINEAR,
-    )
-    .unwrap();
-    let drain = |enc: &mut encoder::Video, octx: &mut format::context::Output| {
-        let mut packet = ffmpeg::Packet::empty();
-        while enc.receive_packet(&mut packet).is_ok() {
-            packet.set_stream(0);
-            packet.rescale_ts(enc_tb, ost_tb);
-            packet.write_interleaved(octx).unwrap();
-        }
-    };
-    for i in 0..clip.frames {
-        let mut rgb = frame::Video::new(Pixel::RGB24, W, H);
-        let stride = rgb.stride(0);
-        let data = rgb.data_mut(0);
-        for y in 0..H {
-            for x in 0..W {
-                let o = y as usize * stride + x as usize * 3;
-                let v = if y < H / 2 {
-                    let bit = (x / BLOCK).min(BITS - 1);
-                    if i >> bit & 1 == 1 { 235 } else { 16 }
-                } else {
-                    128
-                };
-                data[o..o + 3].copy_from_slice(&[v, v, v]);
-            }
-        }
-        let mut yuv = frame::Video::empty();
-        to_yuv.run(&rgb, &mut yuv).unwrap();
-        yuv.set_pts(Some(i64::from(i)));
-        enc.send_frame(&yuv).unwrap();
-        drain(&mut enc, &mut octx);
-    }
-    enc.send_eof().unwrap();
-    drain(&mut enc, &mut octx);
-    octx.write_trailer().unwrap();
-    path
-}
-
-/// Reads the frame index back from the pixels.
-fn index_of(f: &VideoFrame) -> u32 {
-    let mut n = 0;
-    for bit in 0..BITS {
-        let x = bit * BLOCK + BLOCK / 2;
-        let y = H / 4;
-        let r = f.pixels[(y * f.width + x) as usize * 4];
-        if r > 128 {
-            n |= 1 << bit;
-        }
-    }
-    n
-}
-
-fn soft() -> DecodeOptions {
-    DecodeOptions {
-        hardware: HwAccel::Off,
-        threads: None,
-    }
-}
+use voxy_media::video::{DecodeOptions, SeekPlan, Step, VideoDecoder, probe, scan_keyframes};
 
 const MP4_BFRAMES: Clip = Clip {
     container: "mp4",
@@ -334,6 +221,99 @@ fn exhaustive_random_access_across_containers() {
                 let g = dec.frame_at_index(i + 1).unwrap();
                 assert_eq!(u64::from(index_of(&g)), i + 1, "{name}: neighbour of {i}");
             }
+        }
+    }
+}
+
+/// The middle of frame `i`'s interval.
+fn mid(rate: FrameRate, i: i64) -> Time {
+    let start = rate.frame_to_time(i);
+    start + Time((rate.frame_to_time(i + 1) - start).0 / 2)
+}
+
+#[test]
+fn gop_index_decides_between_decoding_forward_and_seeking() {
+    let dir = tempfile::tempdir().unwrap();
+    let rate = FrameRate::FPS_30;
+    let clip = Clip {
+        container: "mp4",
+        codec: codec::Id::MPEG4,
+        rate,
+        frames: 120,
+        gop: 12,
+        b_frames: 0,
+    };
+    let path = encode(dir.path(), "gop", &clip);
+    let mut dec = VideoDecoder::open(&path, soft()).unwrap();
+    let gop = dec.gop_index();
+    scan_keyframes(&path, &gop, &AtomicBool::new(false)).unwrap();
+    let tb = dec.info().time_base;
+    {
+        let g = gop.lock().unwrap();
+        assert!(g.is_complete());
+        let frames: Vec<i64> = g
+            .keyframes()
+            .map(|k| rate.time_to_frame(tb.to_time(k) + Time::from_millis(1)))
+            .collect();
+        assert_eq!(frames, (0..120).step_by(12).collect::<Vec<_>>());
+    }
+
+    assert_eq!(index_of(&dec.frame_at(mid(rate, 2)).unwrap()), 2);
+    assert_eq!(dec.plan(mid(rate, 2)), SeekPlan::Ready);
+    assert_eq!(dec.plan(mid(rate, 11)), SeekPlan::Forward, "same GOP");
+    assert_eq!(
+        dec.plan(mid(rate, 40)),
+        SeekPlan::Seek,
+        "keyframe 36 is close"
+    );
+    assert_eq!(dec.plan(mid(rate, 1)), SeekPlan::Seek, "backward");
+
+    // Seeking to frame 40 decodes from keyframe 36, not from frame 3.
+    let before = (dec.frames_decoded(), dec.seeks());
+    assert_eq!(index_of(&dec.frame_at(mid(rate, 40)).unwrap()), 40);
+    let decoded = dec.frames_decoded() - before.0;
+    assert_eq!(dec.seeks() - before.1, 1);
+    assert!(decoded <= 8, "decoded {decoded} frames to reach frame 40");
+    // ...and within its GOP it decodes forward.
+    assert_eq!(dec.plan(mid(rate, 47)), SeekPlan::Forward);
+    assert_eq!(index_of(&dec.frame_at(mid(rate, 47)).unwrap()), 47);
+    assert_eq!(dec.seeks() - before.1, 1);
+
+    // Without a scan, the decoder learns the GOPs it reads.
+    let mut learner = VideoDecoder::open(&path, soft()).unwrap();
+    assert_eq!(index_of(&learner.frame_at(mid(rate, 30)).unwrap()), 30);
+    let g = learner.gop_index();
+    let learned: Vec<i64> = g
+        .lock()
+        .unwrap()
+        .keyframes()
+        .map(|k| rate.time_to_frame(tb.to_time(k) + Time::from_millis(1)))
+        .collect();
+    assert_eq!(learned, vec![0, 12, 24]);
+    assert_eq!(learner.plan(mid(rate, 33)), SeekPlan::Forward);
+}
+
+#[test]
+fn stepping_reaches_the_same_frames_as_frame_at() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = encode(dir.path(), "steps", &MP4_BFRAMES);
+    let rate = MP4_BFRAMES.rate;
+    let mut dec = VideoDecoder::open(&path, soft()).unwrap();
+    for target in [5, 70, 30, 31, 89, 0, 60, 59, 89] {
+        let t = mid(rate, target);
+        let mut steps = 0;
+        while dec.step_toward(t).unwrap() == Step::Continue {
+            steps += 1;
+            assert!(steps < 1000, "no progress toward frame {target}");
+        }
+        let f = dec.current_frame().unwrap();
+        assert_eq!(index_of(&f), target as u32, "target {target}");
+        assert_eq!(dec.current_time(), Some(f.time));
+        let end = dec.current_end().unwrap();
+        if target == 89 {
+            assert_eq!(end, Time::MAX, "the last frame answers every later time");
+        } else {
+            assert_eq!(end, f.time + f.duration);
         }
     }
 }

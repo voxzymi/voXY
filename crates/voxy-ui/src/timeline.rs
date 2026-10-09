@@ -295,6 +295,7 @@ fn bar_color(layer: &Layer, time: Time) -> Color32 {
             Color32::from_rgb(c(r), c(g), c(b))
         }
         LayerKind::Image { .. } => Color32::from_rgb(60, 150, 160),
+        LayerKind::Video { .. } => Color32::from_rgb(70, 110, 190),
     }
 }
 

@@ -3,6 +3,7 @@
 
 mod app;
 mod graph_editor;
+mod media;
 mod panels;
 mod state;
 mod theme;

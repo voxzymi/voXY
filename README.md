@@ -11,14 +11,18 @@ macOS, written in Rust.
 
 voXY is an original product. Its name, artwork, icons and theme are its own.
 
-> **Status: Milestone 2c.** Milestone 1 is complete: the project model,
-> undo/redo, `.voxy` save/load, the GPU compositor and the application
-> shell. Milestone 2a adds the keyframe and interpolation model: hold,
-> linear and cubic-bezier timing with ease presets, plus arc-length
-> ("speed-aware") motion paths. Milestone 2b adds the timeline panel and
-> 2c the graph editor; on-canvas motion paths and transform gizmos come
-> next. See [`docs/design-proposal.md`](docs/design-proposal.md) for
-> the plan.
+> **Status: Milestone 3c.** Done so far:
+> - **Milestone 1:** the project model, undo/redo, `.voxy` save/load, the
+>   GPU compositor and the application shell.
+> - **2a–2c:** keyframes (hold, linear and cubic-bezier timing with ease
+>   presets, arc-length motion paths), the timeline panel and the graph
+>   editor.
+> - **3a–3b:** FFmpeg video decoding, audio output and the master clock.
+> - **3c:** video layers, with a decoder thread per video, a shared frame
+>   cache, GPU upload and GOP-aware scrubbing.
+>
+> Export, on-canvas motion paths and transform gizmos come next. See
+> [`docs/design-proposal.md`](docs/design-proposal.md) for the plan.
 
 ## What works today
 
@@ -26,8 +30,8 @@ voXY is an original product. Its name, artwork, icons and theme are its own.
 - Dockable, resizable panels: Viewport, Timeline (a layer list for now),
   Properties and Media.
 - Menus: File (New, Open, Save, Save As, Quit), Edit (Undo/Redo with the step
-  name), Layer (New Solid, Import Image, Delete) and Composition (working
-  color space).
+  name), Layer (New Solid, Import Image, Import Video, Delete) and
+  Composition (working color space).
 - Shortcuts:
 
   | Action | Shortcut |
@@ -96,6 +100,26 @@ when loaded and saved. See [`docs/voxy-format.md`](docs/voxy-format.md).
 - unit and property-based tests for the model;
 - golden-image tests for the renderer, run headless on lavapipe in CI;
 - CI on Windows, Linux, and macOS (both arm64 and x64).
+
+**Video layers** (Milestone 3c):
+- Layer › Import Video adds a layer that plays the file from its first
+  frame. Trimming its in-point keeps the picture in place.
+- Each video decodes on its own thread, so the editor never waits for it.
+  All videos share one frame cache in RAM (1 GiB, least recently used
+  frames are evicted first). The status bar shows how full it is.
+- **Scrubbing** shows the nearest keyframe as soon as the decoder has
+  sought to it, then the exact frame. Stale positions are dropped while
+  dragging.
+- **Stepping:** Right shows the next frame at once (a few frames past the
+  playhead are decoded ahead). Left reuses the frames decoded on the way to
+  the previous position, so stepping back through a GOP does not seek on
+  every frame.
+- **Playback** keeps one second decoded ahead of the playhead.
+- A keyframe index of each file decides when to decode forward and when to
+  seek. Results are frame-accurate either way.
+- Decoded frames go to the GPU once, through the same color path as still
+  images, and texture memory is reused from frame to frame.
+- A video's audio track is not played yet.
 
 **Playback:**
 - Space plays and pauses; the playhead follows the **audio master clock**,
@@ -194,7 +218,7 @@ show a single version.
 | `voxy-core` | Document model, integer time (flicks), properties, commands, snapshot undo/redo, evaluation, `.voxy` I/O. No GPU, media or UI dependencies. |
 | `voxy-render` | wgpu compositor: render planning, WGSL shaders, image preparation, output transform, readback. |
 | `voxy-vector` | Vector geometry and text (kurbo, parley, i_overlay, vello). Placeholder until Milestone 4. |
-| `voxy-media` | Image decoding; FFmpeg video decoding (demux, decode, hardware acceleration, frame-accurate seeking, flick timestamps). Audio and encoding come later in Milestone 3. |
+| `voxy-media` | Image decoding; FFmpeg video and audio decoding (hardware acceleration, frame-accurate GOP-aware seeking, flick timestamps); decoder threads and the frame cache; audio output, the master clock and A/V sync. Encoding comes later in Milestone 3. |
 | `voxy-ofx-sys` / `voxy-ofx-host` / `voxy-ofx-sandbox` | OpenFX bindings, host, and out-of-process plugin runner (one per bundle). From Milestone 7. |
 | `voxy-am-compat` | Alight Motion interoperability. From Compat 2a, built only from real sample files. |
 | `voxy-ui` | eframe/egui shell: docking, panels, menus, shortcuts, viewport. |
@@ -222,6 +246,8 @@ flowchart LR
   doc["Document snapshot<br/>(Arc, copy-on-write)"] -->|"evaluate(comp, time)<br/>pure, f64"| eval[EvaluatedComp]
   eval -->|"RenderPlan::build(settings)<br/>CPU, deterministic"| plan[RenderPlan]
   img[(Image files)] -->|"decode (voxy-media)<br/>prepare pass: premultiply,<br/>encode for working space"| tex[Prepared RGBA16F textures]
+  vid[(Video files)] -->|"decoder thread per source<br/>→ RAM frame cache (LRU)"| cache[Decoded RGBA8 frames]
+  cache -->|"upload once per frame,<br/>same prepare pass, pooled textures"| tex
   plan --> comp["Composite pass<br/>clear + one premultiplied 'over'<br/>quad per layer → RGBA16F"]
   tex --> comp
   comp --> out["Output transform<br/>linear → sRGB, 8-bit"]
@@ -239,8 +265,9 @@ flowchart LR
 - **Coming next:**
   - effects, masks, mattes and precomps (Milestones 4–5) turn the single
     chain into a DAG of nodes with content hashes, used for caching;
-  - a dedicated render thread arrives with playback (Milestone 3). Today the
-    UI thread renders only when the document or the viewport size changes.
+  - a dedicated render thread. Video decoding already runs on its own
+    threads; the UI thread renders only when the document, the time, the
+    viewport size or an arriving video frame changes the picture.
 
 ## Tests
 

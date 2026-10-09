@@ -6,11 +6,14 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::id::AssetId;
+use crate::time::{FrameRate, Time};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AssetKind {
     Image,
+    /// A video file (format 0.3.0). Its audio is not used yet.
+    Video,
 }
 
 /// A file a project uses.
@@ -25,6 +28,12 @@ pub struct Asset {
     /// Native pixel size, when known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pixel_size: Option<[u32; 2]>,
+    /// Length of a video, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration: Option<Time>,
+    /// Nominal frame rate of a video, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame_rate: Option<FrameRate>,
 }
 
 impl Asset {

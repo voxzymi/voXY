@@ -9,7 +9,7 @@
 //! is deterministic and testable without a GPU.
 
 use voxy_core::glam::{DAffine2, DVec2};
-use voxy_core::{AssetId, EvaluatedComp, EvaluatedContent, LinearRgba, WorkingSpace};
+use voxy_core::{AssetId, EvaluatedComp, EvaluatedContent, LinearRgba, Time, WorkingSpace};
 
 /// Settings that differ between preview and export. Everything else is
 /// shared, so a full-quality preview frame equals the exported frame.
@@ -41,14 +41,20 @@ pub enum DrawSource {
     Solid([f32; 4]),
     /// An image asset; the shader samples, premultiplies and applies `opacity`.
     Image { asset: AssetId, opacity: f32 },
+    /// The frame of a video asset at source time `time`, drawn like an image.
+    Video {
+        asset: AssetId,
+        time: Time,
+        opacity: f32,
+    },
 }
 
 /// One layer composited with premultiplied "over".
 #[derive(Debug, Clone, PartialEq)]
 pub struct DrawOp {
     pub source: DrawSource,
-    /// Quad size in layer-local pixels. `None` for images means "use the
-    /// decoded image size".
+    /// Quad size in layer-local pixels. `None` for images and video means
+    /// "use the decoded size".
     pub local_size: Option<DVec2>,
     /// Maps layer-local pixels to output pixels (resolution scale applied).
     pub output_from_local: DAffine2,
@@ -101,6 +107,18 @@ impl RenderPlan {
                     EvaluatedContent::Image { asset, size } => (
                         DrawSource::Image {
                             asset: *asset,
+                            opacity,
+                        },
+                        *size,
+                    ),
+                    EvaluatedContent::Video {
+                        asset,
+                        source_time,
+                        size,
+                    } => (
+                        DrawSource::Video {
+                            asset: *asset,
+                            time: *source_time,
                             opacity,
                         },
                         *size,

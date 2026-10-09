@@ -72,7 +72,7 @@ impl Transform {
 
 /// What a layer draws.
 ///
-/// Milestone 1 has solids and still images; the remaining layer types from the
+/// Solids, still images and video so far; the remaining layer types from the
 /// design proposal arrive with their milestones.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -81,6 +81,9 @@ pub enum LayerKind {
     Solid { color: Property, size: Property },
     /// A still image asset at its native pixel size.
     Image { asset: AssetId },
+    /// A video asset at its native pixel size, showing source time
+    /// [`Layer::source_time`].
+    Video { asset: AssetId },
 }
 
 impl LayerKind {
@@ -88,6 +91,15 @@ impl LayerKind {
         match self {
             LayerKind::Solid { .. } => "Solid",
             LayerKind::Image { .. } => "Image",
+            LayerKind::Video { .. } => "Video",
+        }
+    }
+
+    /// The asset this layer draws, if any.
+    pub fn asset(&self) -> Option<AssetId> {
+        match self {
+            LayerKind::Solid { .. } => None,
+            LayerKind::Image { asset } | LayerKind::Video { asset } => Some(*asset),
         }
     }
 }
@@ -145,6 +157,12 @@ impl Layer {
         self.flags.visible && self.in_point <= t && t < self.out_point
     }
 
+    /// The source (media) time shown at composition time `t`: the layer
+    /// starts showing its source at `start_offset` when it comes in.
+    pub fn source_time(&self, t: Time) -> Time {
+        t - self.in_point + self.start_offset
+    }
+
     /// Every property of the layer, transform first.
     pub fn properties(&self) -> Vec<&Property> {
         let mut out: Vec<&Property> = self.transform.properties().to_vec();
@@ -166,7 +184,7 @@ impl Layer {
         }
         match &mut self.kind {
             LayerKind::Solid { color, size } => [color, size].into_iter().find(|p| p.id == id),
-            LayerKind::Image { .. } => None,
+            LayerKind::Image { .. } | LayerKind::Video { .. } => None,
         }
     }
 }

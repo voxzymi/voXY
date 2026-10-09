@@ -1,6 +1,6 @@
 # The `.voxy` project format
 
-**Format version: 0.2.0** (Milestone 2a: keyframes)
+**Format version: 0.3.0** (Milestone 3c: video layers)
 
 A voXY project is a single UTF-8 JSON file with the extension `.voxy`. Media
 the project uses lives in a sibling folder named `<name>.assets/`:
@@ -20,7 +20,7 @@ MyProject.assets/
 ```json
 {
   "format": "voxy-project",
-  "format_version": "0.2.0",
+  "format_version": "0.3.0",
   "generator": "voXY 0.1.0",
   "project": { ... }
 }
@@ -45,6 +45,7 @@ MyProject.assets/
 |---|---|---|
 | 0.1.0 | First format (Milestone 1). Static properties only. | — |
 | 0.2.0 | Adds keyframed properties. | None needed: every 0.1.0 file is valid 0.2.0 content. |
+| 0.3.0 | Adds video assets and layers, and the optional asset fields `duration` and `frame_rate`. | None needed: every 0.2.0 file is valid 0.3.0 content. |
 
 Before writing, voXY validates the document and refuses to write an invalid
 one. Saving is atomic: the file is written to a temporary file in the same
@@ -87,9 +88,11 @@ folder, flushed, then renamed over the target.
 |---|---|---|
 | `id` | ID | |
 | `name` | string | |
-| `kind` | `"image"` | Video and audio arrive in Milestone 3. |
+| `kind` | `"image"` or `"video"` | Audio assets arrive later. A video's audio track is not used yet. |
 | `path` | string | See conventions. |
 | `pixel_size` | `[w, h]` | Optional. |
+| `duration` | flicks | Optional. Length of a video. |
+| `frame_rate` | `{ "num", "den" }` | Optional. Nominal frame rate of a video. |
 
 ### Composition
 
@@ -121,10 +124,14 @@ folder, flushed, then renamed over the target.
 ```json
 { "type": "solid", "color": <Property solid.color>, "size": <Property solid.size> }
 { "type": "image", "asset": <ID> }
+{ "type": "video", "asset": <ID> }
 ```
 
 A solid fills the rectangle from its local origin to `size`. An image is drawn
-at its native pixel size from its local origin.
+at its native pixel size from its local origin, and so is a video. At
+composition time `t` a video layer shows the frame on screen at source time
+`t − in_point + start_offset`, measured from the video's first frame. Before
+the first frame it shows the first frame, after the last frame the last.
 
 ### Transform
 

@@ -2,11 +2,45 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use voxy_core::glam::{DAffine2, DMat2, DVec2};
-use voxy_core::{AssetId, AssetTable, WorkingSpace};
+use voxy_core::{AssetId, AssetTable, Time, WorkingSpace};
+use voxy_media::VideoFrame;
 
 use crate::plan::{DrawSource, RenderPlan};
+
+/// Supplies decoded video frames to the compositor.
+///
+/// The UI answers from the frame cache without waiting (the nearest frame
+/// while scrubbing); export waits for the exact frame. Closures
+/// `Fn(AssetId, Time) -> Option<Arc<VideoFrame>>` implement it.
+pub trait VideoFrames {
+    /// The frame to draw for `asset` at source time `time`. `None` skips the
+    /// layer for this frame and lists it in [`RenderReport::pending_video`].
+    fn frame(&self, asset: AssetId, time: Time) -> Option<Arc<VideoFrame>>;
+}
+
+impl<F: Fn(AssetId, Time) -> Option<Arc<VideoFrame>>> VideoFrames for F {
+    fn frame(&self, asset: AssetId, time: Time) -> Option<Arc<VideoFrame>> {
+        self(asset, time)
+    }
+}
+
+/// No video available: video layers are skipped.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NoVideo;
+
+impl VideoFrames for NoVideo {
+    fn frame(&self, _: AssetId, _: Time) -> Option<Arc<VideoFrame>> {
+        None
+    }
+}
+
+/// Prepared video frames kept on the GPU. Enough for several video layers
+/// plus a few recent frames, so pausing, toggling or looping over the same
+/// frames does not upload them again.
+const VIDEO_SLOTS: usize = 8;
 
 /// Format of the working buffer: premultiplied, half-float.
 pub const WORKING_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
@@ -44,6 +78,20 @@ impl std::fmt::Debug for RgbaImage {
 pub struct RenderReport {
     /// Image assets that could not be loaded; their layers were skipped.
     pub missing_assets: Vec<AssetId>,
+    /// Video assets with no frame available yet; their layers were skipped.
+    pub pending_video: Vec<AssetId>,
+}
+
+/// GPU upload counters for video frames.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct VideoUploadStats {
+    /// Frames uploaded and prepared.
+    pub uploads: u64,
+    /// Draws that found their frame already on the GPU.
+    pub reused: u64,
+    /// Texture pairs created (an upload into an existing slot of the same
+    /// size creates none).
+    pub allocations: u64,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -75,6 +123,29 @@ struct ImageEntry {
     size: DVec2,
     bind_group: wgpu::BindGroup,
     _texture: wgpu::Texture,
+}
+
+/// What a draw samples.
+#[derive(Debug, Clone, Copy)]
+enum Bind {
+    Image(AssetId),
+    Video(usize),
+}
+
+/// One prepared video frame on the GPU.
+struct VideoSlot {
+    /// The frame it holds; held, so the pointer identifies it.
+    frame: Arc<VideoFrame>,
+    space: WorkingSpace,
+    size: (u32, u32),
+    /// The frame counter when it was last drawn.
+    used: u64,
+    source: wgpu::Texture,
+    source_group: wgpu::BindGroup,
+    flags: wgpu::Buffer,
+    prepared_view: wgpu::TextureView,
+    bind_group: wgpu::BindGroup,
+    _prepared: wgpu::Texture,
 }
 
 struct WorkingTarget {
@@ -110,6 +181,9 @@ pub struct Compositor {
     images: HashMap<AssetId, ImageEntry>,
     failed: HashMap<AssetId, PathBuf>,
     asset_root: Option<PathBuf>,
+    video: Vec<VideoSlot>,
+    frame_counter: u64,
+    video_stats: VideoUploadStats,
 }
 
 impl std::fmt::Debug for Compositor {
@@ -345,7 +419,14 @@ impl Compositor {
             images: HashMap::new(),
             failed: HashMap::new(),
             asset_root: None,
+            video: Vec::new(),
+            frame_counter: 0,
+            video_stats: VideoUploadStats::default(),
         }
+    }
+
+    pub fn video_stats(&self) -> VideoUploadStats {
+        self.video_stats
     }
 
     /// Sets the directory relative asset paths resolve against (the folder
@@ -360,11 +441,13 @@ impl Compositor {
 
     /// Renders `plan` into `target`, which must be an [`OUTPUT_FORMAT`]
     /// texture of the plan's size with `RENDER_ATTACHMENT` usage.
+    #[allow(clippy::too_many_arguments)]
     pub fn render(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         assets: &AssetTable,
+        video: &dyn VideoFrames,
         plan: &RenderPlan,
         target: &wgpu::TextureView,
         alpha: OutputAlpha,
@@ -372,7 +455,16 @@ impl Compositor {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("voxy-frame"),
         });
-        let report = self.encode(device, queue, &mut encoder, assets, plan, target, alpha);
+        let report = self.encode(
+            device,
+            queue,
+            &mut encoder,
+            assets,
+            video,
+            plan,
+            target,
+            alpha,
+        );
         queue.submit([encoder.finish()]);
         report
     }
@@ -383,6 +475,7 @@ impl Compositor {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         assets: &AssetTable,
+        video: &dyn VideoFrames,
         plan: &RenderPlan,
         alpha: OutputAlpha,
     ) -> Result<(RgbaImage, RenderReport), RenderError> {
@@ -394,7 +487,16 @@ impl Compositor {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("voxy-frame-readback"),
         });
-        let report = self.encode(device, queue, &mut encoder, assets, plan, &rb.view, alpha);
+        let report = self.encode(
+            device,
+            queue,
+            &mut encoder,
+            assets,
+            video,
+            plan,
+            &rb.view,
+            alpha,
+        );
         encoder.copy_texture_to_buffer(
             rb.texture.as_image_copy(),
             wgpu::TexelCopyBufferInfo {
@@ -424,20 +526,35 @@ impl Compositor {
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         assets: &AssetTable,
+        video: &dyn VideoFrames,
         plan: &RenderPlan,
         target: &wgpu::TextureView,
         alpha: OutputAlpha,
     ) -> RenderReport {
         let mut report = RenderReport::default();
+        self.frame_counter += 1;
         self.ensure_working(device, (plan.width, plan.height));
 
-        // Load and prepare any images this frame needs.
-        for draw in &plan.draws {
-            if let DrawSource::Image { asset, .. } = draw.source
-                && !self.ensure_image(device, queue, encoder, assets, asset, plan.working_space)
-                && !report.missing_assets.contains(&asset)
-            {
-                report.missing_assets.push(asset);
+        // Load and prepare any images and video frames this frame needs.
+        let mut video_slots = vec![None; plan.draws.len()];
+        for (i, draw) in plan.draws.iter().enumerate() {
+            match draw.source {
+                DrawSource::Image { asset, .. } => {
+                    if !self.ensure_image(device, queue, encoder, assets, asset, plan.working_space)
+                        && !report.missing_assets.contains(&asset)
+                    {
+                        report.missing_assets.push(asset);
+                    }
+                }
+                DrawSource::Video { asset, time, .. } => {
+                    video_slots[i] = video.frame(asset, time).and_then(|frame| {
+                        self.ensure_video(device, queue, encoder, &frame, plan.working_space)
+                    });
+                    if video_slots[i].is_none() && !report.pending_video.contains(&asset) {
+                        report.pending_video.push(asset);
+                    }
+                }
+                DrawSource::Solid(_) => {}
             }
         }
 
@@ -451,7 +568,7 @@ impl Compositor {
         );
         let mut draws = Vec::with_capacity(plan.draws.len());
         let mut uniform_bytes = Vec::new();
-        for draw in &plan.draws {
+        for (i, draw) in plan.draws.iter().enumerate() {
             let (color, mode, size, bind) = match draw.source {
                 DrawSource::Solid(c) => (c, 0, draw.local_size, None),
                 DrawSource::Image { asset, opacity } => {
@@ -462,7 +579,20 @@ impl Compositor {
                         [opacity, 0.0, 0.0, 0.0],
                         1,
                         draw.local_size.or(Some(entry.size)),
-                        Some(asset),
+                        Some(Bind::Image(asset)),
+                    )
+                }
+                DrawSource::Video { opacity, .. } => {
+                    let Some(slot) = video_slots[i] else {
+                        continue;
+                    };
+                    let (w, h) = self.video[slot].size;
+                    (
+                        [opacity, 0.0, 0.0, 0.0],
+                        1,
+                        draw.local_size
+                            .or(Some(DVec2::new(f64::from(w), f64::from(h)))),
+                        Some(Bind::Video(slot)),
                     )
                 }
             };
@@ -527,10 +657,15 @@ impl Compositor {
             });
             if let Some((_, uniforms, _)) = &self.layer_uniforms {
                 pass.set_pipeline(&self.layer_pipeline);
-                for (offset, image) in &draws {
-                    let image_group = image
-                        .and_then(|a| self.images.get(&a))
-                        .map_or(&self.blank_image, |e| &e.bind_group);
+                for (offset, bind) in &draws {
+                    let image_group = match bind {
+                        Some(Bind::Image(a)) => self
+                            .images
+                            .get(a)
+                            .map_or(&self.blank_image, |e| &e.bind_group),
+                        Some(Bind::Video(slot)) => &self.video[*slot].bind_group,
+                        None => &self.blank_image,
+                    };
                     pass.set_bind_group(0, uniforms, &[*offset]);
                     pass.set_bind_group(1, image_group, &[]);
                     pass.draw(0..6, 0..1);
@@ -681,94 +816,17 @@ impl Compositor {
             self.failed.insert(asset, path);
             return false;
         }
-        let extent = wgpu::Extent3d {
-            width: decoded.width,
-            height: decoded.height,
-            depth_or_array_layers: 1,
-        };
-        let source = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("voxy-image-source"),
-            size: extent,
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            // Raw sRGB-encoded bytes; the prepare shader decodes them
-            // explicitly so both working spaces share one path.
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        queue.write_texture(
-            source.as_image_copy(),
-            &decoded.pixels,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(decoded.width * 4),
-                rows_per_image: Some(decoded.height),
-            },
-            extent,
-        );
-        let prepared = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("voxy-image-prepared"),
-            size: extent,
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: WORKING_FORMAT,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[],
-        });
-        let prepared_view = prepared.create_view(&wgpu::TextureViewDescriptor::default());
-        let flags = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("voxy-prepare-flags"),
-            size: std::mem::size_of::<FlagsUniform>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(
-            &flags,
-            0,
-            bytemuck::bytes_of(&FlagsUniform {
-                flags: [space_flag(space), 0, 0, 0],
-            }),
-        );
+        let size = (decoded.width, decoded.height);
+        let (source, prepared, prepared_view) = texture_pair(device, size, "voxy-image");
+        write_rgba(queue, &source, size, &decoded.pixels);
+        let flags = flags_buffer(device, queue, space);
         let source_group = self.source_bind_group(
             device,
             &source.create_view(&wgpu::TextureViewDescriptor::default()),
             &flags,
         );
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("voxy-prepare-image"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &prepared_view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                ..Default::default()
-            });
-            pass.set_pipeline(&self.prepare_pipeline);
-            pass.set_bind_group(0, &source_group, &[]);
-            pass.draw(0..3, 0..1);
-        }
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("voxy-image"),
-            layout: &self.image_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&prepared_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
-                },
-            ],
-        });
+        self.prepare_pass(encoder, &source_group, &prepared_view);
+        let bind_group = self.image_bind_group(device, &prepared_view);
         self.failed.remove(&asset);
         self.images.insert(
             asset,
@@ -782,6 +840,217 @@ impl Compositor {
         );
         true
     }
+
+    fn image_bind_group(&self, device: &wgpu::Device, view: &wgpu::TextureView) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("voxy-image"),
+            layout: &self.image_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+            ],
+        })
+    }
+
+    /// Premultiplies and encodes an sRGB8 source for the working space.
+    fn prepare_pass(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        source_group: &wgpu::BindGroup,
+        target: &wgpu::TextureView,
+    ) {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("voxy-prepare"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            ..Default::default()
+        });
+        pass.set_pipeline(&self.prepare_pipeline);
+        pass.set_bind_group(0, source_group, &[]);
+        pass.draw(0..3, 0..1);
+    }
+
+    /// Makes sure `frame` is on the GPU, prepared for `space`, and returns
+    /// its slot. Frames are uploaded once and identified by their `Arc`.
+    /// A new frame goes into the least recently drawn slot not used by this
+    /// render, reusing its textures when the size matches (the usual case:
+    /// every frame of a video has the same size). Returns `None` for frames
+    /// the GPU cannot hold.
+    fn ensure_video(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        frame: &Arc<VideoFrame>,
+        space: WorkingSpace,
+    ) -> Option<usize> {
+        let now = self.frame_counter;
+        if let Some(i) = self
+            .video
+            .iter()
+            .position(|s| Arc::ptr_eq(&s.frame, frame) && s.space == space)
+        {
+            self.video[i].used = now;
+            self.video_stats.reused += 1;
+            return Some(i);
+        }
+        let size = (frame.width, frame.height);
+        let max = device.limits().max_texture_dimension_2d;
+        if size.0 == 0
+            || size.1 == 0
+            || size.0 > max
+            || size.1 > max
+            || frame.pixels.len() != size.0 as usize * size.1 as usize * 4
+        {
+            tracing::warn!("cannot upload a {}x{} video frame", size.0, size.1);
+            return None;
+        }
+        // The least recently drawn slot not drawn in this render.
+        let victim = (self.video.len() >= VIDEO_SLOTS)
+            .then(|| {
+                self.video
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, s)| s.used < now)
+                    .min_by_key(|(_, s)| s.used)
+                    .map(|(i, _)| i)
+            })
+            .flatten();
+        let index = match victim {
+            Some(i) if self.video[i].size == size => i,
+            _ => {
+                let (source, prepared, prepared_view) = texture_pair(device, size, "voxy-video");
+                let flags = flags_buffer(device, queue, space);
+                let source_group = self.source_bind_group(
+                    device,
+                    &source.create_view(&wgpu::TextureViewDescriptor::default()),
+                    &flags,
+                );
+                let bind_group = self.image_bind_group(device, &prepared_view);
+                let slot = VideoSlot {
+                    frame: frame.clone(),
+                    space,
+                    size,
+                    used: now,
+                    source,
+                    source_group,
+                    flags,
+                    prepared_view,
+                    bind_group,
+                    _prepared: prepared,
+                };
+                self.video_stats.allocations += 1;
+                if let Some(i) = victim {
+                    self.video[i] = slot;
+                    i
+                } else {
+                    self.video.push(slot);
+                    self.video.len() - 1
+                }
+            }
+        };
+        let slot = &mut self.video[index];
+        slot.frame = frame.clone();
+        slot.space = space;
+        slot.used = now;
+        write_rgba(queue, &slot.source, size, &frame.pixels);
+        queue.write_buffer(
+            &slot.flags,
+            0,
+            bytemuck::bytes_of(&FlagsUniform {
+                flags: [space_flag(space), 0, 0, 0],
+            }),
+        );
+        let slot = &self.video[index];
+        self.prepare_pass(encoder, &slot.source_group, &slot.prepared_view);
+        self.video_stats.uploads += 1;
+        Some(index)
+    }
+}
+
+/// An sRGB8 upload texture and the RGBA16F texture it is prepared into.
+fn texture_pair(
+    device: &wgpu::Device,
+    size: (u32, u32),
+    label: &str,
+) -> (wgpu::Texture, wgpu::Texture, wgpu::TextureView) {
+    let extent = wgpu::Extent3d {
+        width: size.0,
+        height: size.1,
+        depth_or_array_layers: 1,
+    };
+    let source = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(&format!("{label}-source")),
+        size: extent,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        // Raw sRGB-encoded bytes; the prepare shader decodes them
+        // explicitly so both working spaces share one path.
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    let prepared = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(&format!("{label}-prepared")),
+        size: extent,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: WORKING_FORMAT,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+    let view = prepared.create_view(&wgpu::TextureViewDescriptor::default());
+    (source, prepared, view)
+}
+
+fn write_rgba(queue: &wgpu::Queue, texture: &wgpu::Texture, size: (u32, u32), pixels: &[u8]) {
+    queue.write_texture(
+        texture.as_image_copy(),
+        pixels,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(size.0 * 4),
+            rows_per_image: Some(size.1),
+        },
+        wgpu::Extent3d {
+            width: size.0,
+            height: size.1,
+            depth_or_array_layers: 1,
+        },
+    );
+}
+
+/// A prepare-pass flags uniform for `space`.
+fn flags_buffer(device: &wgpu::Device, queue: &wgpu::Queue, space: WorkingSpace) -> wgpu::Buffer {
+    let flags = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("voxy-prepare-flags"),
+        size: std::mem::size_of::<FlagsUniform>() as u64,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    queue.write_buffer(
+        &flags,
+        0,
+        bytemuck::bytes_of(&FlagsUniform {
+            flags: [space_flag(space), 0, 0, 0],
+        }),
+    );
+    flags
 }
 
 fn create_readback(device: &wgpu::Device, size: (u32, u32)) -> Readback {

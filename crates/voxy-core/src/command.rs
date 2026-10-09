@@ -13,7 +13,7 @@ use crate::id::{CompId, LayerId, PropId};
 use crate::keyframe::{Interp, Keyframe, SpatialTangents};
 use crate::layer::{BlendMode, ForeignData, Layer, LayerFlags, LayerKind, Transform};
 use crate::property::{Property, PropertyError, keys};
-use crate::time::Time;
+use crate::time::{FrameRate, Time};
 use crate::value::Value;
 
 /// Identifies edits that may collapse into one undo step while an
@@ -132,31 +132,90 @@ impl Command for AddImageLayer {
     }
 
     fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
-        let c = doc
-            .comp(self.comp)
-            .ok_or_else(|| CommandError::NotFound(self.comp.to_string()))?;
-        let center = DVec2::new(f64::from(c.width), f64::from(c.height)) / 2.0;
-        let duration = c.duration;
-        let name = self
-            .path
-            .rsplit(['/', '\\'])
-            .next()
-            .unwrap_or(&self.path)
-            .to_owned();
-        let asset = doc.add_asset(Asset {
-            id: 0.into(),
-            name: name.clone(),
-            kind: AssetKind::Image,
-            path: self.path.clone(),
-            pixel_size: Some(self.pixel_size),
-        });
-        let id = doc.alloc_id();
-        let image_center =
-            DVec2::new(f64::from(self.pixel_size[0]), f64::from(self.pixel_size[1])) / 2.0;
-        let transform = Transform::new(&mut || doc.alloc_id(), image_center, center);
-        let layer = new_layer(id, name, LayerKind::Image { asset }, duration, transform);
-        insert_layer(doc, self.comp, self.index, layer)
+        add_media_layer(
+            doc,
+            self.comp,
+            self.index,
+            Asset {
+                id: 0.into(),
+                name: file_name(&self.path),
+                kind: AssetKind::Image,
+                path: self.path.clone(),
+                pixel_size: Some(self.pixel_size),
+                duration: None,
+                frame_rate: None,
+            },
+            |asset| LayerKind::Image { asset },
+        )
     }
+}
+
+/// Registers a video file as an asset and adds a layer showing it from its
+/// first frame, centered in the composition. The layer ends with the video
+/// or the composition, whichever comes first.
+#[derive(Debug, Clone)]
+pub struct AddVideoLayer {
+    pub comp: CompId,
+    pub path: String,
+    pub pixel_size: [u32; 2],
+    pub duration: Option<Time>,
+    pub frame_rate: Option<FrameRate>,
+    pub index: usize,
+}
+
+impl Command for AddVideoLayer {
+    fn label(&self) -> Cow<'static, str> {
+        "Import Video".into()
+    }
+
+    fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
+        add_media_layer(
+            doc,
+            self.comp,
+            self.index,
+            Asset {
+                id: 0.into(),
+                name: file_name(&self.path),
+                kind: AssetKind::Video,
+                path: self.path.clone(),
+                pixel_size: Some(self.pixel_size),
+                duration: self.duration,
+                frame_rate: self.frame_rate,
+            },
+            |asset| LayerKind::Video { asset },
+        )
+    }
+}
+
+fn file_name(path: &str) -> String {
+    path.rsplit(['/', '\\']).next().unwrap_or(path).to_owned()
+}
+
+/// Adds `asset` and a layer of kind `kind(asset)` showing it at native
+/// size, centered in the composition.
+fn add_media_layer(
+    doc: &mut Document,
+    comp: CompId,
+    index: usize,
+    asset: Asset,
+    kind: impl FnOnce(crate::id::AssetId) -> LayerKind,
+) -> Result<(), CommandError> {
+    let c = doc
+        .comp(comp)
+        .ok_or_else(|| CommandError::NotFound(comp.to_string()))?;
+    let center = DVec2::new(f64::from(c.width), f64::from(c.height)) / 2.0;
+    let duration = match asset.duration {
+        Some(d) if d > Time::ZERO => d.min(c.duration),
+        _ => c.duration,
+    };
+    let name = asset.name.clone();
+    let [w, h] = asset.pixel_size.unwrap_or([0, 0]);
+    let asset = doc.add_asset(asset);
+    let id = doc.alloc_id();
+    let media_center = DVec2::new(f64::from(w), f64::from(h)) / 2.0;
+    let transform = Transform::new(&mut || doc.alloc_id(), media_center, center);
+    let layer = new_layer(id, name, kind(asset), duration, transform);
+    insert_layer(doc, comp, index, layer)
 }
 
 fn new_layer(

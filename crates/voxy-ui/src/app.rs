@@ -54,7 +54,10 @@ impl std::fmt::Debug for VoxyApp {
 impl VoxyApp {
     pub fn new(cc: &eframe::CreationContext<'_>, open: Option<PathBuf>) -> Self {
         crate::theme::apply(&cc.egui_ctx);
-        let viewport = cc.wgpu_render_state.clone().map(ViewportRenderer::new);
+        let viewport = cc
+            .wgpu_render_state
+            .clone()
+            .map(|rs| ViewportRenderer::new(rs, cc.egui_ctx.clone()));
         if viewport.is_none() {
             tracing::error!("eframe did not provide a wgpu render state; the viewport is disabled");
         }
@@ -237,6 +240,9 @@ impl VoxyApp {
                 if ui.button("Import Image…").clicked() {
                     self.state.import_image_dialog();
                 }
+                if ui.button("Import Video…").clicked() {
+                    self.state.import_video_dialog();
+                }
                 ui.separator();
                 if ui
                     .add_enabled(
@@ -297,6 +303,22 @@ impl VoxyApp {
                         v.last_report.missing_assets.len()
                     ),
                 );
+            }
+            if let Some(v) = &self.viewport {
+                let cache = v.media.cache_stats();
+                if cache.frames > 0 {
+                    ui.separator();
+                    ui.weak(format!(
+                        "Video cache: {} frames, {} of {} MB",
+                        cache.frames,
+                        cache.bytes >> 20,
+                        cache.budget >> 20
+                    ))
+                    .on_hover_text(format!(
+                        "Decoded video frames kept in memory.\n{} hits, {} misses, {} evicted",
+                        cache.hits, cache.misses, cache.evictions
+                    ));
+                }
             }
             if let Some(label) = self.state.transport.output_label() {
                 ui.separator();

@@ -16,7 +16,8 @@ mod gpu;
 mod plan;
 
 pub use compositor::{
-    Compositor, OUTPUT_FORMAT, OutputAlpha, RenderError, RenderReport, RgbaImage, WORKING_FORMAT,
+    Compositor, NoVideo, OUTPUT_FORMAT, OutputAlpha, RenderError, RenderReport, RgbaImage,
+    VideoFrames, VideoUploadStats, WORKING_FORMAT,
 };
 pub use gpu::{GpuContext, GpuError};
 pub use plan::{DrawOp, DrawSource, RenderPlan, RenderSettings, working_premultiplied};
@@ -54,16 +55,17 @@ impl FrameRequest {
     }
 }
 
-/// Evaluates, plans and renders one frame to CPU memory. Returns `None` if
-/// the composition does not exist.
+/// Evaluates, plans and renders one frame to CPU memory, taking video
+/// frames from `video`. Returns `None` if the composition does not exist.
 pub fn render_frame(
     compositor: &mut Compositor,
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     doc: &Document,
+    video: &dyn VideoFrames,
     request: &FrameRequest,
 ) -> Option<Result<(RgbaImage, RenderReport), RenderError>> {
     let eval = voxy_core::evaluate(doc, request.comp, request.time)?;
     let plan = RenderPlan::build(&eval, &request.settings);
-    Some(compositor.render_to_image(device, queue, &doc.assets, &plan, request.alpha))
+    Some(compositor.render_to_image(device, queue, &doc.assets, video, &plan, request.alpha))
 }

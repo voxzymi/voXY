@@ -270,7 +270,7 @@ impl Document {
                 if layer.out_point < layer.in_point {
                     return Err(ValidationError::InvertedLayer(layer.id));
                 }
-                if let LayerKind::Image { asset } = layer.kind
+                if let Some(asset) = layer.kind.asset()
                     && self.assets.get(asset).is_none()
                 {
                     return Err(ValidationError::MissingAsset {

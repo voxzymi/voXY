@@ -12,16 +12,51 @@
 //! - [`sync`]: choosing the video frame for the master clock (A/V sync).
 //! - [`audio`] (feature `ffmpeg`): sample-accurate audio decoding and
 //!   resampling.
+//! - [`cache`]: the byte-budgeted LRU cache of decoded video frames.
+//! - [`gop`]: where a stream's keyframes are, for choosing between
+//!   decoding forward and seeking.
+//! - [`stream`] (feature `ffmpeg`): one decoder thread per video source,
+//!   with prefetch during playback and keyframe-first scrubbing.
 
 use std::path::Path;
 
+use voxy_core::Time;
+
 #[cfg(feature = "ffmpeg")]
 pub mod audio;
+pub mod cache;
+pub mod gop;
 pub mod playback;
+#[cfg(feature = "ffmpeg")]
+pub mod stream;
 pub mod sync;
 pub mod timebase;
 #[cfg(feature = "ffmpeg")]
 pub mod video;
+
+/// A decoded video frame, ready for upload.
+#[derive(Clone, PartialEq, Eq)]
+pub struct VideoFrame {
+    /// Presentation time from the start of the stream.
+    pub time: Time,
+    /// How long it stays on screen (until the next frame, when known).
+    pub duration: Time,
+    pub width: u32,
+    pub height: u32,
+    /// RGBA8, straight alpha, sRGB-encoded, rows top to bottom, no padding.
+    pub pixels: Vec<u8>,
+}
+
+impl std::fmt::Debug for VideoFrame {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VideoFrame")
+            .field("time", &self.time)
+            .field("duration", &self.duration)
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .finish_non_exhaustive()
+    }
+}
 
 /// A decoded still image: 8-bit RGBA, sRGB-encoded, straight alpha,
 /// rows top to bottom with no padding.

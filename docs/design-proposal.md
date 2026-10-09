@@ -712,3 +712,80 @@ with the approved design.
   playhead from the clock, loops at the composition end, and treats
   scrubbing during playback as a seek. There are no audio layers yet, so it
   plays silence through the device's clock.
+
+## Implementation notes (Milestone 3c: frame cache, GPU upload, scrubbing)
+
+- **Video layers.** `LayerKind::Video` and `AssetKind::Video` (format
+  0.3.0). Composition time `t` shows source time
+  `t − in_point + start_offset`, so trimming the in-point keeps the picture
+  where it was. Layer › Import Video probes the file for size, duration and
+  frame rate. The video's audio is not played yet.
+- **Decoder thread** (`voxy_media::stream::VideoStream`): one per video
+  source, owning a `VideoDecoder`. It is opened on that thread, because
+  FFmpeg's scaler cannot move between threads.
+  - The UI states a `Demand` (`Scrub(t)`, `Play(t)` or `Idle`) each frame.
+    The latest demand wins: the thread works one frame at a time
+    (`VideoDecoder::step_toward`) and re-reads the demand between frames,
+    so stale scrub targets are dropped. A new target ahead in the same GOP
+    just continues the decode.
+  - Scrubbing is keyframe-first. When reaching the target needs a seek,
+    the keyframe it lands on is cached at once as a preview, then the exact
+    frame replaces it.
+  - Stepping back by up to `scrub_behind` (1 s) caches the frames decoded
+    on the way. Measured: 23 single-frame steps back across two GOPs cost 2
+    seeks instead of 23.
+  - `scrub_ahead` (100 ms) is decoded past a scrub target, so stepping
+    forward is instant.
+  - Playback keeps `play_ahead` (1 s) decoded ahead of the playhead,
+    sequentially, without seeking.
+- **GOP awareness** (`voxy_media::gop::GopIndex`). It records keyframe
+  timestamps and which timestamp ranges have been read.
+  - A demux-only scan on a second thread fills it for the whole file. The
+    decoder also adds every packet it reads.
+  - `VideoDecoder::plan`:
+    - decodes forward while no keyframe lies between the current position
+      and the target;
+    - seeks when a keyframe is close enough that skipping frames pays for
+      the seek (estimated at 8 frames);
+    - without data, uses the old 2 s window.
+  - A seek goes straight to the known keyframe when the index proves it is
+    the last one before the target.
+  - The decoder remembers where its last seek landed, so it never re-seeks
+    to the same place.
+  - The index affects speed only: results are frame-accurate either way,
+    and the existing exhaustive container tests still pass.
+- **Frame cache** (`voxy_media::cache::FrameCache`). One RAM LRU, budgeted
+  in bytes, shared by every source (1 GiB in the app). Entries answer a
+  source-time span `[start, end)`, so variable frame rates need no special
+  case.
+  - The last frame's span ends at `Time::MAX`.
+  - A frame bigger than the whole budget is still delivered to whoever
+    asked, but not stored.
+  - Closing a source drops its frames.
+- **GPU upload.** The compositor takes a `VideoFrames` provider:
+  - the UI answers from the cache without waiting, giving the nearest frame
+    while the exact one decodes;
+  - export will wait (`VideoStream::frame_blocking`).
+
+  Frames go through the same prepare pass as still images (sRGB8 →
+  premultiplied RGBA16F for the working space), so a video frame renders
+  bit-identical to the same pixels as an image. The pass:
+  - keeps 8 prepared frames resident, identified by their `Arc`, so an
+    unchanged frame is never uploaded twice;
+  - pools textures, so playing a video reuses texture pairs of the same size
+    instead of allocating per frame.
+
+  Frames without a decoded frame yet are skipped and listed in
+  `RenderReport::pending_video`. Decoder threads request an egui repaint
+  when a frame arrives, and the viewport re-renders when the set of frames
+  it would draw changes.
+- **Not yet.**
+  - The render thread from §5: rendering is still on the UI thread, but
+    decoding no longer is.
+  - YUV upload with GPU conversion. RGBA conversion still runs on the
+    decoder thread.
+  - More than one demand per source: two layers showing the same video at
+    different times share one decoder, and the topmost layer steers it.
+  - The playback scheduler still treats the target frame as always ready.
+    During playback, a frame that has not decoded yet shows the nearest
+    cached one.

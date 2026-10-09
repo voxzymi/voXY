@@ -99,6 +99,7 @@ impl Panels<'_> {
             self.state.time,
             avail * ppp,
             self.state.asset_root(),
+            self.state.transport.is_playing(),
         );
         let Some((id, _)) = frame else { return };
         // Fit the whole composition into the panel, preserving aspect ratio.
@@ -175,8 +176,8 @@ impl Panels<'_> {
                             self.property_row(ui, size);
                         });
                 }
-                if let LayerKind::Image { asset } = &layer.kind
-                    && let Some(a) = doc.assets.get(*asset)
+                if let Some(asset) = layer.kind.asset()
+                    && let Some(a) = doc.assets.get(asset)
                 {
                     ui.separator();
                     ui.label(RichText::new("Source").strong());
@@ -360,9 +361,14 @@ impl Panels<'_> {
     }
 
     fn media_ui(&mut self, ui: &mut Ui) {
-        if ui.button("Import Image…").clicked() {
-            self.state.import_image_dialog();
-        }
+        ui.horizontal(|ui| {
+            if ui.button("Import Image…").clicked() {
+                self.state.import_image_dialog();
+            }
+            if ui.button("Import Video…").clicked() {
+                self.state.import_video_dialog();
+            }
+        });
         ui.separator();
         let doc = self.state.history.current().clone();
         if doc.assets.0.is_empty() {
@@ -374,8 +380,14 @@ impl Panels<'_> {
             .map(|v| v.last_report.missing_assets.clone())
             .unwrap_or_default();
         for a in doc.assets.iter() {
+            let failure = self
+                .viewport
+                .as_ref()
+                .and_then(|v| v.media.failure(a.id))
+                .map(str::to_owned);
+            let bad = missing.contains(&a.id) || failure.is_some();
             let mut text = RichText::new(&a.name);
-            if missing.contains(&a.id) {
+            if bad {
                 text = text.color(ui.visuals().warn_fg_color);
             }
             let r = ui.label(text);
@@ -383,7 +395,15 @@ impl Panels<'_> {
             if let Some([w, h]) = a.pixel_size {
                 let _ = write!(tip, "\n{w} × {h} px");
             }
-            if missing.contains(&a.id) {
+            if let Some(d) = a.duration {
+                let _ = write!(tip, ", {:.2} s", d.as_secs_f64());
+            }
+            if let Some(r) = a.frame_rate {
+                let _ = write!(tip, ", {r}");
+            }
+            if let Some(e) = failure {
+                let _ = write!(tip, "\nCannot play: {e}");
+            } else if missing.contains(&a.id) {
                 tip.push_str("\nMissing: the file could not be loaded");
             }
             r.on_hover_text(tip);

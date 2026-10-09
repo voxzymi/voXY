@@ -7,9 +7,16 @@
 //!   and says so in [`VideoDecoder::hardware`].
 //! - [`VideoDecoder::frame_at`] is **frame-accurate**: it returns the frame
 //!   on screen at a source time, the last frame whose presentation
-//!   timestamp is at or before it. Nearby requests decode forward; distant
-//!   or backward ones seek to the preceding keyframe and decode up to the
-//!   target, so B-frames and long GOPs are handled.
+//!   timestamp is at or before it. Backward requests seek to the preceding
+//!   keyframe and decode up to the target, so B-frames and long GOPs are
+//!   handled.
+//! - Forward requests are **GOP-aware** ([`VideoDecoder::plan`]): the
+//!   decoder keeps a [`GopIndex`] of keyframes it has seen (or that
+//!   [`scan_keyframes`] found), and decodes forward while the target is in
+//!   the current GOP, seeking only when a keyframe close to the target makes
+//!   that cheaper. Without index data it falls back to a time window.
+//! - [`VideoDecoder::step_toward`] does the same work one frame at a time,
+//!   so a decoder thread can abandon a stale request between frames.
 //! - All times are flicks ([`Time`]), measured from the stream's first
 //!   frame: `frame_at(Time::ZERO)` is always the first frame, whatever the
 //!   container's start timestamp. Conversions use [`TimeBase`], which is
@@ -17,8 +24,8 @@
 //!
 //! Output frames are 8-bit RGBA (straight alpha, sRGB-encoded). YUV is
 //! converted with the stream's own matrix (BT.601, BT.709 or BT.2020) and
-//! range (limited or full). Higher-precision output for the linear-light
-//! compositor follows with the GPU upload path.
+//! range (limited or full). The compositor uploads them through the same
+//! prepare pass as still images.
 
 // FFI is needed where ffmpeg-next has no safe wrapper: hardware device
 // setup, the decoder's format negotiation callback, hardware frame
@@ -28,7 +35,8 @@
 
 use std::ffi::CStr;
 use std::path::Path;
-use std::sync::Once;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, Once, PoisonError};
 
 use ffmpeg::ffi;
 use ffmpeg::util::format::Pixel;
@@ -37,11 +45,16 @@ use ffmpeg_next as ffmpeg;
 use voxy_core::{FrameRate, Time};
 
 use crate::MediaError;
+pub use crate::VideoFrame;
+use crate::gop::{GopIndex, KeyframeSpan};
 use crate::timebase::TimeBase;
 
-/// Decode forward instead of seeking when the target is at most this far
-/// ahead of the current frame.
+/// Without keyframe information: decode forward instead of seeking when the
+/// target is at most this far ahead of the current frame.
 const FORWARD_WINDOW: Time = Time::from_secs(2);
+/// What a seek costs on top of decoding from the keyframe, in frames
+/// (decoder flush, pipeline refill with frame threading).
+const SEEK_COST_FRAMES: i64 = 8;
 /// How many times a seek that lands after its target is retried further back.
 const SEEK_RETRIES: u32 = 4;
 
@@ -101,30 +114,6 @@ pub struct DecodeOptions {
     pub hardware: HwAccel,
     /// Decoder threads; `None` lets FFmpeg choose.
     pub threads: Option<usize>,
-}
-
-/// A decoded frame, ready for upload.
-#[derive(Clone, PartialEq, Eq)]
-pub struct VideoFrame {
-    /// Presentation time from the start of the stream.
-    pub time: Time,
-    /// How long it stays on screen (until the next frame, when known).
-    pub duration: Time,
-    pub width: u32,
-    pub height: u32,
-    /// RGBA8, straight alpha, rows top to bottom, no padding.
-    pub pixels: Vec<u8>,
-}
-
-impl std::fmt::Debug for VideoFrame {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("VideoFrame")
-            .field("time", &self.time)
-            .field("duration", &self.duration)
-            .field("width", &self.width)
-            .field("height", &self.height)
-            .finish_non_exhaustive()
-    }
 }
 
 fn time_base(r: ffmpeg::Rational) -> Option<TimeBase> {
@@ -315,9 +304,109 @@ struct Raw {
     frame: frame::Video,
 }
 
+/// How [`VideoDecoder`] will reach a frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SeekPlan {
+    /// The current frame is the answer.
+    Ready,
+    /// Decode forward from the current position.
+    Forward,
+    /// Seek to the keyframe at or before the target, then decode forward.
+    Seek,
+}
+
+/// Progress of one [`VideoDecoder::step_toward`] call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Step {
+    /// One more frame was decoded or moved into place; call again.
+    Continue,
+    /// The current frame is the one on screen at the target.
+    Ready,
+}
+
+/// One decoding step's internal result.
+enum StepState {
+    Continue,
+    Ready,
+    /// The first frame after a seek is already past the target.
+    Overshot,
+}
+
+fn lock(gop: &Mutex<GopIndex>) -> MutexGuard<'_, GopIndex> {
+    gop.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Reads every packet of the best video stream without decoding, recording
+/// keyframes into `index` as it goes, until the end of the file or until
+/// `stop` is set. Demuxing is much cheaper than decoding, so this finds the
+/// whole GOP structure quickly. Marks the index complete at the end.
+pub fn scan_keyframes(
+    path: &Path,
+    index: &Mutex<GopIndex>,
+    stop: &AtomicBool,
+) -> Result<(), MediaError> {
+    init();
+    let mut input = format::input(path).map_err(|e| err(path, e))?;
+    let stream = input
+        .streams()
+        .best(media::Type::Video)
+        .ok_or_else(|| err(path, "no video stream"))?;
+    let stream_index = stream.index();
+    let start = stream.start_time();
+    let mut run_start = if start == ffi::AV_NOPTS_VALUE {
+        None
+    } else {
+        Some(start)
+    };
+    let mut pending = Vec::new();
+    let mut unpublished = 0_u32;
+    let mut run_end = i64::MIN;
+    let mut packet = ffmpeg::Packet::empty();
+    loop {
+        if stop.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        match packet.read(&mut input) {
+            Ok(()) => {}
+            Err(ffmpeg::Error::Eof) => break,
+            Err(e) => return Err(err(path, format!("reading failed: {e}"))),
+        }
+        if packet.stream() != stream_index {
+            continue;
+        }
+        let Some(pts) = packet.pts().or(packet.dts()) else {
+            continue;
+        };
+        if packet.is_key() {
+            pending.push(pts);
+        }
+        run_end = run_end.max(pts);
+        let s = *run_start.get_or_insert(pts);
+        unpublished += 1;
+        // Publish in batches so the decoder thread rarely waits on the lock.
+        if unpublished >= 32 || packet.is_key() {
+            unpublished = 0;
+            let mut g = lock(index);
+            for k in pending.drain(..) {
+                g.add_keyframe(k);
+            }
+            g.cover(s, run_end);
+        }
+    }
+    let mut g = lock(index);
+    for k in pending {
+        g.add_keyframe(k);
+    }
+    g.mark_complete();
+    Ok(())
+}
+
 /// Decodes one video stream of a file.
 ///
 /// Field order matters: `decoder` must drop before `hardware`.
+// The flags are independent facts about the demuxer and decoder pipeline,
+// not states of one machine.
+#[allow(clippy::struct_excessive_bools)]
 pub struct VideoDecoder {
     path: std::path::PathBuf,
     info: VideoInfo,
@@ -338,7 +427,25 @@ pub struct VideoDecoder {
     /// The frame after `current`, once decoded.
     lookahead: Option<Raw>,
     scaler: Option<(Pixel, u32, u32, scaling::Context)>,
-    converted: Option<VideoFrame>,
+    converted: Option<Arc<VideoFrame>>,
+    /// Keyframes and read ranges, shared with a background scan.
+    gop: Arc<Mutex<GopIndex>>,
+    /// The range of packet timestamps read since the last seek:
+    /// `(first keyframe, highest timestamp)`.
+    run: Option<(i64, i64)>,
+    /// Reading started at the top of the file (opened or rewound), so
+    /// reaching the end means every packet has been seen.
+    from_start: bool,
+    /// `current` is the stream's first frame, which is also the answer for
+    /// any time before it.
+    at_first: bool,
+    /// The last seek: `(target, timestamp of the frame it landed on)`.
+    /// Seeking again for a target between the two would land in the same
+    /// place.
+    last_seek: Option<(i64, i64)>,
+    /// How many frames were decoded and how many seeks done, in total.
+    decoded: u64,
+    seeks: u64,
 }
 
 impl std::fmt::Debug for VideoDecoder {
@@ -400,7 +507,31 @@ impl VideoDecoder {
             lookahead: None,
             scaler: None,
             converted: None,
+            gop: Arc::new(Mutex::new(GopIndex::new())),
+            run: Some((start_pts, start_pts)),
+            from_start: true,
+            at_first: false,
+            last_seek: None,
+            decoded: 0,
+            seeks: 0,
         })
+    }
+
+    /// The keyframe index this decoder consults and adds to. Share it with
+    /// [`scan_keyframes`] on another thread to fill it in ahead of time.
+    pub fn gop_index(&self) -> Arc<Mutex<GopIndex>> {
+        self.gop.clone()
+    }
+
+    /// Frames decoded so far (including ones decoded only to reach a
+    /// later frame).
+    pub fn frames_decoded(&self) -> u64 {
+        self.decoded
+    }
+
+    /// Seeks performed so far.
+    pub fn seeks(&self) -> u64 {
+        self.seeks
     }
 
     pub fn info(&self) -> &VideoInfo {
@@ -422,34 +553,159 @@ impl VideoDecoder {
         self.tb().to_time(pts.saturating_sub(self.start_pts))
     }
 
+    /// `time` (from the start of the stream) → the stream timestamp of
+    /// the frame on screen then, at the latest.
+    fn target_pts(&self, time: Time) -> i64 {
+        self.start_pts
+            .saturating_add(self.tb().to_pts_floor(time.max(Time::ZERO)))
+    }
+
+    fn is_ready(&self, target: i64) -> bool {
+        self.current.as_ref().is_some_and(|c| {
+            (c.pts <= target || self.at_first)
+                && (self.lookahead.as_ref().is_some_and(|l| target < l.pts)
+                    || (self.at_end && self.lookahead.is_none()))
+        })
+    }
+
+    /// Nominal frame duration, for estimating decode costs.
+    fn frame_ticks(&self) -> i64 {
+        let d = self
+            .info
+            .frame_rate
+            .map_or(Time::from_secs_f64(1.0 / 30.0), |r| {
+                r.frame_to_time(1) - r.frame_to_time(0)
+            });
+        self.tb().to_pts_floor(d).max(1)
+    }
+
+    /// How the decoder would reach the frame on screen at `time`; see
+    /// [`SeekPlan`]. GOP-aware: with keyframe information, decoding forward
+    /// is chosen while no keyframe lies between the current position and the
+    /// target, and a seek when one does and seeking skips enough frames to
+    /// pay for itself. Without, a fixed time window decides.
+    pub fn plan(&self, time: Time) -> SeekPlan {
+        self.plan_pts(self.target_pts(time))
+    }
+
+    fn plan_pts(&self, target: i64) -> SeekPlan {
+        if self.is_ready(target) {
+            return SeekPlan::Ready;
+        }
+        // Where decoding forward would continue from.
+        let position = match (&self.lookahead, &self.current) {
+            (Some(l), _) => l.pts,
+            (None, Some(c)) => c.pts,
+            // Nothing decoded since opening or rewinding: at the start.
+            (None, None) if !self.sent_eof && self.run.is_some() => self.start_pts - 1,
+            (None, None) => return SeekPlan::Seek,
+        };
+        // Backward needs a seek, except before the first frame, which
+        // answers for those times too.
+        if !self.at_first && target < self.current.as_ref().map_or(position, |c| c.pts) {
+            return SeekPlan::Seek;
+        }
+        if self.at_end && self.lookahead.is_none() {
+            // Past the last frame, which `is_ready` already accepts; only an
+            // earlier target gets here.
+            return SeekPlan::Seek;
+        }
+        if let (Some((sought, landed)), Some(c)) = (self.last_seek, &self.current)
+            && landed <= c.pts
+            && target <= sought
+        {
+            // A seek for this target would land where the last one did,
+            // which is behind us.
+            return SeekPlan::Forward;
+        }
+        let frames = |ticks: i64| ticks / self.frame_ticks();
+        let forward = frames(target - position);
+        match lock(&self.gop).keyframe_in(position, target) {
+            KeyframeSpan::None => SeekPlan::Forward,
+            KeyframeSpan::Keyframe(k) => {
+                if frames(target - k) + SEEK_COST_FRAMES < forward {
+                    SeekPlan::Seek
+                } else {
+                    SeekPlan::Forward
+                }
+            }
+            KeyframeSpan::Unknown => {
+                if self.pts_to_time(target) - self.pts_to_time(position.max(self.start_pts))
+                    <= FORWARD_WINDOW
+                {
+                    SeekPlan::Forward
+                } else {
+                    SeekPlan::Seek
+                }
+            }
+        }
+    }
+
     /// The frame on screen at `time` (from the start of the stream). Before
     /// the first frame this is the first frame; after the last, the last.
     pub fn frame_at(&mut self, time: Time) -> Result<VideoFrame, MediaError> {
-        let target = self
-            .start_pts
-            .saturating_add(self.tb().to_pts_floor(time.max(Time::ZERO)));
-
-        // Already showing the right frame?
-        if let Some(c) = &self.current
-            && c.pts <= target
-            && (self.lookahead.as_ref().is_some_and(|l| target < l.pts)
-                || (self.at_end && self.lookahead.is_none()))
-        {
-            return self.convert_current();
+        let target = self.target_pts(time);
+        match self.plan_pts(target) {
+            SeekPlan::Ready => {}
+            SeekPlan::Forward => {
+                self.advance_to(target)?;
+            }
+            SeekPlan::Seek => {
+                self.seek_to(target)?;
+                self.advance_to(target)?;
+            }
         }
+        self.convert_current().map(|f| (*f).clone())
+    }
 
-        let forward = self.current.as_ref().is_some_and(|c| {
-            c.pts <= target && self.pts_to_time(target) - self.pts_to_time(c.pts) <= FORWARD_WINDOW
-        }) || (self.current.is_none()
-            && self.pts_to_time(target) <= FORWARD_WINDOW
-            && !self.sent_eof);
-
-        if forward {
-            self.advance_to(target)?;
+    /// Does one frame's worth of work toward the frame on screen at `time`:
+    /// a seek to the right keyframe (decoding the first frame after it), or
+    /// decoding one more frame. Returns [`Step::Ready`] once
+    /// [`current_frame`](Self::current_frame) is the answer. Calling this
+    /// until it is ready gives the same frame as [`frame_at`](Self::frame_at).
+    pub fn step_toward(&mut self, time: Time) -> Result<Step, MediaError> {
+        let target = self.target_pts(time);
+        match self.plan_pts(target) {
+            SeekPlan::Ready => return Ok(Step::Ready),
+            SeekPlan::Seek => {
+                self.seek_to(target)?;
+                if self.current.is_none() {
+                    return Err(err(&self.path, "the video has no frames"));
+                }
+            }
+            SeekPlan::Forward => match self.step(target)? {
+                StepState::Continue => {}
+                StepState::Ready | StepState::Overshot => return Ok(Step::Ready),
+            },
+        }
+        Ok(if self.is_ready(target) {
+            Step::Ready
         } else {
-            self.seek_to(target)?;
-        }
+            Step::Continue
+        })
+    }
+
+    /// The decoded frame the decoder is on, converted to RGBA (once; later
+    /// calls share it).
+    pub fn current_frame(&mut self) -> Result<Arc<VideoFrame>, MediaError> {
         self.convert_current()
+    }
+
+    /// Presentation time of the frame the decoder is on, if any.
+    pub fn current_time(&self) -> Option<Time> {
+        self.current.as_ref().map(|c| self.pts_to_time(c.pts))
+    }
+
+    /// When the current frame stops being on screen: the next frame's time
+    /// once that is decoded, [`Time::MAX`] for the last frame, `None` while
+    /// unknown.
+    pub fn current_end(&self) -> Option<Time> {
+        self.current.as_ref()?;
+        match &self.lookahead {
+            Some(l) => Some(self.pts_to_time(l.pts)),
+            None if self.at_end => Some(Time::MAX),
+            None => None,
+        }
     }
 
     /// Frame number `index` of a constant-frame-rate stream (0 = first).
@@ -480,63 +736,105 @@ impl VideoDecoder {
             self.at_end = true;
             return Ok(None);
         };
+        self.at_first = self.current.is_none() && self.from_start;
         self.current = Some(next);
         self.converted = None;
-        self.convert_current().map(Some)
+        self.convert_current().map(|f| Some((*f).clone()))
+    }
+
+    /// One step of decoding forward toward `target`: moves the lookahead
+    /// frame into place, or decodes one frame. A decoded frame becomes the
+    /// lookahead first, so the current frame's end is known before it is
+    /// replaced.
+    fn step(&mut self, target: i64) -> Result<StepState, MediaError> {
+        if let Some(l) = self.lookahead.take() {
+            if l.pts > target {
+                self.lookahead = Some(l);
+                return Ok(StepState::Ready);
+            }
+            self.current = Some(l);
+            self.converted = None;
+            self.at_first = false;
+            return Ok(StepState::Continue);
+        }
+        if self.at_end {
+            return Ok(StepState::Ready);
+        }
+        let Some(raw) = self.decode_next()? else {
+            self.at_end = true;
+            return Ok(StepState::Ready);
+        };
+        if self.current.is_none() {
+            let past = raw.pts > target;
+            self.current = Some(raw);
+            self.converted = None;
+            self.at_first = self.from_start;
+            return Ok(if past && !self.at_first {
+                StepState::Overshot
+            } else {
+                StepState::Continue
+            });
+        }
+        self.lookahead = Some(raw);
+        Ok(StepState::Continue)
     }
 
     /// Decodes forward until `current` is the frame on screen at `target`.
     /// Returns whether a frame at or before `target` was found.
     fn advance_to(&mut self, target: i64) -> Result<bool, MediaError> {
-        if let Some(l) = self.lookahead.take() {
-            if l.pts > target {
-                self.lookahead = Some(l);
-                return Ok(self.current.is_some());
-            }
-            self.current = Some(l);
-            self.converted = None;
-        }
         loop {
-            let Some(raw) = self.decode_next()? else {
-                self.at_end = true;
-                return Ok(self.current.is_some());
-            };
-            if raw.pts > target {
-                if self.current.is_none() {
-                    // The first frame is already past the target.
-                    self.current = Some(raw);
-                    self.converted = None;
-                    return Ok(false);
-                }
-                self.lookahead = Some(raw);
-                return Ok(true);
+            match self.step(target)? {
+                StepState::Continue => {}
+                StepState::Ready => return Ok(self.current.is_some()),
+                StepState::Overshot => return Ok(false),
             }
-            self.current = Some(raw);
-            self.converted = None;
         }
     }
 
-    /// Seeks to the keyframe at or before `target` and decodes up to it.
+    /// Decodes the first frame at the current read position. Returns whether
+    /// it is at or before `target`.
+    fn land(&mut self, target: i64) -> Result<bool, MediaError> {
+        while self.current.is_none() {
+            match self.step(target)? {
+                StepState::Continue => {}
+                StepState::Ready | StepState::Overshot => return Ok(false),
+            }
+        }
+        Ok(self.current.as_ref().is_some_and(|c| c.pts <= target))
+    }
+
+    /// Seeks to the keyframe at or before `target` and decodes the first
+    /// frame there.
     ///
     /// Some demuxers (MPEG-TS seeks by byte position, for example) can land
     /// after the target; the seek is then retried further back, and as a
     /// last resort the file is reopened and decoded from the start, which is
     /// always correct.
     fn seek_to(&mut self, target: i64) -> Result<(), MediaError> {
+        self.seeks += 1;
         let second = self.tb().to_pts_floor(Time::from_secs(1)).max(1);
-        let mut seek_point = target;
+        // Seek straight to the keyframe when the index proves it is the
+        // last one before the target: demuxers find exact entries reliably.
+        let mut seek_point = {
+            let g = lock(&self.gop);
+            g.keyframe_at_or_before(target)
+                .filter(|&k| g.keyframe_in(k, target) == KeyframeSpan::None)
+                .unwrap_or(target)
+        };
         for attempt in 0..=SEEK_RETRIES {
-            if seek_point <= self.start_pts {
+            if seek_point < self.start_pts || (attempt > 0 && seek_point <= self.start_pts) {
                 break;
             }
             self.seek_raw(seek_point)?;
-            if self.advance_to(target)? {
+            if self.land(target)? {
+                self.last_seek = self.current.as_ref().map(|c| (target, c.pts));
                 return Ok(());
             }
-            seek_point = target.saturating_sub(second << attempt);
+            seek_point = seek_point.min(target).saturating_sub(second << attempt);
         }
         self.rewind()?;
-        self.advance_to(target)?;
+        self.land(target)?;
+        self.last_seek = self.current.as_ref().map(|c| (target, c.pts));
         Ok(())
     }
 
@@ -560,6 +858,8 @@ impl VideoDecoder {
     fn rewind(&mut self) -> Result<(), MediaError> {
         self.input = format::input(&self.path).map_err(|e| err(&self.path, e))?;
         self.reset_decoding();
+        self.from_start = true;
+        self.run = Some((self.start_pts, self.start_pts));
         Ok(())
     }
 
@@ -569,9 +869,25 @@ impl VideoDecoder {
         self.awaiting_keyframe = true;
         self.keyframe_pts = None;
         self.at_end = false;
+        self.at_first = false;
+        self.from_start = false;
+        self.run = None;
         self.current = None;
         self.lookahead = None;
         self.converted = None;
+    }
+
+    /// Records a packet of our stream in the GOP index.
+    fn record_packet(&mut self, pts: Option<i64>, key: bool) {
+        let Some(pts) = pts else { return };
+        let run = self.run.get_or_insert((pts, pts));
+        run.1 = run.1.max(pts);
+        let (start, end) = *run;
+        let mut g = lock(&self.gop);
+        if key {
+            g.add_keyframe(pts);
+        }
+        g.cover(start, end);
     }
 
     /// The next decoded frame in presentation order (downloaded from the
@@ -586,6 +902,7 @@ impl VideoDecoder {
                     if self.keyframe_pts.is_some_and(|k| raw.pts < k) {
                         continue; // leading frame of an open GOP after a seek
                     }
+                    self.decoded += 1;
                     return Ok(Some(raw));
                 }
                 Err(ffmpeg::Error::Eof) => return Ok(None),
@@ -608,6 +925,7 @@ impl VideoDecoder {
                         self.awaiting_keyframe = false;
                         self.keyframe_pts = packet.pts().or(packet.dts());
                     }
+                    self.record_packet(packet.pts().or(packet.dts()), packet.is_key());
                     if let Err(e) = self.decoder.send_packet(&packet) {
                         // Corrupt packets are skipped; the decoder recovers at
                         // the next keyframe.
@@ -617,6 +935,9 @@ impl VideoDecoder {
                 Err(ffmpeg::Error::Eof) => {
                     let _ = self.decoder.send_eof();
                     self.sent_eof = true;
+                    if self.from_start {
+                        lock(&self.gop).mark_complete();
+                    }
                 }
                 Err(e) => return Err(err(&self.path, format!("reading failed: {e}"))),
             }
@@ -648,7 +969,7 @@ impl VideoDecoder {
         Ok(Raw { pts, frame: f })
     }
 
-    fn convert_current(&mut self) -> Result<VideoFrame, MediaError> {
+    fn convert_current(&mut self) -> Result<Arc<VideoFrame>, MediaError> {
         if let Some(c) = &self.converted {
             return Ok(c.clone());
         }
@@ -699,13 +1020,13 @@ impl VideoDecoder {
         for y in 0..h as usize {
             pixels.extend_from_slice(&data[y * stride..y * stride + row]);
         }
-        let out = VideoFrame {
+        let out = Arc::new(VideoFrame {
             time: self.pts_to_time(pts),
             duration,
             width: w,
             height: h,
             pixels,
-        };
+        });
         self.converted = Some(out.clone());
         Ok(out)
     }

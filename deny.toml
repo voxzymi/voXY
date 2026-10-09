@@ -1,8 +1,17 @@
 # cargo-deny policy for voXY. See LICENSING.md for the reasoning.
-# Run locally with: cargo deny check licenses bans sources
+# Run locally with: cargo deny check (CI runs every check, advisories
+# included).
 
 [graph]
 all-features = false
+
+[advisories]
+ignore = [
+    # "Unmaintained" notice, not a vulnerability: `paste` is a compile-time
+    # proc-macro used by egui_dock (pinned with the GPU stack). Revisit when
+    # egui_dock drops it.
+    { id = "RUSTSEC-2024-0436", reason = "unmaintained proc-macro via egui_dock; no vulnerability" },
+]
 
 [licenses]
 # Permissive licenses compatible with distributing voXY binaries alongside a

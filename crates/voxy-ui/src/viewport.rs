@@ -1,13 +1,21 @@
 //! Renders the composition into a texture egui can display, on eframe's own
 //! `wgpu::Device`, so no pixels are copied between devices.
+//!
+//! Video frames come from [`MediaPool`] without waiting: each render shows
+//! the best frame decoded so far, and the decoder threads request a repaint
+//! when a better one arrives. Uploading a frame to the GPU happens once per
+//! frame (see `Compositor::ensure_video`).
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use egui_wgpu::RenderState;
-use voxy_core::{Document, Time};
+use voxy_core::{AssetId, Document, Time};
 use voxy_render::{
     Compositor, OUTPUT_FORMAT, OutputAlpha, RenderPlan, RenderReport, RenderSettings,
 };
+
+use crate::media::MediaPool;
 
 /// Everything that determines a viewport frame. Rendering is skipped while
 /// this is unchanged.
@@ -17,6 +25,8 @@ struct FrameKey {
     time: Time,
     size: (u32, u32),
     asset_root: Option<PathBuf>,
+    /// The video frames drawn.
+    video: Vec<(AssetId, Time, usize)>,
 }
 
 struct Target {
@@ -29,9 +39,12 @@ struct Target {
 pub struct ViewportRenderer {
     render_state: RenderState,
     compositor: Compositor,
+    pub media: MediaPool,
     target: Option<Target>,
     last: Option<FrameKey>,
     pub last_report: RenderReport,
+    /// The last frame showed a stand-in for some video frame.
+    pub approximate: bool,
 }
 
 impl std::fmt::Debug for ViewportRenderer {
@@ -41,19 +54,23 @@ impl std::fmt::Debug for ViewportRenderer {
 }
 
 impl ViewportRenderer {
-    pub fn new(render_state: RenderState) -> Self {
+    /// `ctx` is repainted from decoder threads when video frames arrive.
+    pub fn new(render_state: RenderState, ctx: egui::Context) -> Self {
         let compositor = Compositor::new(&render_state.device);
         ViewportRenderer {
             render_state,
             compositor,
+            media: MediaPool::new(Some(Arc::new(move || ctx.request_repaint()))),
             target: None,
             last: None,
             last_report: RenderReport::default(),
+            approximate: false,
         }
     }
 
     /// Renders the root composition at `time`, sized to fit `max_px` physical
     /// pixels (never above full resolution), and returns the texture to show.
+    /// `playing` makes video sources prefetch ahead instead of scrubbing.
     pub fn frame(
         &mut self,
         doc: &Document,
@@ -61,6 +78,7 @@ impl ViewportRenderer {
         time: Time,
         max_px: egui::Vec2,
         asset_root: Option<PathBuf>,
+        playing: bool,
     ) -> Option<(egui::TextureId, (u32, u32))> {
         let comp = doc.root();
         let fit = f64::from((max_px.x / comp.width as f32).min(max_px.y / comp.height as f32));
@@ -68,11 +86,17 @@ impl ViewportRenderer {
             scale: fit.clamp(0.01, 1.0),
         };
         let size = settings.output_size(comp.width, comp.height);
+        let eval = voxy_core::evaluate(doc, doc.root_comp, time)?;
+        let video = self
+            .media
+            .resolve(doc, &eval, asset_root.as_deref(), playing);
+        self.approximate = video.approximate;
         let key = FrameKey {
             revision,
             time,
             size,
             asset_root: asset_root.clone(),
+            video: video.identity(),
         };
         if self.last.as_ref() == Some(&key)
             && let Some(t) = &self.target
@@ -82,13 +106,13 @@ impl ViewportRenderer {
 
         self.compositor.set_asset_root(asset_root);
         self.ensure_target(size);
-        let eval = voxy_core::evaluate(doc, doc.root_comp, time)?;
         let plan = RenderPlan::build(&eval, &settings);
         let target = self.target.as_ref().expect("ensured");
         self.last_report = self.compositor.render(
             &self.render_state.device,
             &self.render_state.queue,
             &doc.assets,
+            &video,
             &plan,
             &target.view,
             OutputAlpha::Premultiplied,

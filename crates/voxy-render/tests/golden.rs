@@ -12,12 +12,15 @@
 #![allow(clippy::unwrap_used)]
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use voxy_core::command::{AddImageLayer, AddSolidLayer, Command, SetProperty};
+use voxy_core::command::{AddImageLayer, AddSolidLayer, AddVideoLayer, Command, SetProperty};
 use voxy_core::glam::DVec2;
 use voxy_core::{CompSettings, Document, LayerKind, LinearRgba, Time, Value, WorkingSpace};
+use voxy_media::VideoFrame;
 use voxy_render::{
-    Compositor, FrameRequest, GpuContext, OutputAlpha, RenderSettings, RgbaImage, render_frame,
+    Compositor, FrameRequest, GpuContext, NoVideo, OutputAlpha, RenderSettings, RgbaImage,
+    VideoFrames, render_frame,
 };
 
 struct Tolerance {
@@ -181,6 +184,7 @@ fn render(gpu: &GpuContext, compositor: &mut Compositor, doc: &Document) -> Rgba
         &gpu.device,
         &gpu.queue,
         doc,
+        &NoVideo,
         &FrameRequest::export(doc.root_comp, Time::ZERO),
     )
     .expect("root comp exists")
@@ -355,6 +359,7 @@ fn missing_images_are_reported_not_fatal() {
         &gpu.device,
         &gpu.queue,
         &doc,
+        &NoVideo,
         &FrameRequest::export(comp, Time::ZERO),
     )
     .unwrap()
@@ -380,6 +385,7 @@ fn preview_scale_renders_smaller_frame() {
         &gpu.device,
         &gpu.queue,
         &doc,
+        &NoVideo,
         &FrameRequest {
             comp: doc.root_comp,
             time: Time::ZERO,
@@ -390,4 +396,146 @@ fn preview_scale_renders_smaller_frame() {
     .unwrap()
     .unwrap();
     assert_eq!((image.width, image.height), (50, 25));
+}
+
+/// One layer showing the 16×8 ramp, scaled and rotated, as an image or a
+/// video layer.
+fn media_scene(video: bool, image_path: &Path) -> Document {
+    let mut doc = Document::new(
+        "Media",
+        CompSettings {
+            width: 96,
+            height: 64,
+            background: LinearRgba::from_srgb8(30, 30, 30, 255),
+            ..CompSettings::default()
+        },
+    );
+    let comp = doc.root_comp;
+    let path = image_path.to_string_lossy().into_owned();
+    if video {
+        AddVideoLayer {
+            comp,
+            path,
+            pixel_size: [16, 8],
+            duration: None,
+            frame_rate: None,
+            index: 0,
+        }
+        .apply(&mut doc)
+        .unwrap();
+    } else {
+        AddImageLayer {
+            comp,
+            path,
+            pixel_size: [16, 8],
+            index: 0,
+        }
+        .apply(&mut doc)
+        .unwrap();
+    }
+    let layer = doc.root().layers[0].clone();
+    set(
+        &mut doc,
+        layer.transform.scale.id,
+        Value::Vec2(DVec2::new(4.0, 4.0)),
+    );
+    set(&mut doc, layer.transform.rotation.id, Value::Scalar(12.0));
+    doc
+}
+
+fn render_with(
+    gpu: &GpuContext,
+    compositor: &mut Compositor,
+    doc: &Document,
+    video: &dyn VideoFrames,
+    time: Time,
+) -> (RgbaImage, voxy_render::RenderReport) {
+    render_frame(
+        compositor,
+        &gpu.device,
+        &gpu.queue,
+        doc,
+        video,
+        &FrameRequest::export(doc.root_comp, time),
+    )
+    .unwrap()
+    .unwrap()
+}
+
+#[test]
+fn video_frames_render_exactly_like_images() {
+    let Some(gpu) = gpu() else { return };
+    let dir = tempfile::tempdir().unwrap();
+    let image_path = write_test_image(dir.path());
+    let ramp = image::open(&image_path).unwrap().into_rgba8();
+    let frame = Arc::new(VideoFrame {
+        time: Time::ZERO,
+        duration: Time::from_millis(40),
+        width: 16,
+        height: 8,
+        pixels: ramp.into_raw(),
+    });
+    let mut compositor = Compositor::new(&gpu.device);
+    let as_image = render(&gpu, &mut compositor, &media_scene(false, &image_path));
+    let provider = |_, _| Some(frame.clone());
+    let (as_video, report) = render_with(
+        &gpu,
+        &mut compositor,
+        &media_scene(true, &image_path),
+        &provider,
+        Time::ZERO,
+    );
+    assert!(report.pending_video.is_empty());
+    assert_eq!(as_video, as_image, "video uses the image upload path");
+    compare("video_layer", &as_video);
+}
+
+#[test]
+fn video_frames_upload_once_and_reuse_textures() {
+    let Some(gpu) = gpu() else { return };
+    let dir = tempfile::tempdir().unwrap();
+    let doc = media_scene(true, &dir.path().join("unused.mp4"));
+    let frame = |v: u8| {
+        Arc::new(VideoFrame {
+            time: Time::ZERO,
+            duration: Time::from_millis(40),
+            width: 16,
+            height: 8,
+            pixels: [v, v, v, 255].repeat(16 * 8),
+        })
+    };
+    // Twelve distinct frames, one per 40 ms of source time.
+    let frames: Vec<_> = (0..12).map(|i| frame(20 * i)).collect();
+    let provider = |_, t: Time| {
+        let i = usize::try_from(t.0 / Time::from_millis(40).0).ok()?;
+        frames.get(i).cloned()
+    };
+    let at = |i: i64| Time(Time::from_millis(40).0 * i);
+    let mut compositor = Compositor::new(&gpu.device);
+
+    let (first, _) = render_with(&gpu, &mut compositor, &doc, &provider, at(0));
+    let (again, _) = render_with(&gpu, &mut compositor, &doc, &provider, at(0));
+    assert_eq!(first, again);
+    let stats = compositor.video_stats();
+    assert_eq!((stats.uploads, stats.reused, stats.allocations), (1, 1, 1));
+
+    // Playing through: every new frame is uploaded, the image changes, and
+    // once the slots are full textures are reused instead of reallocated.
+    let mut previous = first;
+    for i in 1..12 {
+        let (img, _) = render_with(&gpu, &mut compositor, &doc, &provider, at(i));
+        assert_ne!(img, previous, "frame {i}");
+        previous = img;
+    }
+    let stats = compositor.video_stats();
+    assert_eq!(stats.uploads, 12);
+    assert_eq!(stats.allocations, 8, "texture pairs are pooled");
+    // A recent frame is still resident.
+    render_with(&gpu, &mut compositor, &doc, &provider, at(10));
+    assert_eq!(compositor.video_stats().uploads, 12);
+
+    // No frame yet: the layer is skipped and reported, not an error.
+    let (blank, report) = render_with(&gpu, &mut compositor, &doc, &NoVideo, at(0));
+    assert_eq!(report.pending_video.len(), 1);
+    assert!(blank.pixels.chunks_exact(4).all(|p| p == [30, 30, 30, 255]));
 }
