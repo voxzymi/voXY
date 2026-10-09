@@ -238,7 +238,15 @@ fn null_output_runs_in_real_time() {
         "clock {advanced:.3}s vs wall {elapsed:.3}s"
     );
     engine.pause();
-    std::thread::sleep(Duration::from_millis(50));
+    // Pausing is a command to the audio thread, so the clock stops when that
+    // thread handles it, not when `pause()` returns. Wait for it (as for
+    // `play` above) instead of assuming a fixed delay is enough: on a loaded
+    // runner it was not. Once the clock reports "paused" it must hold.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while clock.is_playing() {
+        assert!(Instant::now() < deadline, "pause never reached the clock");
+        std::thread::sleep(Duration::from_millis(1));
+    }
     let held = clock.time();
     std::thread::sleep(Duration::from_millis(50));
     assert_eq!(clock.time(), held);
