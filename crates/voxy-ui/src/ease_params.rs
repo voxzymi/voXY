@@ -497,7 +497,7 @@ mod tests {
             }
         }
         for kind in [InterpKind::Hold, InterpKind::Linear, InterpKind::Bezier] {
-            assert!(handle_layout(kind).is_empty());
+            assert_eq!(handle_layout(kind).len(), 0);
         }
     }
 

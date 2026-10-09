@@ -679,7 +679,7 @@ mod tests {
         assert!(c[0].actions.contains(&Action::FileNewProject));
         assert!(c[0].actions.contains(&Action::FileNewComposition));
         km.reset(Action::FileNewProject);
-        assert!(km.conflicts().is_empty());
+        assert_eq!(km.conflicts().len(), 0);
     }
 
     #[test]
@@ -691,7 +691,7 @@ mod tests {
             km.bindings(Action::ProjectRemove)
                 .contains(&key(Key::Delete))
         );
-        assert!(km.conflicts().is_empty());
+        assert_eq!(km.conflicts().len(), 0);
         // ...but a global action on the same key would clash with both.
         let mut km = km;
         km.set(Action::FileSave, vec![key(Key::Delete)]);

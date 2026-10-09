@@ -184,7 +184,7 @@ fn segment_queries_expose_speed_and_jumps() {
     // Legacy modes: unchanged answers, no jumps.
     let linear = two_keys(Interp::Linear);
     assert_eq!(linear.segment_slope(0, 0.3), Some(1.0));
-    assert!(linear.segment_jumps(0).is_empty());
+    assert_eq!(linear.segment_jumps(0), []);
     assert_eq!(two_keys(Interp::Hold).segment_slope(0, 0.3), None);
 }
 

@@ -963,7 +963,7 @@ mod tests {
             names(&rows(&f, &with(TypeFilter::Compositions))),
             vec!["Main", "title card"]
         );
-        assert!(rows(&f, &with(TypeFilter::Missing)).is_empty());
+        assert_eq!(rows(&f, &with(TypeFilter::Missing)).len(), 0);
         let doc = f.h.current();
         let missing: HashSet<_> = [f.photo].into();
         let r = build_rows(
@@ -1089,7 +1089,7 @@ mod tests {
                 Column::Used
             ]
         );
-        assert!(fitting_columns(&view.columns, 100.0).is_empty());
+        assert_eq!(fitting_columns(&view.columns, 100.0).len(), 0);
         let narrow = fitting_columns(&view.columns, NAME_MIN_WIDTH + 84.0 + 92.0);
         assert_eq!(narrow, vec![Column::Type, Column::Size]);
         let some: BTreeSet<_> = [Column::Used, Column::DateAdded].into();
@@ -1171,7 +1171,7 @@ mod tests {
             ancestors(f.h.current(), PoolItem::Asset(f.nested)),
             vec![f.inner, f.clips]
         );
-        assert!(ancestors(f.h.current(), PoolItem::Asset(f.photo)).is_empty());
+        assert_eq!(ancestors(f.h.current(), PoolItem::Asset(f.photo)).len(), 0);
     }
 
     #[test]

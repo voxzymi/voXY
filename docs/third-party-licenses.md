@@ -7,7 +7,7 @@ CI fails if this file is stale. The policy that every license must satisfy is in
 The list covers every target platform, so it includes crates that are only
 compiled on Windows, macOS or Linux.
 
-408 crates.
+411 crates.
 
 ## By license
 
@@ -29,7 +29,7 @@ compiled on Windows, macOS or Linux.
 | `BSL-1.0` | 2 |
 | `ISC` | 1 |
 | `MIT` | 90 |
-| `MIT OR Apache-2.0` | 205 |
+| `MIT OR Apache-2.0` | 208 |
 | `MIT OR Apache-2.0 OR LGPL-2.1-or-later` | 1 |
 | `MIT OR Apache-2.0 OR Zlib` | 6 |
 | `MIT OR Zlib OR Apache-2.0` | 1 |
@@ -319,6 +319,7 @@ compiled on Windows, macOS or Linux.
 | [`serde_derive`](https://github.com/serde-rs/serde) | 1.0.229 | `MIT OR Apache-2.0` |
 | [`serde_json`](https://github.com/serde-rs/json) | 1.0.151 | `MIT OR Apache-2.0` |
 | [`serde_repr`](https://github.com/dtolnay/serde-repr) | 0.1.21 | `MIT OR Apache-2.0` |
+| [`serde_spanned`](https://github.com/toml-rs/toml) | 1.1.2 | `MIT OR Apache-2.0` |
 | [`sharded-slab`](https://github.com/hawkw/sharded-slab) | 0.1.7 | `MIT` |
 | [`shlex`](https://github.com/comex/rust-shlex) | 1.3.0, 2.0.1 | `MIT OR Apache-2.0` |
 | [`signal-hook-registry`](https://github.com/vorner/signal-hook) | 1.4.8 | `MIT OR Apache-2.0` |
@@ -344,9 +345,11 @@ compiled on Windows, macOS or Linux.
 | [`thread_local`](https://github.com/Amanieu/thread_local-rs) | 1.1.10 | `MIT OR Apache-2.0` |
 | [`tiff`](https://github.com/image-rs/image-tiff) | 0.11.3 | `MIT` |
 | [`tokio`](https://github.com/tokio-rs/tokio) | 1.53.2 | `MIT` |
-| [`toml_datetime`](https://github.com/toml-rs/toml) | 1.1.2+spec-1.1.0 | `MIT OR Apache-2.0` |
+| [`toml`](https://github.com/toml-rs/toml) | 0.9.12+spec-1.1.0 | `MIT OR Apache-2.0` |
+| [`toml_datetime`](https://github.com/toml-rs/toml) | 0.7.5+spec-1.1.0, 1.1.2+spec-1.1.0 | `MIT OR Apache-2.0` |
 | [`toml_edit`](https://github.com/toml-rs/toml) | 0.25.17+spec-1.1.0 | `MIT OR Apache-2.0` |
 | [`toml_parser`](https://github.com/toml-rs/toml) | 1.1.5+spec-1.1.0 | `MIT OR Apache-2.0` |
+| [`toml_writer`](https://github.com/toml-rs/toml) | 1.1.3+spec-1.1.0 | `MIT OR Apache-2.0` |
 | [`tracing`](https://github.com/tokio-rs/tracing) | 0.1.44 | `MIT` |
 | [`tracing-attributes`](https://github.com/tokio-rs/tracing) | 0.1.31 | `MIT` |
 | [`tracing-core`](https://github.com/tokio-rs/tracing) | 0.1.36 | `MIT` |
@@ -423,7 +426,7 @@ compiled on Windows, macOS or Linux.
 | [`windows_x86_64_gnullvm`](https://github.com/microsoft/windows-rs) | 0.52.6, 0.53.1 | `MIT OR Apache-2.0` |
 | [`windows_x86_64_msvc`](https://github.com/microsoft/windows-rs) | 0.52.6, 0.53.1 | `MIT OR Apache-2.0` |
 | [`winit`](https://github.com/rust-windowing/winit) | 0.30.13 | `Apache-2.0` |
-| [`winnow`](https://github.com/winnow-rs/winnow) | 1.0.4 | `MIT` |
+| [`winnow`](https://github.com/winnow-rs/winnow) | 0.7.15, 1.0.4 | `MIT` |
 | [`wit-bindgen`](https://github.com/bytecodealliance/wit-bindgen) | 0.57.1 | `Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT` |
 | [`x11-dl`](https://github.com/AltF02/x11-rs.git) | 2.21.0 | `MIT` |
 | [`x11rb`](https://github.com/psychon/x11rb) | 0.13.2 | `MIT OR Apache-2.0` |

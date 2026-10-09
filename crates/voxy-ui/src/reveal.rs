@@ -416,7 +416,7 @@ mod tests {
         put(&mut h, a, SourceRef::Asset(x));
         let t = comp_targets(h.current(), &[PoolItem::Asset(x)]);
         assert_eq!(primary_target(&t).unwrap().comp, a, "tie: first by name");
-        assert!(comp_targets(h.current(), &[PoolItem::Asset(y)]).is_empty());
+        assert_eq!(comp_targets(h.current(), &[PoolItem::Asset(y)]).len(), 0);
         assert!(primary_target(&[]).is_none());
     }
 
@@ -523,8 +523,8 @@ mod tests {
     fn linux_edge_cases() {
         let p = reveal_plan(Os::Linux, Path::new("/top.png"));
         assert_eq!(args(&p[1]), vec!["/"], "a file at the root opens the root");
-        assert!(reveal_plan(Os::Linux, Path::new("-n")).is_empty());
-        assert!(reveal_plan(Os::Linux, Path::new("rel/x.png")).is_empty());
+        assert_eq!(reveal_plan(Os::Linux, Path::new("-n")).len(), 0);
+        assert_eq!(reveal_plan(Os::Linux, Path::new("rel/x.png")).len(), 0);
     }
 
     #[test]

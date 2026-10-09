@@ -215,6 +215,6 @@ mod tests {
         let p = Preferences::parse("[comp_dialog]\nlock_aspect = true\n");
         assert!(p.comp_dialog.lock_aspect);
         assert!(p.comp_dialog.keep_layers && p.comp_dialog.live_preview);
-        assert!(p.user_presets.is_empty());
+        assert_eq!(p.user_presets.len(), 0);
     }
 }
