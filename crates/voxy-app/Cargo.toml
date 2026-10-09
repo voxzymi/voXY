@@ -1,0 +1,21 @@
+[package]
+name = "voxy-app"
+description = "voXY desktop application"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "voxy"
+path = "src/main.rs"
+
+[dependencies]
+voxy-ui.workspace = true
+anyhow.workspace = true
+tracing-subscriber.workspace = true

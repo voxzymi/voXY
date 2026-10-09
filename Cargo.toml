@@ -1,0 +1,90 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "xtask"]
+default-members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+repository = "https://github.com/voxzymi/voXY"
+authors = ["voXY contributors"]
+
+[workspace.dependencies]
+# Internal crates
+voxy-core = { path = "crates/voxy-core" }
+voxy-vector = { path = "crates/voxy-vector" }
+voxy-render = { path = "crates/voxy-render" }
+voxy-media = { path = "crates/voxy-media" }
+voxy-ofx-sys = { path = "crates/voxy-ofx-sys" }
+voxy-ofx-host = { path = "crates/voxy-ofx-host" }
+voxy-am-compat = { path = "crates/voxy-am-compat" }
+voxy-ui = { path = "crates/voxy-ui" }
+
+# GPU stack. wgpu is pinned to ONE major version that both vello and
+# eframe/egui-wgpu depend on; see README "Pinned GPU stack". Bump all of these
+# together, never individually.
+wgpu = "30.0.1"
+vello = "0.11.0"
+eframe = { version = "0.36.2", default-features = false }
+egui = "0.36.2"
+egui-wgpu = "0.36.2"
+egui_dock = "0.21.1"
+
+# Geometry / text (used from M4)
+kurbo = "0.13.1"
+parley = "0.11.1"
+i_overlay = "9.0.1"
+
+# General
+anyhow = "1.0.104"
+arc-swap = "1.9.2"
+bytemuck = { version = "1.25.2", features = ["derive"] }
+glam = { version = "0.34.1", features = ["serde"] }
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
+pollster = "1.0.1"
+rfd = "0.17.2"
+semver = "1.0.28"
+serde = { version = "1.0.229", features = ["derive", "rc"] }
+serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
+thiserror = "2.0.21"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+# Dev
+proptest = "1.11.0"
+tempfile = "3.27.0"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_debug_implementations = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# Curated pedantic allow-list. Graphics and timeline math casts between
+# integer and float types constantly; each cast site is reviewed instead.
+cast_possible_truncation = "allow"
+cast_precision_loss = "allow"
+cast_sign_loss = "allow"
+cast_possible_wrap = "allow"
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+missing_panics_doc = "allow"
+similar_names = "allow"
+too_many_lines = "allow"
+# Error enums are self-describing; per-function "# Errors" sections add noise.
+missing_errors_doc = "allow"
+float_cmp = "allow"
+dbg_macro = "warn"
+todo = "warn"
+unwrap_used = "warn"
+
+[profile.dev]
+# Keep the GPU stack and image decoding usable in debug builds.
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

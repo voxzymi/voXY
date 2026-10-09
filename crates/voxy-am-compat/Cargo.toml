@@ -1,0 +1,15 @@
+[package]
+name = "voxy-am-compat"
+description = "Alight Motion project/preset interoperability for voXY (from Compat 2a)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+voxy-core.workspace = true

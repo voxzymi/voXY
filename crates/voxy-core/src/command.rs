@@ -1,0 +1,362 @@
+//! Commands: every edit to a document is one.
+
+use std::borrow::Cow;
+use std::fmt::Debug;
+
+use glam::DVec2;
+
+use crate::asset::{Asset, AssetKind};
+use crate::color::{LinearRgba, WorkingSpace};
+use crate::document::{Document, ValidationError};
+use crate::id::{CompId, LayerId, PropId};
+use crate::layer::{BlendMode, ForeignData, Layer, LayerFlags, LayerKind, Transform};
+use crate::property::{Property, PropertyError, keys};
+use crate::time::Time;
+use crate::value::Value;
+
+/// Identifies edits that may collapse into one undo step while an
+/// interaction (a drag, a slider scrub) is in progress.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct MergeKey {
+    pub kind: &'static str,
+    pub target: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+pub enum CommandError {
+    #[error("{0} not found")]
+    NotFound(String),
+    #[error("invalid edit: {0}")]
+    Invalid(String),
+    #[error(transparent)]
+    Property(#[from] PropertyError),
+    #[error("edit would make the document invalid: {0}")]
+    Validation(#[from] ValidationError),
+}
+
+/// An edit. [`crate::History`] applies it to a copy of the current document,
+/// so `apply` only has to move forward: undo restores the previous snapshot
+/// and no inverse operation is needed.
+///
+/// `apply` must either succeed or return an error; on error the copy is
+/// discarded, so edits are atomic.
+pub trait Command: Send + Debug + 'static {
+    /// Shown in the Edit menu, e.g. "Undo Add Solid".
+    fn label(&self) -> Cow<'static, str>;
+    fn apply(&self, doc: &mut Document) -> Result<(), CommandError>;
+    /// Commands with equal keys merge while an interaction is open.
+    fn merge_key(&self) -> Option<MergeKey> {
+        None
+    }
+}
+
+fn comp_mut(doc: &mut Document, id: CompId) -> Result<&mut crate::Composition, CommandError> {
+    doc.comp_mut(id)
+        .ok_or_else(|| CommandError::NotFound(id.to_string()))
+}
+
+fn insert_layer(
+    doc: &mut Document,
+    comp: CompId,
+    index: usize,
+    layer: Layer,
+) -> Result<(), CommandError> {
+    let c = comp_mut(doc, comp)?;
+    let index = index.min(c.layers.len());
+    c.layers.insert(index, layer.into());
+    Ok(())
+}
+
+/// Adds a solid that covers the composition. `index` 0 puts it on top.
+#[derive(Debug, Clone)]
+pub struct AddSolidLayer {
+    pub comp: CompId,
+    pub name: Option<String>,
+    pub color: LinearRgba,
+    pub index: usize,
+}
+
+impl Command for AddSolidLayer {
+    fn label(&self) -> Cow<'static, str> {
+        "Add Solid".into()
+    }
+
+    fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
+        let c = doc
+            .comp(self.comp)
+            .ok_or_else(|| CommandError::NotFound(self.comp.to_string()))?;
+        let size = DVec2::new(f64::from(c.width), f64::from(c.height));
+        let duration = c.duration;
+        let n = c
+            .layers
+            .iter()
+            .filter(|l| matches!(l.kind, LayerKind::Solid { .. }))
+            .count();
+        let name = self
+            .name
+            .clone()
+            .unwrap_or_else(|| format!("Solid {}", n + 1));
+        let id = doc.alloc_id();
+        let color = Property::builtin(doc.alloc_id(), keys::SOLID_COLOR, Value::Color(self.color));
+        let size_prop = Property::builtin(doc.alloc_id(), keys::SOLID_SIZE, Value::Vec2(size));
+        let transform = Transform::new(&mut || doc.alloc_id(), size / 2.0, size / 2.0);
+        let layer = new_layer(
+            id,
+            name,
+            LayerKind::Solid {
+                color,
+                size: size_prop,
+            },
+            duration,
+            transform,
+        );
+        insert_layer(doc, self.comp, self.index, layer)
+    }
+}
+
+/// Registers an image file as an asset and adds a layer showing it,
+/// centered in the composition.
+#[derive(Debug, Clone)]
+pub struct AddImageLayer {
+    pub comp: CompId,
+    pub path: String,
+    pub pixel_size: [u32; 2],
+    pub index: usize,
+}
+
+impl Command for AddImageLayer {
+    fn label(&self) -> Cow<'static, str> {
+        "Import Image".into()
+    }
+
+    fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
+        let c = doc
+            .comp(self.comp)
+            .ok_or_else(|| CommandError::NotFound(self.comp.to_string()))?;
+        let center = DVec2::new(f64::from(c.width), f64::from(c.height)) / 2.0;
+        let duration = c.duration;
+        let name = self
+            .path
+            .rsplit(['/', '\\'])
+            .next()
+            .unwrap_or(&self.path)
+            .to_owned();
+        let asset = doc.add_asset(Asset {
+            id: 0.into(),
+            name: name.clone(),
+            kind: AssetKind::Image,
+            path: self.path.clone(),
+            pixel_size: Some(self.pixel_size),
+        });
+        let id = doc.alloc_id();
+        let image_center =
+            DVec2::new(f64::from(self.pixel_size[0]), f64::from(self.pixel_size[1])) / 2.0;
+        let transform = Transform::new(&mut || doc.alloc_id(), image_center, center);
+        let layer = new_layer(id, name, LayerKind::Image { asset }, duration, transform);
+        insert_layer(doc, self.comp, self.index, layer)
+    }
+}
+
+fn new_layer(
+    id: LayerId,
+    name: String,
+    kind: LayerKind,
+    duration: Time,
+    transform: Transform,
+) -> Layer {
+    Layer {
+        id,
+        name,
+        kind,
+        in_point: Time::ZERO,
+        out_point: duration,
+        start_offset: Time::ZERO,
+        parent: None,
+        transform,
+        blend_mode: BlendMode::Normal,
+        flags: LayerFlags::default(),
+        foreign: ForeignData::default(),
+    }
+}
+
+/// Removes layers. Children of a removed layer are unparented.
+#[derive(Debug, Clone)]
+pub struct RemoveLayers {
+    pub layers: Vec<LayerId>,
+}
+
+impl Command for RemoveLayers {
+    fn label(&self) -> Cow<'static, str> {
+        if self.layers.len() == 1 {
+            "Delete Layer"
+        } else {
+            "Delete Layers"
+        }
+        .into()
+    }
+
+    fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
+        for &id in &self.layers {
+            let (comp, _) = doc
+                .find_layer(id)
+                .ok_or_else(|| CommandError::NotFound(id.to_string()))?;
+            let c = comp_mut(doc, comp)?;
+            c.layers.retain(|l| l.id != id);
+            let children: Vec<LayerId> = c
+                .layers
+                .iter()
+                .filter(|l| l.parent == Some(id))
+                .map(|l| l.id)
+                .collect();
+            for child in children {
+                if let Some(l) = c.layer_mut(child) {
+                    l.parent = None;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct RenameLayer {
+    pub layer: LayerId,
+    pub name: String,
+}
+
+impl Command for RenameLayer {
+    fn label(&self) -> Cow<'static, str> {
+        "Rename Layer".into()
+    }
+
+    fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
+        let l = doc
+            .layer_mut(self.layer)
+            .ok_or_else(|| CommandError::NotFound(self.layer.to_string()))?;
+        l.name.clone_from(&self.name);
+        Ok(())
+    }
+
+    fn merge_key(&self) -> Option<MergeKey> {
+        Some(MergeKey {
+            kind: "rename-layer",
+            target: self.layer.raw(),
+        })
+    }
+}
+
+/// Moves a layer to `to_index` in its stack (0 = top).
+#[derive(Debug, Clone)]
+pub struct MoveLayer {
+    pub layer: LayerId,
+    pub to_index: usize,
+}
+
+impl Command for MoveLayer {
+    fn label(&self) -> Cow<'static, str> {
+        "Reorder Layer".into()
+    }
+
+    fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
+        let (comp, _) = doc
+            .find_layer(self.layer)
+            .ok_or_else(|| CommandError::NotFound(self.layer.to_string()))?;
+        let c = comp_mut(doc, comp)?;
+        let from = c.layer_index(self.layer).expect("found above");
+        let layer = c.layers.remove(from);
+        let to = self.to_index.min(c.layers.len());
+        c.layers.insert(to, layer);
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SetLayerVisible {
+    pub layer: LayerId,
+    pub visible: bool,
+}
+
+impl Command for SetLayerVisible {
+    fn label(&self) -> Cow<'static, str> {
+        if self.visible {
+            "Show Layer"
+        } else {
+            "Hide Layer"
+        }
+        .into()
+    }
+
+    fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
+        let l = doc
+            .layer_mut(self.layer)
+            .ok_or_else(|| CommandError::NotFound(self.layer.to_string()))?;
+        l.flags.visible = self.visible;
+        Ok(())
+    }
+}
+
+/// Sets a property to a static value.
+#[derive(Debug, Clone)]
+pub struct SetProperty {
+    pub prop: PropId,
+    pub value: Value,
+}
+
+impl Command for SetProperty {
+    fn label(&self) -> Cow<'static, str> {
+        "Change Property".into()
+    }
+
+    fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
+        let p = doc
+            .property_mut(self.prop)
+            .ok_or_else(|| CommandError::NotFound(self.prop.to_string()))?;
+        p.set_static(self.value.clone())?;
+        Ok(())
+    }
+
+    fn merge_key(&self) -> Option<MergeKey> {
+        Some(MergeKey {
+            kind: "set-property",
+            target: self.prop.raw(),
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SetWorkingSpace(pub WorkingSpace);
+
+impl Command for SetWorkingSpace {
+    fn label(&self) -> Cow<'static, str> {
+        "Change Working Color Space".into()
+    }
+
+    fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
+        doc.meta.working_space = self.0;
+        Ok(())
+    }
+}
+
+/// Points an asset at a different file (relinking, or rebasing relative paths
+/// when a project is saved elsewhere).
+#[derive(Debug, Clone)]
+pub struct SetAssetPath {
+    pub asset: crate::AssetId,
+    pub path: String,
+}
+
+impl Command for SetAssetPath {
+    fn label(&self) -> Cow<'static, str> {
+        "Relink Asset".into()
+    }
+
+    fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
+        let assets = std::sync::Arc::make_mut(&mut doc.assets);
+        let a = assets
+            .0
+            .get_mut(&self.asset)
+            .ok_or_else(|| CommandError::NotFound(self.asset.to_string()))?;
+        a.path.clone_from(&self.path);
+        Ok(())
+    }
+}
