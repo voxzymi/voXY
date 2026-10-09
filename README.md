@@ -11,12 +11,12 @@ macOS, written in Rust.
 
 voXY is an original product. Its name, artwork, icons and theme are its own.
 
-> **Status: Milestone 2a.** Milestone 1 is complete: the project model,
+> **Status: Milestone 2b (in progress).** Milestone 1 is complete: the project model,
 > undo/redo, `.voxy` save/load, the GPU compositor and the application
 > shell. Milestone 2a adds the keyframe and interpolation model: hold,
 > linear and cubic-bezier timing with ease presets, plus arc-length
-> ("speed-aware") motion paths. The full timeline and graph editor come
-> next (2b). See [`docs/design-proposal.md`](docs/design-proposal.md) for
+> ("speed-aware") motion paths. Milestone 2b adds the timeline panel; the
+> graph editor and on-canvas motion-path handles come next. See [`docs/design-proposal.md`](docs/design-proposal.md) for
 > the plan.
 
 ## What works today
@@ -46,6 +46,15 @@ voXY is an original product. Its name, artwork, icons and theme are its own.
 
   The Timeline panel has a time scrubber, and the Left/Right arrow keys step
   one frame.
+- The Timeline panel (Milestone 2b):
+  - a time ruler: click or drag to move the playhead, snapped to frames;
+  - one bar per layer: drag to move it, drag its edges to trim;
+  - expandable per-property lanes with keyframe diamonds: click to select
+    (Shift/Ctrl adds), drag to move the selection, Delete removes it;
+  - Ctrl+scroll zooms around the pointer, scroll pans, Fit shows everything.
+
+  Every drag is one undo step. Keyframes cannot be dragged onto each other
+  or before time 0.
 - A prompt before discarding unsaved changes.
 
 **Undo/redo for every edit.** Each edit records a document snapshot, and

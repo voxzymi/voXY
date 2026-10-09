@@ -439,6 +439,36 @@ mod tests {
     }
 
     #[test]
+    fn layer_timing_edits_validate_and_merge() {
+        use crate::Time;
+        use crate::command::SetLayerTiming;
+        let mut h = history();
+        add_solid(&mut h);
+        let l = top_layer(&h);
+        let before = h.current().clone();
+        let bad = SetLayerTiming {
+            layer: l,
+            in_point: Time::from_secs(3),
+            out_point: Time::from_secs(1),
+            start_offset: Time::ZERO,
+        };
+        assert!(h.execute(bad).is_err());
+        assert!(std::sync::Arc::ptr_eq(h.current(), &before));
+        for s in 1..=3 {
+            h.execute(SetLayerTiming {
+                layer: l,
+                in_point: Time::from_secs(s),
+                out_point: Time::from_secs(9),
+                start_offset: Time::from_secs(s),
+            })
+            .unwrap();
+        }
+        assert_eq!(h.current().root().layers[0].in_point, Time::from_secs(3));
+        h.undo();
+        assert_eq!(h.current().root().layers[0].in_point, Time::ZERO);
+    }
+
+    #[test]
     fn step_limit_drops_oldest() {
         let mut h = history();
         h.set_max_steps(2);

@@ -5,8 +5,8 @@ use std::fmt::Write as _;
 use egui::{Id, RichText, Ui, WidgetText};
 use egui_dock::TabViewer;
 use voxy_core::command::{
-    AddKeyframe, ApplyEasePreset, MoveLayer, RemoveKeyframes, RemoveLayers, RenameLayer,
-    SetAnimated, SetInterpolation, SetLayerVisible, SetProperty, SetWorkingSpace,
+    AddKeyframe, ApplyEasePreset, RemoveKeyframes, RenameLayer, SetAnimated, SetInterpolation,
+    SetProperty, SetWorkingSpace,
 };
 use voxy_core::glam::DVec2;
 use voxy_core::{
@@ -122,66 +122,7 @@ impl Panels<'_> {
         });
         self.time_scrubber(ui, comp);
         ui.separator();
-        if comp.layers.is_empty() {
-            ui.weak("No layers. Use Layer ▸ New Solid or Layer ▸ Import Image…");
-            return;
-        }
-        let count = comp.layers.len();
-        egui::ScrollArea::vertical()
-            .auto_shrink(false)
-            .show(ui, |ui| {
-                for (index, layer) in comp.layers.iter().enumerate() {
-                    ui.horizontal(|ui| {
-                        let mut visible = layer.flags.visible;
-                        if ui
-                            .checkbox(&mut visible, "")
-                            .on_hover_text("Visible")
-                            .changed()
-                        {
-                            self.state.execute(SetLayerVisible {
-                                layer: layer.id,
-                                visible,
-                            });
-                        }
-                        ui.weak(format!("{:>2}", index + 1));
-                        let selected = self.state.selection == Some(layer.id);
-                        let label = format!("{}  ·  {}", layer.name, layer.kind.type_name());
-                        if ui.selectable_label(selected, label).clicked() {
-                            self.state.selection = Some(layer.id);
-                        }
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.small_button("🗑").on_hover_text("Delete layer").clicked() {
-                                self.state.execute(RemoveLayers {
-                                    layers: vec![layer.id],
-                                });
-                                if selected {
-                                    self.state.selection = None;
-                                }
-                            }
-                            if ui
-                                .add_enabled(index + 1 < count, egui::Button::new("⏷").small())
-                                .on_hover_text("Move down")
-                                .clicked()
-                            {
-                                self.state.execute(MoveLayer {
-                                    layer: layer.id,
-                                    to_index: index + 1,
-                                });
-                            }
-                            if ui
-                                .add_enabled(index > 0, egui::Button::new("⏶").small())
-                                .on_hover_text("Move up")
-                                .clicked()
-                            {
-                                self.state.execute(MoveLayer {
-                                    layer: layer.id,
-                                    to_index: index - 1,
-                                });
-                            }
-                        });
-                    });
-                }
-            });
+        crate::timeline::show(ui, self.state);
     }
 
     fn properties_ui(&mut self, ui: &mut Ui) {
@@ -493,7 +434,7 @@ fn edit_value(ui: &mut Ui, p: &Property, value: &Value) -> Option<Value> {
 }
 
 /// `HH:MM:SS:FF` (frames counted at the nominal integer rate).
-fn timecode(time: Time, rate: FrameRate) -> String {
+pub(crate) fn timecode(time: Time, rate: FrameRate) -> String {
     let frame = rate.time_to_frame(time).max(0);
     let fps = (rate.as_f64().round() as i64).max(1);
     let (secs, ff) = (frame / fps, frame % fps);

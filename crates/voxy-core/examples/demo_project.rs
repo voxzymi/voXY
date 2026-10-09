@@ -1,8 +1,8 @@
 //! Writes a small demo project: `cargo run -p voxy-core --example demo_project -- out.voxy`
 
-use voxy_core::command::{AddSolidLayer, Command, SetProperty};
+use voxy_core::command::{AddKeyframe, AddSolidLayer, ApplyEasePreset, Command, SetProperty};
 use voxy_core::glam::DVec2;
-use voxy_core::{CompSettings, Document, LayerKind, LinearRgba, Value, persist};
+use voxy_core::{CompSettings, Document, EasePreset, LayerKind, LinearRgba, Value, persist};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let path = std::env::args()
@@ -52,6 +52,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .apply(&mut doc)?;
         }
     }
+    // Animate the top layer: slide right with easy-ease, fade in.
+    let top = doc.root().layers[0].clone();
+    let (pos, opacity) = (top.transform.position.id, top.transform.opacity.id);
+    let start = voxy_core::Time::ZERO;
+    let end = voxy_core::Time::from_secs(3);
+    let at = |prop, time, value| SetProperty { prop, time, value };
+    AddKeyframe {
+        prop: pos,
+        time: start,
+    }
+    .apply(&mut doc)?;
+    at(pos, end, Value::Vec2(DVec2::new(1500.0, 760.0))).apply(&mut doc)?;
+    ApplyEasePreset {
+        prop: pos,
+        times: vec![start],
+        preset: EasePreset::EasyEase,
+    }
+    .apply(&mut doc)?;
+    at(opacity, start, Value::Scalar(0.0)).apply(&mut doc)?;
+    AddKeyframe {
+        prop: opacity,
+        time: start,
+    }
+    .apply(&mut doc)?;
+    at(opacity, voxy_core::Time::from_secs(1), Value::Scalar(0.6)).apply(&mut doc)?;
     persist::save(&doc, std::path::Path::new(&path))?;
     println!("wrote {path}");
     Ok(())

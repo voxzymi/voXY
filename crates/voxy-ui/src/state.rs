@@ -19,6 +19,7 @@ pub struct EditorState {
     pub selection: Option<LayerId>,
     pub time: Time,
     pub status: Option<Status>,
+    pub timeline: crate::timeline::TimelineView,
 }
 
 impl EditorState {
@@ -29,6 +30,7 @@ impl EditorState {
             selection: None,
             time: Time::ZERO,
             status: None,
+            timeline: crate::timeline::TimelineView::default(),
         }
     }
 
@@ -210,7 +212,11 @@ impl EditorState {
         }
     }
 
+    /// Deletes selected keyframes if there are any, otherwise the selected layer.
     pub fn delete_selection(&mut self) {
+        if crate::timeline::delete_selected_keys(self) {
+            return;
+        }
         if let Some(id) = self.selection.take() {
             self.execute(RemoveLayers { layers: vec![id] });
         }

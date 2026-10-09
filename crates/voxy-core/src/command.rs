@@ -580,3 +580,43 @@ impl Command for SetAssetPath {
         Ok(())
     }
 }
+
+/// Sets a layer's timing: where it starts and ends on the composition
+/// timeline, and which source time it shows at its start. Moving a layer
+/// shifts `in_point` and `out_point`; trimming the start also shifts
+/// `start_offset`, so the source stays put under the cut.
+#[derive(Debug, Clone)]
+pub struct SetLayerTiming {
+    pub layer: LayerId,
+    pub in_point: Time,
+    pub out_point: Time,
+    pub start_offset: Time,
+}
+
+impl Command for SetLayerTiming {
+    fn label(&self) -> Cow<'static, str> {
+        "Edit Layer Timing".into()
+    }
+
+    fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
+        if self.out_point < self.in_point {
+            return Err(CommandError::Invalid(
+                "a layer cannot end before it starts".into(),
+            ));
+        }
+        let l = doc
+            .layer_mut(self.layer)
+            .ok_or_else(|| CommandError::NotFound(self.layer.to_string()))?;
+        l.in_point = self.in_point;
+        l.out_point = self.out_point;
+        l.start_offset = self.start_offset;
+        Ok(())
+    }
+
+    fn merge_key(&self) -> Option<MergeKey> {
+        Some(MergeKey {
+            kind: "layer-timing",
+            target: self.layer.raw(),
+        })
+    }
+}

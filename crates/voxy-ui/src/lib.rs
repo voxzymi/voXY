@@ -5,6 +5,7 @@ mod app;
 mod panels;
 mod state;
 mod theme;
+mod timeline;
 mod viewport;
 
 use std::path::PathBuf;
