@@ -19,7 +19,10 @@ pub const PACKAGE_EXTENSION: &str = "voxyz";
 /// Value of the envelope's `format` field.
 pub const FORMAT_ID: &str = "voxy-project";
 /// The format version this build writes, and the newest it reads.
-pub const FORMAT_VERSION: Version = Version::new(0, 3, 0);
+pub const FORMAT_VERSION: Version = Version::new(0, 4, 0);
+/// Version of the `ui_state` section this build writes. The section is
+/// opaque to this crate; see [`to_json_with_ui`].
+pub const UI_STATE_VERSION: u32 = 1;
 
 #[derive(Debug, thiserror::Error)]
 pub enum LoadError {
@@ -55,6 +58,8 @@ struct EnvelopeOut<'a> {
     format_version: String,
     generator: String,
     project: &'a Document,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ui_state: Option<&'a serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -65,17 +70,31 @@ struct Header {
 
 #[derive(Deserialize)]
 struct EnvelopeIn {
-    project: Document,
+    project: serde_json::Value,
+    #[serde(default)]
+    ui_state: Option<serde_json::Value>,
 }
 
 /// Encodes a document as pretty-printed project JSON.
 pub fn to_json(doc: &Document) -> Result<String, SaveError> {
+    to_json_with_ui(doc, None)
+}
+
+/// Encodes a document plus the editor's `ui_state` section (open tabs,
+/// playheads, panel state). The section sits beside `project`, never inside
+/// it: rendering and the document never read it, and loaders ignore it if
+/// they do not understand it.
+pub fn to_json_with_ui(
+    doc: &Document,
+    ui_state: Option<&serde_json::Value>,
+) -> Result<String, SaveError> {
     doc.validate()?;
     let env = EnvelopeOut {
         format: FORMAT_ID,
         format_version: FORMAT_VERSION.to_string(),
         generator: format!("voXY {}", env!("CARGO_PKG_VERSION")),
         project: doc,
+        ui_state,
     };
     let mut s = serde_json::to_string_pretty(&env)?;
     s.push('\n');
@@ -85,6 +104,13 @@ pub fn to_json(doc: &Document) -> Result<String, SaveError> {
 /// Decodes project JSON, checking the format version and the document's
 /// invariants.
 pub fn from_json(json: &str) -> Result<Document, LoadError> {
+    from_json_with_ui(json).map(|(doc, _)| doc)
+}
+
+/// [`from_json`], also returning the `ui_state` section if the file has
+/// one. It is returned unparsed: the editor validates it and drops what it
+/// cannot use.
+pub fn from_json_with_ui(json: &str) -> Result<(Document, Option<serde_json::Value>), LoadError> {
     let header: Header = serde_json::from_str(json).map_err(|_| LoadError::NotAProject)?;
     if header.format != FORMAT_ID {
         return Err(LoadError::NotAProject);
@@ -105,15 +131,40 @@ pub fn from_json(json: &str) -> Result<Document, LoadError> {
     // - 0.2.0 → 0.3.0: 0.3.0 only adds video assets and layers (and the
     //   optional asset fields `duration` and `frame_rate`); likewise no
     //   rewrite.
+    // - 0.3.0 → 0.4.0: `root_comp` becomes the optional `main_comp`; every
+    //   other addition has a default (no folders, square pixels, no work
+    //   area, default project settings).
     let env: EnvelopeIn = serde_json::from_str(json)?;
-    env.project.validate()?;
-    Ok(env.project)
+    let mut project = env.project;
+    if found_core < Version::new(0, 4, 0) {
+        migrate_0_3_to_0_4(&mut project);
+    }
+    let doc: Document = serde_json::from_value(project)?;
+    doc.validate()?;
+    Ok((doc, env.ui_state))
+}
+
+fn migrate_0_3_to_0_4(project: &mut serde_json::Value) {
+    if let Some(obj) = project.as_object_mut()
+        && let Some(root) = obj.remove("root_comp")
+    {
+        obj.insert("main_comp".into(), root);
+    }
 }
 
 /// Writes a project atomically: to a temporary file in the same directory,
 /// flushed to disk, then renamed over the target.
 pub fn save(doc: &Document, path: &Path) -> Result<(), SaveError> {
-    let json = to_json(doc)?;
+    save_with_ui(doc, None, path)
+}
+
+/// [`save`] with a `ui_state` section.
+pub fn save_with_ui(
+    doc: &Document,
+    ui_state: Option<&serde_json::Value>,
+    path: &Path,
+) -> Result<(), SaveError> {
+    let json = to_json_with_ui(doc, ui_state)?;
     let dir = path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
@@ -139,6 +190,11 @@ pub fn load(path: &Path) -> Result<Document, LoadError> {
     from_json(&fs::read_to_string(path)?)
 }
 
+/// [`load`], also returning the `ui_state` section.
+pub fn load_with_ui(path: &Path) -> Result<(Document, Option<serde_json::Value>), LoadError> {
+    from_json_with_ui(&fs::read_to_string(path)?)
+}
+
 /// The assets folder that belongs to a project file: `<name>.assets/` next to
 /// `<name>.voxy`.
 pub fn assets_dir(project_path: &Path) -> PathBuf {
@@ -157,7 +213,7 @@ mod tests {
 
     fn sample() -> Document {
         let mut doc = Document::new("Sample", CompSettings::default());
-        let comp = doc.root_comp;
+        let comp = doc.main_comp.unwrap();
         AddSolidLayer {
             comp,
             name: None,
@@ -174,7 +230,7 @@ mod tests {
         }
         .apply(&mut doc)
         .unwrap();
-        let rot = doc.root().layers[0].transform.rotation.id;
+        let rot = doc.main().unwrap().layers[0].transform.rotation.id;
         SetProperty {
             time: crate::Time::ZERO,
             prop: rot,
@@ -211,7 +267,7 @@ mod tests {
     #[test]
     fn newer_versions_are_refused() {
         let current = format!("\"{FORMAT_VERSION}\"");
-        let json = to_json(&sample()).unwrap().replace(&current, "\"0.4.0\"");
+        let json = to_json(&sample()).unwrap().replace(&current, "\"0.5.0\"");
         assert!(matches!(from_json(&json), Err(LoadError::TooNew { .. })));
         let json = to_json(&sample()).unwrap().replace(&current, "\"banana\"");
         assert!(matches!(from_json(&json), Err(LoadError::BadVersion(_))));
@@ -220,7 +276,7 @@ mod tests {
     #[test]
     fn older_versions_still_load() {
         // A 0.1.0 file (static properties only) or 0.2.0 file (no video) is
-        // valid 0.3.0 content.
+        // valid 0.3.0 content. (Real 0.3.0 files: `tests/pool.rs`.)
         let doc = sample();
         let current = format!("\"{FORMAT_VERSION}\"");
         for old in ["0.1.0", "0.2.0"] {
@@ -236,7 +292,7 @@ mod tests {
         use crate::command::AddVideoLayer;
         use crate::{FrameRate, LayerKind, Time};
         let mut doc = sample();
-        let comp = doc.root_comp;
+        let comp = doc.main_comp.unwrap();
         AddVideoLayer {
             comp,
             path: "clip.mp4".into(),
@@ -247,7 +303,7 @@ mod tests {
         }
         .apply(&mut doc)
         .unwrap();
-        let layer = &doc.root().layers[0];
+        let layer = &doc.main().unwrap().layers[0];
         assert!(matches!(layer.kind, LayerKind::Video { .. }));
         assert_eq!(layer.out_point, Time::from_secs(2), "ends with the video");
         let json = to_json(&doc).unwrap();
@@ -260,7 +316,7 @@ mod tests {
         use crate::command::{AddKeyframe, ApplyEasePreset, SetSpatialTangents};
         use crate::{EasePreset, SpatialTangents, Time};
         let mut doc = sample();
-        let pos = doc.root().layers[0].transform.position.id;
+        let pos = doc.main().unwrap().layers[0].transform.position.id;
         AddKeyframe {
             prop: pos,
             time: Time::ZERO,
@@ -313,7 +369,7 @@ mod tests {
         // Point the root at a composition that does not exist.
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
         let mut v2 = v.clone();
-        v2["project"]["root_comp"] = 4242.into();
+        v2["project"]["main_comp"] = 4242.into();
         assert!(matches!(
             from_json(&v2.to_string()),
             Err(LoadError::Invalid(_))

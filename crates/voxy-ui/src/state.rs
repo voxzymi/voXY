@@ -2,8 +2,13 @@
 
 use std::path::{Path, PathBuf};
 
+use std::sync::Arc;
 use voxy_core::command::{AddImageLayer, AddSolidLayer, AddVideoLayer, RemoveLayers, SetAssetPath};
-use voxy_core::{Command, CompSettings, Document, History, LayerId, LinearRgba, Time, persist};
+
+use voxy_core::{
+    Command, CompId, CompSettings, Composition, Document, FrameRate, History, LayerId, LinearRgba,
+    Time, persist,
+};
 
 /// A message for the status bar.
 #[derive(Debug, Clone)]
@@ -84,16 +89,44 @@ impl EditorState {
             )
     }
 
+    /// The composition the editor shows: the main composition for now; the
+    /// active tab's once composition tabs land (Milestone E).
+    pub fn comp_id(&self) -> Option<CompId> {
+        self.history.current().main_comp
+    }
+
+    pub fn comp(&self) -> Option<Arc<Composition>> {
+        let id = self.comp_id()?;
+        self.history.current().comps.get(&id).cloned()
+    }
+
+    fn frame_rate(&self) -> FrameRate {
+        self.comp().map_or(FrameRate::FPS_30, |c| c.frame_rate)
+    }
+
+    /// The open composition, or an error in the status bar if there is none.
+    fn require_comp(&mut self) -> Option<CompId> {
+        let id = self.comp_id();
+        if id.is_none() {
+            self.error("No composition is open. Create one first.");
+        }
+        id
+    }
+
+    fn select_top_layer(&mut self) {
+        self.selection = self.comp().and_then(|c| c.layers.first().map(|l| l.id));
+    }
+
     /// Starts or stops playback from the playhead.
     pub fn toggle_playback(&mut self) {
-        let rate = self.history.current().root().frame_rate;
+        let rate = self.frame_rate();
         if let Some(t) = self.transport.toggle(self.time, rate) {
             self.time = t;
         }
     }
 
     pub fn new_document(&mut self) {
-        let rate = self.history.current().root().frame_rate;
+        let rate = self.frame_rate();
         self.transport.pause(rate);
         self.history.reset(Self::untitled());
         self.project_path = None;
@@ -192,14 +225,16 @@ impl EditorState {
     }
 
     pub fn add_solid(&mut self) {
-        let comp = self.history.current().root_comp;
+        let Some(comp) = self.require_comp() else {
+            return;
+        };
         self.execute(AddSolidLayer {
             comp,
             name: None,
             color: LinearRgba::from_srgb8(124, 92, 255, 255),
             index: 0,
         });
-        self.selection = self.history.current().root().layers.first().map(|l| l.id);
+        self.select_top_layer();
     }
 
     pub fn import_image_dialog(&mut self) {
@@ -212,7 +247,9 @@ impl EditorState {
         };
         match voxy_media::image_dimensions(&path) {
             Ok((w, h)) => {
-                let comp = self.history.current().root_comp;
+                let Some(comp) = self.require_comp() else {
+                    return;
+                };
                 let stored = portable_path(&path, self.asset_root().as_deref());
                 self.execute(AddImageLayer {
                     comp,
@@ -220,7 +257,7 @@ impl EditorState {
                     pixel_size: [w, h],
                     index: 0,
                 });
-                self.selection = self.history.current().root().layers.first().map(|l| l.id);
+                self.select_top_layer();
             }
             Err(e) => self.error(format!("Could not import {}: {e}", path.display())),
         }
@@ -255,7 +292,9 @@ impl EditorState {
             self.error(format!("{} has no video stream", path.display()));
             return;
         };
-        let comp = self.history.current().root_comp;
+        let Some(comp) = self.require_comp() else {
+            return;
+        };
         let stored = portable_path(path, self.asset_root().as_deref());
         self.execute(AddVideoLayer {
             comp,
@@ -265,7 +304,7 @@ impl EditorState {
             frame_rate: video.frame_rate,
             index: 0,
         });
-        self.selection = self.history.current().root().layers.first().map(|l| l.id);
+        self.select_top_layer();
     }
 
     /// Deletes selected keyframes if there are any, otherwise the selected layer.
@@ -332,9 +371,9 @@ mod tests {
         s.add_solid();
         assert!(s.selection.is_some());
         s.delete_selection();
-        assert_eq!(s.history.current().root().layers, []);
+        assert_eq!(s.comp().unwrap().layers, []);
         s.history.undo();
-        assert_eq!(s.history.current().root().layers.len(), 1);
+        assert_eq!(s.comp().unwrap().layers.len(), 1);
         s.history.undo();
         s.fix_selection();
         assert!(s.selection.is_none());

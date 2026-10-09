@@ -248,7 +248,10 @@ pub fn show(ui: &mut Ui, state: &mut EditorState) {
         ui.selectable_value(&mut state.graph.mode, GraphMode::Speed, "Speed");
     });
 
-    let comp = doc.root();
+    let Some(comp) = state.comp() else {
+        return;
+    };
+    let comp = &*comp;
     let avail = ui.available_size();
     let ease_w = 250f32.min(avail.x * 0.4);
     ui.horizontal(|ui| {

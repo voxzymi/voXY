@@ -1,7 +1,9 @@
 //! voXY document model.
 //!
 //! - [`Document`] → [`Composition`]s → [`Layer`]s → [`Property`]s, all with
-//!   stable IDs and copy-on-write sharing between snapshots.
+//!   stable IDs and copy-on-write sharing between snapshots. Assets,
+//!   compositions and [`Folder`]s form the project pool; precomp layers
+//!   nest compositions.
 //! - [`Time`] is integer flicks; [`FrameRate`] is rational.
 //! - Properties are static or keyframed ([`KeyframeTrack`]): hold, linear or
 //!   cubic-bezier timing ([`easing`]) and arc-length motion paths
@@ -26,21 +28,30 @@ pub mod keyframe;
 mod layer;
 pub mod motion_path;
 pub mod persist;
+mod pool;
 pub mod property;
 mod time;
 mod value;
 
-pub use asset::{Asset, AssetKind, AssetTable};
+pub use asset::{Asset, AssetKind, AssetTable, AudioInfo, ContentHash};
 pub use color::{LinearRgba, WorkingSpace, linear_to_srgb, srgb_to_linear};
-pub use command::{Command, CommandError, MergeKey};
-pub use comp::Composition;
-pub use document::{CompSettings, Document, ProjectMeta, PropertyOwner, ValidationError};
+pub use command::{Command, CommandError, CommandReport, MergeKey};
+pub use comp::{Composition, PixelAspect, WorkArea};
+pub use document::{
+    CompSettings, Document, ProjectMeta, ProjectSettings, PropertyOwner, ValidationError,
+};
 pub use easing::{CubicEase, EaseHandle, EasePreset};
-pub use evaluate::{EvaluatedComp, EvaluatedContent, EvaluatedLayer, evaluate, local_matrix};
+pub use evaluate::{
+    EvaluatedComp, EvaluatedContent, EvaluatedLayer, evaluate, layer_world, local_matrix,
+};
 pub use history::{History, SharedDocument};
-pub use id::{AssetId, CompId, LayerId, PropId};
+pub use id::{AssetId, CompId, FolderId, LayerId, PropId};
 pub use keyframe::{Interp, Keyframe, KeyframeTrack, SpatialTangents, TrackError};
-pub use layer::{BlendMode, ForeignData, Layer, LayerFlags, LayerKind, Transform};
+pub use layer::{
+    BlendMode, ForeignData, Layer, LayerFlags, LayerKind, PlaceholderInfo, PlaceholderKind,
+    SourceRef, Transform,
+};
+pub use pool::{ExpandedItems, Folder, PoolItem, Usage};
 pub use property::{Animation, Property, PropertyDesc, PropertyError, Unit};
 pub use time::{FLICKS_PER_SECOND, FrameRate, Time};
 pub use value::{Value, ValueKind};

@@ -57,3 +57,8 @@ define_id!(
     AssetId,
     "asset"
 );
+define_id!(
+    /// Identifies a [`crate::Folder`] in the project panel.
+    FolderId,
+    "folder"
+);

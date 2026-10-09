@@ -4,15 +4,20 @@
 #![allow(clippy::many_single_char_names)] // r, g, b, x, y, i in generators read best short.
 
 use proptest::prelude::*;
+use std::collections::BTreeSet;
+
 use voxy_core::command::{
-    AddImageLayer, AddSolidLayer, ApplyEasePreset, MoveKeyframes, MoveLayer, RemoveKeyframes,
-    RemoveLayers, RenameLayer, SetAnimated, SetEase, SetInterpolation, SetLayerVisible,
-    SetProperty, SetSpatialTangents, SetWorkingSpace,
+    AddImageLayer, AddSolidLayer, AddSourceLayer, Anchor, ApplyEasePreset, CreateComposition,
+    CreateFolder, DuplicateComposition, MoveKeyframes, MoveLayer, MoveToFolder, PrecomposeLayers,
+    PrecomposeMode, RemoveItems, RemoveKeyframes, RemoveLayers, RemoveMode, RenameComposition,
+    RenameLayer, ResizeMode, SetAnimated, SetCompositionSettings, SetEase, SetInterpolation,
+    SetLayerTiming, SetLayerVisible, SetPrecompTiming, SetProperty, SetSpatialTangents,
+    SetWorkingSpace, UnprecomposeLayer,
 };
 use voxy_core::glam::{DVec2, DVec3};
 use voxy_core::{
-    CompSettings, Document, EaseHandle, EasePreset, History, Interp, Layer, LinearRgba, PropId,
-    SpatialTangents, Time, Value, WorkingSpace, persist,
+    CompId, CompSettings, Document, EaseHandle, EasePreset, FrameRate, History, Interp, Layer,
+    LinearRgba, PoolItem, PropId, SourceRef, SpatialTangents, Time, Value, WorkingSpace, persist,
 };
 
 /// An edit described independently of the IDs that exist at run time; layer
@@ -38,6 +43,21 @@ enum Edit {
     Preset(usize, u8, usize, usize),
     Ease(usize, u8, usize, [f64; 4]),
     Tangent(usize, usize, f64, f64),
+    // Pool and precomp edits (Milestone A).
+    NewComp,
+    Switch(usize),
+    AddPrecomp(usize, i64),
+    Precompose(usize, usize, bool),
+    Unprecompose(usize),
+    RemoveItem(usize, bool),
+    Duplicate,
+    RenameComp(String),
+    NewFolder,
+    MoveItem(usize, usize),
+    Resize(u32, u32, bool),
+    Rate(usize, bool),
+    PrecompTiming(usize, u8, bool, bool),
+    Timing(usize, i64, i64, i64),
     Undo,
     Redo,
     EndInteraction,
@@ -93,6 +113,53 @@ fn edit() -> impl Strategy<Value = Edit> {
     ]
 }
 
+fn pool_edit() -> impl Strategy<Value = Edit> {
+    prop_oneof![
+        Just(Edit::NewComp),
+        any::<usize>().prop_map(Edit::Switch),
+        (any::<usize>(), 0i64..12_000).prop_map(|(i, t)| Edit::AddPrecomp(i, t)),
+        (any::<usize>(), 1usize..4, any::<bool>())
+            .prop_map(|(i, n, leave)| Edit::Precompose(i, n, leave)),
+        any::<usize>().prop_map(Edit::Unprecompose),
+        (any::<usize>(), any::<bool>()).prop_map(|(i, p)| Edit::RemoveItem(i, p)),
+        Just(Edit::Duplicate),
+        "[a-zA-Z0-9 ]{0,8}".prop_map(Edit::RenameComp),
+        Just(Edit::NewFolder),
+        (any::<usize>(), any::<usize>()).prop_map(|(i, f)| Edit::MoveItem(i, f)),
+        (16u32..2000, 16u32..2000, any::<bool>()).prop_map(|(w, h, s)| Edit::Resize(w, h, s)),
+        (0usize..8, any::<bool>()).prop_map(|(r, s)| Edit::Rate(r, s)),
+        (any::<usize>(), 1u8..8, any::<bool>(), any::<bool>())
+            .prop_map(|(i, sp, l, r)| Edit::PrecompTiming(i, sp, l, r)),
+        (
+            any::<usize>(),
+            -2000i64..12_000,
+            0i64..12_000,
+            -2000i64..4000
+        )
+            .prop_map(|(i, a, len, o)| Edit::Timing(i, a, len, o)),
+    ]
+}
+
+/// Edits of every kind, pool edits included.
+fn any_edit() -> impl Strategy<Value = Edit> {
+    prop_oneof![3 => edit(), 2 => pool_edit()]
+}
+
+/// Every ID in a document.
+fn all_ids(doc: &Document) -> BTreeSet<u64> {
+    let mut ids: BTreeSet<u64> = doc.assets.iter().map(|a| a.id.raw()).collect();
+    ids.extend(doc.folders.keys().map(|f| f.raw()));
+    for c in doc.comps.values() {
+        ids.insert(c.id.raw());
+        ids.insert(c.background.id.raw());
+        for l in &c.layers {
+            ids.insert(l.id.raw());
+            ids.extend(l.properties().iter().map(|p| p.id.raw()));
+        }
+    }
+    ids
+}
+
 /// Property selector → (property ID, a value of its kind derived from `v`).
 fn target(l: &Layer, sel: u8, v: f64) -> (PropId, Value) {
     let t = &l.transform;
@@ -110,10 +177,53 @@ fn key_time(doc: &Document, prop: PropId, k: usize) -> Option<Time> {
     Some(track.keys()[k % track.len()].time)
 }
 
-fn apply(h: &mut History, e: &Edit) {
+/// The composition edits go to: the one `focus` names if it still exists,
+/// else the main one, else none.
+fn target_comp(doc: &Document, focus: Option<CompId>) -> Option<CompId> {
+    focus.filter(|c| doc.comp(*c).is_some()).or(doc.main_comp)
+}
+
+/// Pool items in a stable order.
+fn pool_items(doc: &Document) -> Vec<PoolItem> {
+    let mut v: Vec<PoolItem> = doc.assets.iter().map(|a| PoolItem::Asset(a.id)).collect();
+    v.extend(doc.comps.keys().map(|&c| PoolItem::Comp(c)));
+    v.extend(doc.folders.keys().map(|&f| PoolItem::Folder(f)));
+    v
+}
+
+fn apply(h: &mut History, e: &Edit, focus: &mut Option<CompId>) {
     let doc = h.current().clone();
-    let comp = doc.root_comp;
-    let layers = &doc.root().layers;
+    let Some(comp) = target_comp(&doc, *focus) else {
+        // No compositions left: only edits that need none apply.
+        match e {
+            Edit::NewComp => apply_pool(h, e, &doc, None, focus),
+            Edit::Undo => drop(h.undo()),
+            Edit::Redo => drop(h.redo()),
+            _ => {}
+        }
+        return;
+    };
+    if matches!(
+        e,
+        Edit::NewComp
+            | Edit::Switch(_)
+            | Edit::AddPrecomp(..)
+            | Edit::Precompose(..)
+            | Edit::Unprecompose(_)
+            | Edit::RemoveItem(..)
+            | Edit::Duplicate
+            | Edit::RenameComp(_)
+            | Edit::NewFolder
+            | Edit::MoveItem(..)
+            | Edit::Resize(..)
+            | Edit::Rate(..)
+            | Edit::PrecompTiming(..)
+            | Edit::Timing(..)
+    ) {
+        apply_pool(h, e, &doc, Some(comp), focus);
+        return;
+    }
+    let layers = &doc.comp(comp).expect("exists").layers;
     let pick = |i: usize| (!layers.is_empty()).then(|| &layers[i % layers.len()]);
     // Edits on missing targets are skipped; invalid values must be rejected
     // without changing anything, so errors are ignored on purpose.
@@ -285,6 +395,155 @@ fn apply(h: &mut History, e: &Edit) {
             },
             None => Ok(()),
         },
+        _ => Ok(()),
+    };
+}
+
+#[allow(clippy::too_many_lines)]
+fn apply_pool(
+    h: &mut History,
+    e: &Edit,
+    doc: &Document,
+    comp: Option<CompId>,
+    focus: &mut Option<CompId>,
+) {
+    let layers: &[std::sync::Arc<Layer>] =
+        comp.and_then(|c| doc.comp(c)).map_or(&[], |c| &c.layers);
+    let pick = |i: usize| (!layers.is_empty()).then(|| &layers[i % layers.len()]);
+    let comps: Vec<CompId> = doc.comps.keys().copied().collect();
+    // Edits on missing targets are skipped and rejected edits must change
+    // nothing, so errors are ignored on purpose.
+    let _ = match (e, comp) {
+        (Edit::NewComp, _) => h
+            .execute_reported(CreateComposition {
+                settings: CompSettings {
+                    name: "Comp".into(),
+                    width: 160,
+                    height: 90,
+                    ..CompSettings::default()
+                },
+                folder: None,
+            })
+            .map(|r| *focus = r.created_comps.first().copied()),
+        (Edit::Switch(i), _) => {
+            *focus = (!comps.is_empty()).then(|| comps[i % comps.len()]);
+            Ok(())
+        }
+        (Edit::AddPrecomp(i, ms), Some(c)) if !comps.is_empty() => h.execute(AddSourceLayer {
+            comp: c,
+            source: SourceRef::Comp(comps[i % comps.len()]),
+            index: 0,
+            in_point: Time::from_millis(*ms),
+        }),
+        (Edit::Precompose(i, n, leave), Some(c)) if !layers.is_empty() => {
+            let ids = (0..*n)
+                .map(|k| layers[(i + k) % layers.len()].id)
+                .collect::<BTreeSet<_>>();
+            h.execute(PrecomposeLayers {
+                comp: c,
+                layers: ids.into_iter().collect(),
+                mode: if *leave {
+                    PrecomposeMode::LeaveAttributes
+                } else {
+                    PrecomposeMode::MoveAttributes
+                },
+                name: "Pre".into(),
+                time: Time::from_millis(300),
+            })
+        }
+        (Edit::Unprecompose(i), _) => match pick(*i) {
+            Some(l) => h.execute(UnprecomposeLayer { layer: l.id }),
+            None => Ok(()),
+        },
+        (Edit::RemoveItem(i, placeholder), _) => {
+            let items = pool_items(doc);
+            if items.is_empty() {
+                Ok(())
+            } else {
+                h.execute(RemoveItems {
+                    items: vec![items[i % items.len()]],
+                    mode: if *placeholder {
+                        RemoveMode::PlaceholderLayers
+                    } else {
+                        RemoveMode::DeleteLayers
+                    },
+                })
+            }
+        }
+        (Edit::Duplicate, Some(c)) => h.execute(DuplicateComposition { comp: c }),
+        (Edit::RenameComp(name), Some(c)) => h.execute(RenameComposition {
+            comp: c,
+            name: name.clone(),
+        }),
+        (Edit::NewFolder, _) => h.execute(CreateFolder {
+            name: "F".into(),
+            parent: doc.folders.keys().next_back().copied(),
+        }),
+        (Edit::MoveItem(i, f), _) => {
+            let items = pool_items(doc);
+            let folders: Vec<_> = doc.folders.keys().copied().collect();
+            if items.is_empty() {
+                Ok(())
+            } else {
+                h.execute(MoveToFolder {
+                    items: vec![items[i % items.len()]],
+                    folder: (!folders.is_empty() && f % 3 != 0).then(|| folders[f % folders.len()]),
+                })
+            }
+        }
+        (Edit::Resize(w, hh, scale), Some(c)) => {
+            let mut s = CompSettings::of(doc.comp(c).expect("exists"));
+            s.width = *w;
+            s.height = *hh;
+            h.execute(SetCompositionSettings {
+                comp: c,
+                settings: s,
+                resize: if *scale {
+                    ResizeMode::ScaleToFit
+                } else {
+                    ResizeMode::KeepLayers(Anchor::grid(2, 0))
+                },
+                snap_to_frames: false,
+            })
+        }
+        (Edit::Rate(r, snap), Some(c)) => {
+            let mut s = CompSettings::of(doc.comp(c).expect("exists"));
+            s.frame_rate = [
+                FrameRate::FPS_23_976,
+                FrameRate::FPS_24,
+                FrameRate::FPS_25,
+                FrameRate::FPS_29_97,
+                FrameRate::FPS_30,
+                FrameRate::FPS_50,
+                FrameRate::FPS_59_94,
+                FrameRate::FPS_60,
+            ][*r];
+            h.execute(SetCompositionSettings {
+                comp: c,
+                settings: s,
+                resize: ResizeMode::default(),
+                snap_to_frames: *snap,
+            })
+        }
+        (Edit::PrecompTiming(i, speed, looping, remap), _) => match pick(*i) {
+            Some(l) => h.execute(SetPrecompTiming {
+                layer: l.id,
+                speed: f64::from(*speed) / 2.0,
+                looping: *looping,
+                time_remap: *remap,
+            }),
+            None => Ok(()),
+        },
+        (Edit::Timing(i, start, len, offset), _) => match pick(*i) {
+            Some(l) => h.execute(SetLayerTiming {
+                layer: l.id,
+                in_point: Time::from_millis(*start),
+                out_point: Time::from_millis(start + len),
+                start_offset: Time::from_millis(*offset),
+            }),
+            None => Ok(()),
+        },
+        _ => Ok(()),
     };
 }
 
@@ -304,11 +563,12 @@ proptest! {
     /// Undoing everything returns the original document; redoing everything
     /// returns the final one. Every intermediate state is valid.
     #[test]
-    fn undo_redo_round_trip(edits in prop::collection::vec(edit(), 0..40)) {
+    fn undo_redo_round_trip(edits in prop::collection::vec(any_edit(), 0..40)) {
         let mut h = History::new(small_doc());
         let initial = h.current().clone();
+        let mut focus = None;
         for e in &edits {
-            apply(&mut h, e);
+            apply(&mut h, e, &mut focus);
             prop_assert!(h.current().validate().is_ok());
         }
         // The sequence may end mid-way through its own undo stack; the far
@@ -324,10 +584,11 @@ proptest! {
     /// Any reachable document survives save → load unchanged, and saving
     /// again is byte-identical.
     #[test]
-    fn save_load_round_trip(edits in prop::collection::vec(edit(), 0..40)) {
+    fn save_load_round_trip(edits in prop::collection::vec(any_edit(), 0..40)) {
         let mut h = History::new(small_doc());
+        let mut focus = None;
         for e in &edits {
-            apply(&mut h, e);
+            apply(&mut h, e, &mut focus);
         }
         let json = persist::to_json(h.current()).unwrap();
         let loaded = persist::from_json(&json).unwrap();
@@ -337,16 +598,42 @@ proptest! {
 
     /// Evaluation never panics and keeps opacity in range.
     #[test]
-    fn evaluation_is_total(edits in prop::collection::vec(edit(), 0..30), t in -10_000i64..20_000) {
+    fn evaluation_is_total(edits in prop::collection::vec(any_edit(), 0..30), t in -10_000i64..20_000) {
         let mut h = History::new(small_doc());
+        let mut focus = None;
         for e in &edits {
-            apply(&mut h, e);
+            apply(&mut h, e, &mut focus);
         }
         let doc = h.current();
-        let eval = voxy_core::evaluate(doc, doc.root_comp, Time::from_millis(t)).unwrap();
-        for l in &eval.layers {
-            prop_assert!((0.0..=1.0).contains(&l.opacity));
-            prop_assert!(l.world.is_finite());
+        for &c in doc.comps.keys() {
+            let eval = voxy_core::evaluate(doc, c, Time::from_millis(t)).unwrap();
+            for l in &eval.layers {
+                prop_assert!((0.0..=1.0).contains(&l.opacity));
+                prop_assert!(l.world.is_finite());
+            }
+        }
+    }
+
+    /// An ID that existed in any earlier state is never given to a new
+    /// node, even after undo.
+    #[test]
+    fn ids_are_never_reused(edits in prop::collection::vec(any_edit(), 0..40)) {
+        let mut h = History::new(small_doc());
+        let mut focus = None;
+        let mut high = h.current().next_id();
+        for e in &edits {
+            let before = all_ids(h.current());
+            let was_undo_redo = matches!(e, Edit::Undo | Edit::Redo);
+            apply(&mut h, e, &mut focus);
+            if !was_undo_redo {
+                let now = all_ids(h.current());
+                // Edits only move existing nodes or allocate new ones, so
+                // every ID that appears is above everything handed out yet.
+                for id in now.difference(&before) {
+                    prop_assert!(*id >= high, "ID {id} reused");
+                }
+            }
+            high = high.max(h.current().next_id());
         }
     }
 
@@ -363,7 +650,7 @@ fn colors_survive_json_exactly() {
     // f32 colors go through f64 JSON; check the full byte range of sRGB8.
     let mut h = History::new(small_doc());
     for v in 0..=255u8 {
-        let comp = h.current().root_comp;
+        let comp = h.current().main_comp.unwrap();
         h.execute(AddSolidLayer {
             comp,
             name: None,

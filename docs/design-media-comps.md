@@ -1,7 +1,9 @@
 # Design note: media pool, compositions, precomps, reveal, drag to timeline
 
-**Status: draft for review. No code is written until the owner approves this
-note and answers the decisions in §13.**
+**Status: approved.** The owner's decisions are recorded in §13. Milestone A
+(data model and commands in `voxy-core`) is implemented; see "Implementation
+notes (Milestone A)" at the end. Deferred work is tracked in
+[`deferred.md`](deferred.md).
 
 This note extends the architecture in `design-proposal.md`. Nothing is
 rewritten:
@@ -446,12 +448,15 @@ pub struct NavStep { pub comp: CompId, pub via_layer: Option<LayerId> }
 - **One tab per composition, never duplicates.** "Open" switches to the
   existing tab or appends a new one.
 - **Double-click** on a precomp layer (timeline or viewport) or a pool
-  composition: see §13 Q6.
-  - Proposed: double-click **navigates the current tab** into the precomp,
-    and the breadcrumb grows. If the precomp already has its own tab, it
-    switches to that tab instead.
-  - **Shift+double-click** and "Open in New Tab" open or switch to a
-    separate tab.
+  composition (§13 Q6). A preference, **"Precomp double-click"**, chooses:
+  - **"Open precomps in current tab"** (default): double-click
+    **navigates the current tab** into the precomp, and the breadcrumb
+    grows. If the precomp already has its own tab, it switches to that tab
+    instead. **Shift+double-click** and "Open in New Tab" open or switch to
+    the composition's own tab.
+  - **"Always open in own tab"**: double-click opens or switches to the
+    composition's own tab; Shift+double-click navigates the current tab.
+  - Either way there is one tab per composition.
   - From the media panel, double-click always opens or switches to the
     composition's own tab, with a fresh breadcrumb.
 - Double-clicking any other layer type keeps its current behavior.
@@ -526,8 +531,10 @@ is shared with the renderer. It is defined in core:
     matrices, when collapse is on.
 - The compositor renders a `Comp` draw by:
   1. rendering its sub-plan into a pooled offscreen `Rgba16Float` target at
-     **child size × preview scale**, cleared to the child's background, in
-     the project working space;
+     **child size × preview scale**, cleared to **transparent**, in the
+     project working space. As in AE, a composition's background color shows
+     only when the composition is viewed or exported directly, never when
+     it is nested, so unprecompose has no background to lose;
   2. drawing that texture like an image layer, with the precomp layer's
      transform and opacity.
 - **Collapse transformations (2D):**
@@ -543,13 +550,23 @@ is shared with the renderer. It is defined in core:
   Validation should make this unreachable.
 
 ### 8.2 Sampling rules
-- **Time:** the child is evaluated at the exact mapped time in flicks
-  (continuous sampling). This is AE's default, with "preserve frame rate"
-  off.
+Decided (§13 Q3). Two rules, one for footage and one for nested
+compositions:
+
+- **Footage at a different frame rate: hold.** A video layer shows the
+  source frame on screen at its source time, `t − in_point + start_offset`:
+  the last frame that started at or before that time. A 24 fps clip in a
+  60 fps composition therefore repeats each frame 2–3 times. This is the
+  existing decode rule (Milestone 3c), shared by preview and export. Blend
+  and optical flow are later per-layer options.
+- **Nested compositions: exact mapped time.** The child is evaluated at
+  the exact child time in flicks that `Layer::child_time` gives for the
+  parent's time (continuous sampling). This is AE's default, with "preserve
+  frame rate" off.
   - A child at 24 fps inside a 60 fps parent therefore animates at 60 fps.
+    Footage inside the child still follows the hold rule above.
   - A per-composition flag, "Hold child frame rate when nested", is
     proposed for later. It floors the mapped time to the child's frame grid.
-  - §13 Q3 covers the default.
 - **Resolution:** the child renders at its own size (× preview scale), and
   the parent samples it bilinearly through the layer transform, the same
   filter as images today.
@@ -690,7 +707,23 @@ is shared with the renderer. It is defined in core:
 UI tests target the command and state layer (the `resolve_drop`, reveal and
 navigation functions), not egui drawing.
 
-## 13. Decisions needed from the owner
+## 13. Decisions (approved by the owner)
+
+| # | Question | Decision |
+|---|---|---|
+| Q1 | Duplicate names | **Allowed.** Menus show the item's ID when names collide. |
+| Q2 | Resolution change | **Keep layers**, with the 3×3 anchor grid (default center). The dialog offers **"Scale layers to fit"** as the alternative. |
+| Q3 | Different frame rates | **Footage holds the current frame; precomps are sampled at the exact mapped time.** Both rules are in §8.2. |
+| Q4 | Multi-item drop | **Stack by default.** Ctrl/⌘ sequences, Shift toggles snapping, Alt/Option replaces a layer's source. |
+| Q5 | Linked playheads | **Off by default**, per-tab toggle. |
+| Q6 | Double-click a precomp layer | **A preference**: "Open precomps in current tab" (default) or "Always open in own tab". One tab per composition either way (§7.1). |
+| Q7 | Removed sources vs. missing files | **Placeholder layer kind** for removed sources; missing files stay in the pool with a missing badge and Relink. |
+| Q8 | Systems that don't exist yet | **Build now:** work area, viewport layer picking, named-action table. **Defer** (tracked in [`deferred.md`](deferred.md), code kept ready): export overrides and the even-size check, precomp audio mixing, autosave and crash recovery (scheduled after Milestone F, not dropped), markers. |
+| Q9 | Main composition | **Optional;** zero compositions allowed. |
+| — | ID high-water mark in `History` | **Approved**, with a test that IDs are never reused after undo then new edits. |
+| — | Keyframes in composition time | **Kept;** pre-compose and unprecompose shift keyframe times, with round-trip tests. |
+
+The original proposal table, kept for reference:
 
 | # | Question | Options | Proposed |
 |---|---|---|---|
@@ -710,3 +743,68 @@ navigation functions), not egui drawing.
   value. Undo and redo results do not change.
 - **Color space:** not affected.
 - **OFX sandbox:** not affected.
+
+## Implementation notes (Milestone A)
+
+What landed in `voxy-core`, and where it refines the design above.
+
+- **Model.** `FolderId`, `Folder`, `PoolItem`, `SourceRef`; asset
+  `content_hash`, `audio`, `folder`; composition `pixel_aspect`,
+  `work_area`, `folder`; `LayerKind::Precomp` and `LayerKind::Placeholder`;
+  `ProjectSettings` in `meta.settings`; `Document::main_comp:
+  Option<CompId>` and `Document::main()`. `AssetKind` gains no audio or SVG
+  variants until those layer types exist.
+- **Queries** (`pool.rs`): `usages`, `usages_of`, `Usage::primary` (the
+  §6.2 tie rule), `expand_items`, `removal_impact` (what the removal dialog
+  lists), `comp_contains`, `nesting_error` (names the chain, e.g. "“C”
+  can't be placed in “A”: “C” already contains it (“C” › “B” › “A”)").
+- **Time mapping.** `Layer::child_time` implements §7.2 and is what
+  evaluation, unprecompose and (later) navigation and audio use.
+  `evaluate` produces `EvaluatedContent::Precomp { comp, child_time, size }`;
+  the render plan draws nothing for it until Milestone E. Placeholders draw
+  a grey rectangle at their remembered size.
+- **Commands** (`command/pool.rs`, `settings.rs`, `precomp.rs`):
+  `RenameMedia`, `RenameComposition`, `RenameFolder`, `CreateFolder`,
+  `MoveToFolder`, `RemoveItems` (one command for media, compositions and
+  folders), `CreateComposition`, `DuplicateComposition`, `ReplaceMedia`,
+  `ReplaceLayerSource`, `AddSourceLayer` (the single-item building block
+  for drops in Milestone D), `SetPrecompTiming`, `SetCollapse`,
+  `SetCompositionSettings`, `SetProjectSettings`, `SetWorkArea`,
+  `PrecomposeLayers`, `UnprecomposeLayer`. `DropItems` comes with
+  Milestone D.
+- **`CommandReport`.** `Command::apply_reported` and
+  `History::execute_reported` return created items and warnings;
+  `execute` is unchanged for existing callers.
+- **ID high-water mark.** `History` raises each edit's starting `next_id`
+  to the highest it has seen. A command that only would raise the counter is
+  still a no-op. Tested directly and by a property test over random edit
+  sequences with undo and redo.
+- **Settings validation** happens in commands (16–16384 px, ≤ 240 fps, one
+  frame to 3 hours, pixel aspect 0.25–4), so older files with other values
+  still load.
+- **Pre-compose details.**
+  - Selected layers that are not adjacent end up together at the position
+    of the topmost one, as in AE.
+  - A parent link crossing the new composition boundary is replaced by
+    baking the parent's world transform at the given time into the child's
+    position (all keys), rotation and scale. The report says so and marks
+    it approximate if the parent is animated or unevenly scaled.
+  - Default precomp name: `precomp_name()` gives "<comp> Precomp 1", or the
+    next free number.
+- **Unprecompose details.**
+  - The transform layer is skipped when the precomp layer's transform is a
+    static identity with no parent, which makes pre-compose → unprecompose
+    return the original layers exactly (tested).
+  - With remap or looping, animated properties get one linear key per
+    parent frame (at most 100 000 frames).
+- **Frame-rate snapping.** "Nearest frame" ties go to the earlier frame.
+  Snapping a layer's in-point moves its `start_offset` with it, so the
+  source stays where it was.
+- **Format 0.4.0** (`docs/voxy-format.md`). Loading goes through a JSON
+  value so the 0.3.0 → 0.4.0 migration can rename `root_comp`.
+  `persist::{to,from}_json_with_ui` and `{save,load}_with_ui` carry the
+  `ui_state` section unparsed; `voxy-core` never interprets it.
+- **UI.** Until composition tabs land (Milestone E), the editor shows the
+  main composition (`EditorState::comp_id`), and every panel handles a
+  project with none. The viewport's frame key now includes the composition
+  ID, so switching compositions can never show a stale frame.

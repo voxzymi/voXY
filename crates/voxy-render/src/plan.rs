@@ -71,6 +71,14 @@ pub struct RenderPlan {
     pub draws: Vec<DrawOp>,
 }
 
+/// Fill of a placeholder layer (a removed source): mid grey.
+pub const PLACEHOLDER_COLOR: LinearRgba = LinearRgba {
+    r: 0.18,
+    g: 0.18,
+    b: 0.18,
+    a: 1.0,
+};
+
 /// Encodes a linear straight-alpha color for the working space and
 /// premultiplies it.
 pub fn working_premultiplied(color: LinearRgba, space: WorkingSpace) -> [f32; 4] {
@@ -123,6 +131,15 @@ impl RenderPlan {
                         },
                         *size,
                     ),
+                    EvaluatedContent::Placeholder { size } => {
+                        let size = (*size).filter(|s| s.x > 0.0 && s.y > 0.0)?;
+                        let c =
+                            working_premultiplied(PLACEHOLDER_COLOR, space).map(|v| v * opacity);
+                        (DrawSource::Solid(c), Some(size))
+                    }
+                    // Nested compositions render with Milestone E
+                    // (docs/deferred.md); until then they draw nothing.
+                    EvaluatedContent::Precomp { .. } => return None,
                 };
                 Some(DrawOp {
                     source,
@@ -158,7 +175,7 @@ mod tests {
                 ..CompSettings::default()
             },
         );
-        let comp = doc.root_comp;
+        let comp = doc.main_comp.unwrap();
         AddSolidLayer {
             comp,
             name: None,
@@ -167,7 +184,7 @@ mod tests {
         }
         .apply(&mut doc)
         .unwrap();
-        let opacity = doc.root().layers[0].transform.opacity.id;
+        let opacity = doc.main().unwrap().layers[0].transform.opacity.id;
         SetProperty {
             time: Time::ZERO,
             prop: opacity,
@@ -200,7 +217,7 @@ mod tests {
     #[test]
     fn invisible_layers_are_dropped() {
         let mut doc = Document::new("Plan", CompSettings::default());
-        let comp = doc.root_comp;
+        let comp = doc.main_comp.unwrap();
         AddSolidLayer {
             comp,
             name: None,
@@ -209,7 +226,7 @@ mod tests {
         }
         .apply(&mut doc)
         .unwrap();
-        let opacity = doc.root().layers[0].transform.opacity.id;
+        let opacity = doc.main().unwrap().layers[0].transform.opacity.id;
         SetProperty {
             time: Time::ZERO,
             prop: opacity,
@@ -222,5 +239,51 @@ mod tests {
             RenderPlan::build(&eval, &RenderSettings::default()).draws,
             []
         );
+    }
+
+    #[test]
+    fn placeholders_draw_grey_and_precomps_wait_for_milestone_e() {
+        use voxy_core::PoolItem;
+        use voxy_core::command::{
+            AddImageLayer, AddSourceLayer, CreateComposition, RemoveItems, RemoveMode,
+        };
+        let mut doc = Document::new("Plan", CompSettings::default());
+        let comp = doc.main_comp.unwrap();
+        AddImageLayer {
+            comp,
+            path: "a.png".into(),
+            pixel_size: [40, 20],
+            index: 0,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let asset = doc.main().unwrap().layers[0].kind.asset().unwrap();
+        RemoveItems {
+            items: vec![PoolItem::Asset(asset)],
+            mode: RemoveMode::PlaceholderLayers,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        CreateComposition {
+            settings: CompSettings::default(),
+            folder: None,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let child = *doc.comps.keys().last().unwrap();
+        AddSourceLayer {
+            comp,
+            source: voxy_core::SourceRef::Comp(child),
+            index: 0,
+            in_point: Time::ZERO,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let eval = evaluate(&doc, comp, Time::ZERO).unwrap();
+        let plan = RenderPlan::build(&eval, &RenderSettings::default());
+        assert_eq!(plan.draws.len(), 1, "the precomp draws nothing yet");
+        let grey = working_premultiplied(PLACEHOLDER_COLOR, WorkingSpace::Linear);
+        assert_eq!(plan.draws[0].source, DrawSource::Solid(grey));
+        assert_eq!(plan.draws[0].local_size, Some(DVec2::new(40.0, 20.0)));
     }
 }

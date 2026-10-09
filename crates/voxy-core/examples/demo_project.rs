@@ -15,7 +15,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ..CompSettings::default()
         },
     );
-    let comp = doc.root_comp;
+    let comp = doc.main_comp.expect("has a main composition");
     let shapes = [
         ((124, 92, 255), (800.0, 450.0), (760.0, 540.0), -12.0, 1.0),
         ((255, 196, 64), (520.0, 520.0), (1180.0, 520.0), 20.0, 0.75),
@@ -29,7 +29,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             index: 0,
         }
         .apply(&mut doc)?;
-        let l = doc.root().layers[0].clone();
+        let l = doc.main().expect("has a main composition").layers[0].clone();
         let LayerKind::Solid {
             size: size_prop, ..
         } = &l.kind
@@ -53,7 +53,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     // Animate the top layer: slide right with easy-ease, fade in.
-    let top = doc.root().layers[0].clone();
+    let top = doc.main().expect("has a main composition").layers[0].clone();
     let (pos, opacity) = (top.transform.position.id, top.transform.opacity.id);
     let start = voxy_core::Time::ZERO;
     let end = voxy_core::Time::from_secs(3);

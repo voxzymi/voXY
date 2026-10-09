@@ -7,9 +7,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::asset::{Asset, AssetTable};
 use crate::color::{LinearRgba, WorkingSpace};
-use crate::comp::Composition;
-use crate::id::{AssetId, CompId, LayerId, PropId};
+use crate::comp::{Composition, PixelAspect};
+use crate::id::{AssetId, CompId, FolderId, LayerId, PropId};
 use crate::layer::{ForeignData, Layer, LayerKind};
+use crate::pool::Folder;
 use crate::property::{Property, keys};
 use crate::time::{FrameRate, Time};
 use crate::value::Value;
@@ -20,14 +21,43 @@ pub struct ProjectMeta {
     pub name: String,
     #[serde(default)]
     pub working_space: WorkingSpace,
+    /// Defaults for new items (format 0.4.0).
+    #[serde(default)]
+    pub settings: ProjectSettings,
 }
 
-/// Settings for a new composition.
-#[derive(Debug, Clone, PartialEq)]
+/// Defaults the project applies to new compositions and layers.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProjectSettings {
+    /// Settings of a new composition; its name is the base of new names.
+    pub new_comp: CompSettings,
+    /// Length of a still image layer; `None` lasts until the composition
+    /// ends.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_still_duration: Option<Time>,
+}
+
+impl Default for ProjectSettings {
+    fn default() -> Self {
+        ProjectSettings {
+            new_comp: CompSettings {
+                name: "Comp".into(),
+                ..CompSettings::default()
+            },
+            default_still_duration: None,
+        }
+    }
+}
+
+/// Settings of a composition: for a new one, or edited in the composition
+/// settings dialog.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CompSettings {
     pub name: String,
     pub width: u32,
     pub height: u32,
+    #[serde(default)]
+    pub pixel_aspect: PixelAspect,
     pub frame_rate: FrameRate,
     pub duration: Time,
     pub background: LinearRgba,
@@ -39,9 +69,29 @@ impl Default for CompSettings {
             name: "Main".into(),
             width: 1920,
             height: 1080,
+            pixel_aspect: PixelAspect::SQUARE,
             frame_rate: FrameRate::FPS_30,
             duration: Time::from_secs(10),
             background: LinearRgba::BLACK,
+        }
+    }
+}
+
+impl CompSettings {
+    /// The settings `comp` has now. The background is its value at time 0.
+    pub fn of(comp: &Composition) -> Self {
+        CompSettings {
+            name: comp.name.clone(),
+            width: comp.width,
+            height: comp.height,
+            pixel_aspect: comp.pixel_aspect,
+            frame_rate: comp.frame_rate,
+            duration: comp.duration,
+            background: comp
+                .background
+                .value_at(Time::ZERO)
+                .as_color()
+                .unwrap_or(LinearRgba::BLACK),
         }
     }
 }
@@ -59,7 +109,12 @@ pub struct Document {
     pub assets: Arc<AssetTable>,
     #[serde(with = "id_map")]
     pub comps: Arc<BTreeMap<CompId, Arc<Composition>>>,
-    pub root_comp: CompId,
+    /// Project panel folders (format 0.4.0).
+    #[serde(default, with = "id_map")]
+    pub folders: Arc<BTreeMap<FolderId, Folder>>,
+    /// The composition shown when no other is open, and the default for
+    /// export. `None` when the project has no compositions.
+    pub main_comp: Option<CompId>,
     #[serde(default, skip_serializing_if = "ForeignData::is_empty")]
     pub foreign: ForeignData,
     /// Next unallocated ID. All IDs share this one counter.
@@ -76,8 +131,8 @@ pub enum PropertyOwner {
 /// A structural problem found by [`Document::validate`].
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ValidationError {
-    #[error("root composition {0} does not exist")]
-    MissingRoot(CompId),
+    #[error("main composition {0} does not exist")]
+    MissingMain(CompId),
     #[error("ID {0} is used more than once")]
     DuplicateId(u64),
     #[error("ID {id} is not below the document's next ID {next}")]
@@ -94,6 +149,20 @@ pub enum ValidationError {
     ParentCycle(LayerId),
     #[error("{layer} references missing {asset}")]
     MissingAsset { layer: LayerId, asset: AssetId },
+    #[error("{layer} references missing {comp}")]
+    MissingComp { layer: LayerId, comp: CompId },
+    #[error("{0} contains itself, directly or through other compositions")]
+    CompCycle(CompId),
+    #[error("item {item} is in missing {folder}")]
+    MissingFolder { item: u64, folder: FolderId },
+    #[error("{0} is inside itself")]
+    FolderCycle(FolderId),
+    #[error("{0} has an invalid work area")]
+    BadWorkArea(CompId),
+    #[error("{0} has an invalid pixel aspect ratio")]
+    BadPixelAspect(CompId),
+    #[error("{0} has an invalid speed")]
+    BadSpeed(LayerId),
     #[error("property {prop} has key `{found}` where `{expected}` is required")]
     WrongProperty {
         prop: PropId,
@@ -109,15 +178,17 @@ impl Document {
             meta: ProjectMeta {
                 name: name.into(),
                 working_space: WorkingSpace::default(),
+                settings: ProjectSettings::default(),
             },
             assets: Arc::default(),
             comps: Arc::default(),
-            root_comp: CompId(0),
+            folders: Arc::default(),
+            main_comp: None,
             foreign: ForeignData::default(),
             next_id: 1,
         };
         let id = doc.add_comp(settings);
-        doc.root_comp = id;
+        doc.main_comp = Some(id);
         doc
     }
 
@@ -130,6 +201,12 @@ impl Document {
 
     pub fn next_id(&self) -> u64 {
         self.next_id
+    }
+
+    /// Raises the ID counter to at least `next`, so IDs handed out before an
+    /// undo are never handed out again.
+    pub fn reserve_ids(&mut self, next: u64) {
+        self.next_id = self.next_id.max(next);
     }
 
     /// Adds a composition and returns its ID.
@@ -145,9 +222,12 @@ impl Document {
             name: s.name,
             width: s.width,
             height: s.height,
+            pixel_aspect: s.pixel_aspect,
             frame_rate: s.frame_rate,
             duration: s.duration,
+            work_area: None,
             background,
+            folder: None,
             layers: Vec::new(),
             foreign: ForeignData::default(),
         };
@@ -162,9 +242,9 @@ impl Document {
         id
     }
 
-    pub fn root(&self) -> &Composition {
-        self.comp(self.root_comp)
-            .expect("validated documents always have their root composition")
+    /// The main composition, if the project has one.
+    pub fn main(&self) -> Option<&Composition> {
+        self.main_comp.and_then(|id| self.comp(id))
     }
 
     pub fn comp(&self, id: CompId) -> Option<&Composition> {
@@ -231,8 +311,10 @@ impl Document {
     /// Checks the structural invariants every loaded or edited document must
     /// satisfy.
     pub fn validate(&self) -> Result<(), ValidationError> {
-        if !self.comps.contains_key(&self.root_comp) {
-            return Err(ValidationError::MissingRoot(self.root_comp));
+        if let Some(main) = self.main_comp
+            && !self.comps.contains_key(&main)
+        {
+            return Err(ValidationError::MissingMain(main));
         }
         let mut seen = HashSet::new();
         let mut claim = |id: u64| {
@@ -248,11 +330,32 @@ impl Document {
                 Err(ValidationError::DuplicateId(id))
             }
         };
+        for folder in self.folders.values() {
+            claim(folder.id.raw())?;
+        }
+        self.validate_folders()?;
+        let in_folder = |item: u64, folder: Option<FolderId>| match folder {
+            Some(f) if !self.folders.contains_key(&f) => {
+                Err(ValidationError::MissingFolder { item, folder: f })
+            }
+            _ => Ok(()),
+        };
         for asset in self.assets.iter() {
             claim(asset.id.raw())?;
+            in_folder(asset.id.raw(), asset.folder)?;
         }
         for comp in self.comps.values() {
             claim(comp.id.raw())?;
+            in_folder(comp.id.raw(), comp.folder)?;
+            let pa = comp.pixel_aspect;
+            if pa.num == 0 || pa.den == 0 {
+                return Err(ValidationError::BadPixelAspect(comp.id));
+            }
+            if let Some(w) = comp.work_area
+                && !(Time::ZERO <= w.start && w.start < w.end && w.end <= comp.duration)
+            {
+                return Err(ValidationError::BadWorkArea(comp.id));
+            }
             claim(comp.background.id.raw())?;
             expect_key(&comp.background, keys::COMP_BACKGROUND)?;
             if comp.width == 0 || comp.height == 0 {
@@ -278,8 +381,48 @@ impl Document {
                         asset,
                     });
                 }
+                if let LayerKind::Precomp {
+                    comp: child, speed, ..
+                } = &layer.kind
+                {
+                    if !self.comps.contains_key(child) {
+                        return Err(ValidationError::MissingComp {
+                            layer: layer.id,
+                            comp: *child,
+                        });
+                    }
+                    if !(speed.is_finite() && *speed > 0.0) {
+                        return Err(ValidationError::BadSpeed(layer.id));
+                    }
+                }
             }
             validate_parenting(comp)?;
+        }
+        for &id in self.comps.keys() {
+            if self.comp_contains(id, id) {
+                return Err(ValidationError::CompCycle(id));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_folders(&self) -> Result<(), ValidationError> {
+        for folder in self.folders.values() {
+            let mut cur = folder.parent;
+            let mut steps = 0;
+            while let Some(p) = cur {
+                let Some(parent) = self.folders.get(&p) else {
+                    return Err(ValidationError::MissingFolder {
+                        item: folder.id.raw(),
+                        folder: p,
+                    });
+                };
+                steps += 1;
+                if p == folder.id || steps > self.folders.len() {
+                    return Err(ValidationError::FolderCycle(folder.id));
+                }
+                cur = parent.parent;
+            }
         }
         Ok(())
     }
@@ -304,9 +447,16 @@ fn validate_layer_props(layer: &Layer) -> Result<(), ValidationError> {
     expect_key(&t.scale, keys::SCALE)?;
     expect_key(&t.rotation, keys::ROTATION)?;
     expect_key(&t.opacity, keys::OPACITY)?;
-    if let LayerKind::Solid { color, size } = &layer.kind {
-        expect_key(color, keys::SOLID_COLOR)?;
-        expect_key(size, keys::SOLID_SIZE)?;
+    match &layer.kind {
+        LayerKind::Solid { color, size } => {
+            expect_key(color, keys::SOLID_COLOR)?;
+            expect_key(size, keys::SOLID_SIZE)?;
+        }
+        LayerKind::Precomp {
+            time_remap: Some(remap),
+            ..
+        } => expect_key(remap, keys::TIME_REMAP)?,
+        _ => {}
     }
     Ok(())
 }
@@ -348,7 +498,8 @@ mod id_map {
 
     use crate::asset::{Asset, AssetTable};
     use crate::comp::Composition;
-    use crate::id::{AssetId, CompId};
+    use crate::id::{AssetId, CompId, FolderId};
+    use crate::pool::Folder;
 
     pub trait IdMap: Sized {
         type Item: Serialize + for<'de> Deserialize<'de>;
@@ -390,6 +541,23 @@ mod id_map {
         }
     }
 
+    impl IdMap for Arc<BTreeMap<FolderId, Folder>> {
+        type Item = Folder;
+        fn items(&self) -> Vec<&Folder> {
+            self.values().collect()
+        }
+        fn from_items(items: Vec<Folder>) -> Result<Self, String> {
+            let mut map = BTreeMap::new();
+            for f in items {
+                let id = f.id;
+                if map.insert(id, f).is_some() {
+                    return Err(format!("duplicate {id}"));
+                }
+            }
+            Ok(Arc::new(map))
+        }
+    }
+
     pub fn serialize<M: IdMap, S: Serializer>(map: &M, s: S) -> Result<S::Ok, S::Error> {
         map.items().serialize(s)
     }
@@ -408,10 +576,11 @@ mod tests {
     fn new_document_is_valid() {
         let doc = Document::new("Test", CompSettings::default());
         doc.validate().unwrap();
-        assert_eq!(doc.root().width, 1920);
+        let main = doc.main().unwrap();
+        assert_eq!(main.width, 1920);
         assert_eq!(
-            doc.locate_property(doc.root().background.id),
-            Some(PropertyOwner::CompBackground(doc.root_comp))
+            doc.locate_property(main.background.id),
+            Some(PropertyOwner::CompBackground(main.id))
         );
     }
 
@@ -420,9 +589,9 @@ mod tests {
         let mut a = Document::new("Test", CompSettings::default());
         let b = a.clone();
         assert!(Arc::ptr_eq(&a.comps, &b.comps));
-        let root = a.root_comp;
-        a.comp_mut(root).unwrap().name = "Changed".into();
-        assert_eq!(b.root().name, "Main");
-        assert_eq!(a.root().name, "Changed");
+        let main = a.main_comp.unwrap();
+        a.comp_mut(main).unwrap().name = "Changed".into();
+        assert_eq!(b.main().unwrap().name, "Main");
+        assert_eq!(a.main().unwrap().name, "Changed");
     }
 }

@@ -10,17 +10,28 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use egui_wgpu::RenderState;
-use voxy_core::{AssetId, Document, Time};
+use voxy_core::{AssetId, CompId, Document, Time};
 use voxy_render::{
     Compositor, OUTPUT_FORMAT, OutputAlpha, RenderPlan, RenderReport, RenderSettings,
 };
 
 use crate::media::MediaPool;
 
+/// What the viewport shows: a composition of a document state at a time.
+#[derive(Debug, Clone, Copy)]
+pub struct Shot<'a> {
+    pub doc: &'a Document,
+    pub comp: CompId,
+    /// [`voxy_core::History::revision`] of `doc`.
+    pub revision: u64,
+    pub time: Time,
+}
+
 /// Everything that determines a viewport frame. Rendering is skipped while
 /// this is unchanged.
 #[derive(Debug, Clone, PartialEq)]
 struct FrameKey {
+    comp: CompId,
     revision: u64,
     time: Time,
     size: (u32, u32),
@@ -68,30 +79,35 @@ impl ViewportRenderer {
         }
     }
 
-    /// Renders the root composition at `time`, sized to fit `max_px` physical
+    /// Renders `shot.comp` at `shot.time`, sized to fit `max_px` physical
     /// pixels (never above full resolution), and returns the texture to show.
     /// `playing` makes video sources prefetch ahead instead of scrubbing.
     pub fn frame(
         &mut self,
-        doc: &Document,
-        revision: u64,
-        time: Time,
+        shot: &Shot<'_>,
         max_px: egui::Vec2,
         asset_root: Option<PathBuf>,
         playing: bool,
     ) -> Option<(egui::TextureId, (u32, u32))> {
-        let comp = doc.root();
+        let &Shot {
+            doc,
+            comp: eval_comp,
+            revision,
+            time,
+        } = shot;
+        let comp = doc.comp(eval_comp)?;
         let fit = f64::from((max_px.x / comp.width as f32).min(max_px.y / comp.height as f32));
         let settings = RenderSettings {
             scale: fit.clamp(0.01, 1.0),
         };
         let size = settings.output_size(comp.width, comp.height);
-        let eval = voxy_core::evaluate(doc, doc.root_comp, time)?;
+        let eval = voxy_core::evaluate(doc, eval_comp, time)?;
         let video = self
             .media
             .resolve(doc, &eval, asset_root.as_deref(), playing);
         self.approximate = video.approximate;
         let key = FrameKey {
+            comp: eval_comp,
             revision,
             time,
             size,

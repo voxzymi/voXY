@@ -60,6 +60,16 @@ pub enum EvaluatedContent {
         /// decoded frame's size.
         size: Option<DVec2>,
     },
+    /// A nested composition at `child_time` (see [`Layer::child_time`]),
+    /// drawn at its own size from the layer-local origin. Rendering it
+    /// arrives with precomp rendering (Milestone E).
+    Precomp {
+        comp: CompId,
+        child_time: Time,
+        size: DVec2,
+    },
+    /// A placeholder for a removed source, at its remembered size.
+    Placeholder { size: Option<DVec2> },
 }
 
 /// Evaluates `comp` at `time`. Returns `None` if the composition is missing.
@@ -78,7 +88,7 @@ pub fn evaluate(doc: &Document, comp: CompId, time: Time) -> Option<EvaluatedCom
         .filter(|l| l.is_active_at(time))
         .map(|l| EvaluatedLayer {
             id: l.id,
-            content: content(l, time, &doc.assets),
+            content: content(doc, l, time),
             world: worlds.world(l.id),
             opacity: scalar(&l.transform.opacity, time, 1.0).clamp(0.0, 1.0),
             blend: l.blend_mode,
@@ -95,7 +105,8 @@ pub fn evaluate(doc: &Document, comp: CompId, time: Time) -> Option<EvaluatedCom
     })
 }
 
-fn content(layer: &Layer, time: Time, assets: &AssetTable) -> EvaluatedContent {
+fn content(doc: &Document, layer: &Layer, time: Time) -> EvaluatedContent {
+    let assets = &doc.assets;
     match &layer.kind {
         LayerKind::Solid { color, size } => EvaluatedContent::Solid {
             color: color.value_at(time).as_color().unwrap_or(LinearRgba::WHITE),
@@ -109,6 +120,22 @@ fn content(layer: &Layer, time: Time, assets: &AssetTable) -> EvaluatedContent {
             asset: *asset,
             source_time: layer.source_time(time),
             size: asset_size(assets, *asset),
+        },
+        LayerKind::Precomp { comp, .. } => {
+            let child = doc.comp(*comp);
+            let duration = child.map_or(Time::ZERO, |c| c.duration);
+            EvaluatedContent::Precomp {
+                comp: *comp,
+                child_time: layer.child_time(time, duration).unwrap_or(Time::ZERO),
+                size: child.map_or(DVec2::ZERO, |c| {
+                    DVec2::new(f64::from(c.width), f64::from(c.height))
+                }),
+            }
+        }
+        LayerKind::Placeholder { was } => EvaluatedContent::Placeholder {
+            size: was
+                .pixel_size
+                .map(|[w, h]| DVec2::new(f64::from(w), f64::from(h))),
         },
     }
 }
@@ -136,6 +163,12 @@ pub fn local_matrix(t: &Transform, time: Time) -> DAffine2 {
     let rotation = scalar(&t.rotation, time, 0.0).to_radians();
     DAffine2::from_scale_angle_translation(scale, rotation, position)
         * DAffine2::from_translation(-anchor)
+}
+
+/// The matrix mapping layer `id`'s local pixels to composition pixels at
+/// `time`, parenting included. Identity if the layer is missing.
+pub fn layer_world(comp: &Composition, id: LayerId, time: Time) -> DAffine2 {
+    WorldCache::new(comp, time).world(id)
 }
 
 /// Memoized world matrices for one composition at one time.
@@ -195,7 +228,7 @@ mod tests {
                 ..CompSettings::default()
             },
         );
-        let comp = doc.root_comp;
+        let comp = doc.main_comp.unwrap();
         for color in [LinearRgba::WHITE, LinearRgba::BLACK] {
             AddSolidLayer {
                 comp,
@@ -212,16 +245,16 @@ mod tests {
     #[test]
     fn paint_order_is_bottom_first() {
         let doc = doc_with_two_solids();
-        let e = evaluate(&doc, doc.root_comp, Time::ZERO).unwrap();
+        let e = evaluate(&doc, doc.main_comp.unwrap(), Time::ZERO).unwrap();
         assert_eq!(e.layers.len(), 2);
-        assert_eq!(e.layers[0].id, doc.root().layers[1].id);
-        assert_eq!(e.layers[1].id, doc.root().layers[0].id);
+        assert_eq!(e.layers[0].id, doc.main().unwrap().layers[1].id);
+        assert_eq!(e.layers[1].id, doc.main().unwrap().layers[0].id);
     }
 
     #[test]
     fn default_solid_covers_comp() {
         let doc = doc_with_two_solids();
-        let e = evaluate(&doc, doc.root_comp, Time::ZERO).unwrap();
+        let e = evaluate(&doc, doc.main_comp.unwrap(), Time::ZERO).unwrap();
         let l = &e.layers[0];
         assert_eq!(l.world.transform_point2(DVec2::ZERO), DVec2::ZERO);
         assert_eq!(
@@ -233,8 +266,8 @@ mod tests {
     #[test]
     fn transform_order_and_parenting() {
         let mut doc = doc_with_two_solids();
-        let parent = doc.root().layers[1].clone();
-        let child_id = doc.root().layers[0].id;
+        let parent = doc.main().unwrap().layers[1].clone();
+        let child_id = doc.main().unwrap().layers[0].id;
         // Parent: rotate 90° clockwise about its anchor (the comp center).
         SetProperty {
             time: Time::ZERO,
@@ -244,7 +277,7 @@ mod tests {
         .apply(&mut doc)
         .unwrap();
         doc.layer_mut(child_id).unwrap().parent = Some(parent.id);
-        let e = evaluate(&doc, doc.root_comp, Time::ZERO).unwrap();
+        let e = evaluate(&doc, doc.main_comp.unwrap(), Time::ZERO).unwrap();
         let p = e.layers.iter().find(|l| l.id == parent.id).unwrap();
         // Top-left corner (0,0) is 100 px left and 50 px above the anchor;
         // rotating 90° clockwise in y-down space moves it to 50 px right and
@@ -259,12 +292,12 @@ mod tests {
         // becomes +y on screen.
         SetProperty {
             time: Time::ZERO,
-            prop: doc.root().layers[0].transform.position.id,
+            prop: doc.main().unwrap().layers[0].transform.position.id,
             value: Value::Vec2(DVec2::new(110.0, 50.0)),
         }
         .apply(&mut doc)
         .unwrap();
-        let e = evaluate(&doc, doc.root_comp, Time::ZERO).unwrap();
+        let e = evaluate(&doc, doc.main_comp.unwrap(), Time::ZERO).unwrap();
         let c = e.layers.iter().find(|l| l.id == child_id).unwrap();
         let moved = c.world.transform_point2(DVec2::ZERO);
         assert!(
@@ -276,24 +309,27 @@ mod tests {
     #[test]
     fn hidden_and_out_of_range_layers_are_skipped() {
         let mut doc = doc_with_two_solids();
-        let top = doc.root().layers[0].id;
+        let top = doc.main().unwrap().layers[0].id;
         SetLayerVisible {
             layer: top,
             visible: false,
         }
         .apply(&mut doc)
         .unwrap();
-        let e = evaluate(&doc, doc.root_comp, Time::ZERO).unwrap();
+        let e = evaluate(&doc, doc.main_comp.unwrap(), Time::ZERO).unwrap();
         assert_eq!(e.layers.len(), 1);
-        let end = doc.root().duration;
-        assert_eq!(evaluate(&doc, doc.root_comp, end).unwrap().layers, []);
+        let end = doc.main().unwrap().duration;
+        assert_eq!(
+            evaluate(&doc, doc.main_comp.unwrap(), end).unwrap().layers,
+            []
+        );
     }
 
     #[test]
     fn evaluation_is_deterministic() {
         let doc = doc_with_two_solids();
-        let a = evaluate(&doc, doc.root_comp, Time::from_millis(500));
-        let b = evaluate(&doc, doc.root_comp, Time::from_millis(500));
+        let a = evaluate(&doc, doc.main_comp.unwrap(), Time::from_millis(500));
+        let b = evaluate(&doc, doc.main_comp.unwrap(), Time::from_millis(500));
         assert_eq!(a, b);
     }
 
@@ -301,7 +337,7 @@ mod tests {
     fn video_layers_map_composition_time_to_source_time() {
         use crate::command::{AddVideoLayer, SetLayerTiming};
         let mut doc = Document::new("Video", CompSettings::default());
-        let comp = doc.root_comp;
+        let comp = doc.main_comp.unwrap();
         AddVideoLayer {
             comp,
             path: "clip.mp4".into(),
@@ -312,7 +348,7 @@ mod tests {
         }
         .apply(&mut doc)
         .unwrap();
-        let layer = doc.root().layers[0].id;
+        let layer = doc.main().unwrap().layers[0].id;
         // In at 1 s, showing the source from 0.5 s.
         SetLayerTiming {
             layer,

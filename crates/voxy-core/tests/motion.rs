@@ -22,7 +22,7 @@ const IN_TANGENT: DVec3 = DVec3::new(300.0, -100.0, 0.0);
 /// unevenly parameterized arc.
 fn animated_doc() -> (Document, PropId) {
     let mut doc = Document::new("Motion", CompSettings::default());
-    let comp = doc.root_comp;
+    let comp = doc.main_comp.unwrap();
     AddSolidLayer {
         comp,
         name: None,
@@ -31,7 +31,7 @@ fn animated_doc() -> (Document, PropId) {
     }
     .apply(&mut doc)
     .unwrap();
-    let pos = doc.root().layers[0].transform.position.id;
+    let pos = doc.main().unwrap().layers[0].transform.position.id;
     let t0 = Time::ZERO;
     let t1 = Time::from_secs(2);
     SetProperty {
@@ -156,7 +156,7 @@ fn keys_are_hit_exactly_and_hold_works() {
 fn renderer_input_follows_the_animation() {
     // The evaluated world matrix moves the layer's anchor along the path.
     let (doc, pos) = animated_doc();
-    let layer = &doc.root().layers[0];
+    let layer = &doc.main().unwrap().layers[0];
     let anchor = layer
         .transform
         .anchor
@@ -165,7 +165,7 @@ fn renderer_input_follows_the_animation() {
         .unwrap();
     for ms in [0, 500, 1000, 1500, 2000] {
         let t = Time::from_millis(ms);
-        let eval = evaluate(&doc, doc.root_comp, t).unwrap();
+        let eval = evaluate(&doc, doc.main_comp.unwrap(), t).unwrap();
         let on_screen = eval.layers[0].world.transform_point2(anchor);
         assert!((on_screen - position_at(&doc, pos, t)).length() < 1e-9);
     }
