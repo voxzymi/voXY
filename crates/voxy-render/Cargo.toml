@@ -1,0 +1,27 @@
+[package]
+name = "voxy-render"
+description = "voXY GPU compositor (wgpu)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+voxy-core.workspace = true
+voxy-media.workspace = true
+voxy-vector.workspace = true
+bytemuck.workspace = true
+glam.workspace = true
+pollster.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+wgpu.workspace = true
+
+[dev-dependencies]
+image = { workspace = true }
+tempfile.workspace = true

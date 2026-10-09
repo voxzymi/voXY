@@ -1,0 +1,50 @@
+# cargo-deny policy for voXY. See LICENSING.md for the reasoning.
+# Run locally with: cargo deny check licenses bans sources
+
+[graph]
+all-features = false
+
+[licenses]
+# Permissive licenses compatible with distributing voXY binaries alongside a
+# dynamically linked LGPL FFmpeg and BSD-3 OpenFX headers. No copyleft
+# licenses are allowed for Rust crates (they are statically linked).
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "BSL-1.0",
+    "0BSD",
+    "Unlicense",
+    "Unicode-3.0",
+    # Fonts bundled by egui for the UI chrome (Ubuntu Light, emoji fonts).
+    "OFL-1.1",
+    "Ubuntu-font-1.0",
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+allow-wildcard-paths = true
+# GPL-licensed codec wrappers must never be linked into voXY (LGPL FFmpeg
+# build only; see LICENSING.md).
+deny = [
+    { crate = "x264", reason = "GPL; voXY ships an LGPL FFmpeg build" },
+    { crate = "x264-sys", reason = "GPL; voXY ships an LGPL FFmpeg build" },
+    { crate = "x265", reason = "GPL; voXY ships an LGPL FFmpeg build" },
+    { crate = "gifski", reason = "AGPL" },
+    { crate = "imagequant", reason = "GPL-3.0 (or commercial)" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+
+[licenses.private]
+# voXY's own crates are unpublished; the project license is chosen by the
+# owner (see LICENSING.md).
+ignore = true

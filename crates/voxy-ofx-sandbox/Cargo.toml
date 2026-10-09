@@ -1,0 +1,14 @@
+[package]
+name = "voxy-ofx-sandbox"
+description = "Out-of-process OpenFX plugin runner for voXY (from M7)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+

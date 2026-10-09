@@ -1,9 +1,24 @@
-# voXY — Design Proposal (v0, awaiting approval)
+# voXY — Design Proposal (v1, approved)
 
-Status: **proposal only. No code has been written.** Per the working style in the
-project brief, this document proposes the crate layout, core data structures and
-render-graph design, and lists the decisions that need your sign-off before
-Milestone 1 begins. Section 9 collects every open question.
+Status: **approved on 2026-10-09**, with the decisions recorded below.
+Milestone 1 is implemented against this design. Sections 1–8 keep the
+original proposal text. Where the implementation refines the proposal, the
+"Implementation notes" section at the end says so.
+
+## Decision record
+
+| # | Decision |
+|---|---|
+| Q1 | UI: **egui via eframe + egui_dock**. |
+| Q2 | Vector: **vello + kurbo + parley + i_overlay**. One `wgpu` version is shared by vello and eframe, recorded in the README. |
+| Q3 | OpenFX: **out-of-process sandbox, one helper process per plugin bundle**. |
+| Q4 | Determinism: **bit-identical on the same machine and driver; near-identical across GPUs.** Golden tests use a small tolerance. |
+| Q5 | Encoders: **hardware first; OpenH264 as the H.264 software fallback; kvazaar for H.265.** LICENSING.md states that patent licensing is the distributor's responsibility. |
+| Q6 | Projects: **JSON in a single `.voxy` file with a `<name>.assets/` folder**, plus a `.voxyz` zip for sharing. |
+| Q7 | Platforms: **Windows 10+ x64, Ubuntu 22.04+ x64, macOS 12+ (Apple Silicon and Intel).** ARM Windows and ARM Linux are out of scope for now. |
+| Color | **Per-project working space.** voXY projects default to linear light. Alight Motion imports default to whichever space the golden tests show matches the reference renders. |
+| AM XML | **Lossless XML tree with typed structs on top.** Unedited files are reproduced byte-for-byte. |
+| AM ToS | The owner checks the terms before Compat 2a. Only files the owner exports from their own copy are used. |
 
 ---
 
@@ -560,3 +575,39 @@ are **GPL**, so an LGPL build can't include them. Proposal:
    FFmpeg isn't needed until M3.
 
 Keyframes, the timeline and the graph editor are M2, as the brief orders.
+
+---
+
+## Implementation notes (Milestone 1)
+
+These are refinements made while building Milestone 1. They are consistent
+with the approved design.
+
+- **Property serialization.** Property descriptors are referenced by `key` in
+  files and are not duplicated.
+  - Unknown keys load with a generic descriptor and are written back
+    unchanged.
+  - Values are validated when edited: type, finiteness and range clamping.
+  - Values are not re-clamped when loaded, so a load/save cycle never alters
+    data.
+- **Undo history.**
+  - `History` stores whole-document snapshots, with copy-on-write sharing.
+  - Edits that leave the document unchanged record no step.
+  - The undo limit is a step count (1000). The proposal's approximate byte
+    budget is deferred until real projects show it is needed.
+- **Render "graph".** In Milestone 1 the graph is a single chain: clear, one
+  composite per layer, then the output transform. It is built as a pure,
+  GPU-free `RenderPlan`. The DAG with content hashes arrives with effects and
+  masks.
+- **Images.** Images are decoded to sRGB8, then a GPU "prepare" pass converts
+  them once into premultiplied RGBA16F encoded for the working space. That
+  keeps bilinear filtering free of fringes and gives both working spaces one
+  code path.
+- **Edge antialiasing.** Layer quads are not antialiased yet; edges are
+  aliased. Analytic coverage antialiasing for layer edges, and vello for
+  shapes, come in later milestones.
+- **Threads.** Milestone 1 renders on the UI thread, and only when the
+  document revision or viewport size changes. The dedicated render, decode and
+  audio threads arrive with playback in Milestone 3.
+- **voXY's own license.** It has not been chosen. That is the owner's
+  decision; see LICENSING.md.

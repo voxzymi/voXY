@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  # Warnings fail the build.
+  RUSTFLAGS: -D warnings
+
+jobs:
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  build-test:
+    name: build + clippy + test (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x64
+            os: ubuntu-22.04
+          - name: Windows x64
+            os: windows-latest
+          - name: macOS arm64
+            os: macos-latest
+          - name: macOS x64
+            os: macos-15-intel
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Linux packages (lavapipe for headless GPU tests, X11/Wayland runtime libs)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            mesa-vulkan-drivers libvulkan1 libxkbcommon-x11-0 libwayland-client0
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked
+      - name: Test
+        run: cargo test --workspace --locked
+        env:
+          # Linux always has lavapipe, so golden tests must run there; on
+          # hosted Windows/macOS runners they run when an adapter exists.
+          VOXY_REQUIRE_GPU: ${{ runner.os == 'Linux' && '1' || '' }}
+          WGPU_BACKEND: ${{ runner.os == 'Linux' && 'vulkan' || '' }}
+      - name: Upload golden-test failures
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: golden-actual-${{ matrix.name }}
+          path: target/tmp/voxy-golden-*-actual.png
+          if-no-files-found: ignore
+
+  licenses:
+    name: cargo-deny (licenses, advisories, bans)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check licenses bans sources
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Third-party license list is up to date
+        run: cargo xtask licenses --check
