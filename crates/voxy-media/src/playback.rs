@@ -291,7 +291,7 @@ impl CallbackState {
         for (i, frame) in out.chunks_exact_mut(dc).enumerate() {
             let (l, r) = (stereo[i * 2], stereo[i * 2 + 1]);
             if dc == 1 {
-                frame[0] = 0.5 * (l + r);
+                frame[0] = f32::midpoint(l, r);
             } else {
                 frame[0] = l;
                 frame[1] = r;

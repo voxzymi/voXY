@@ -63,9 +63,24 @@ jobs:
       - name: Install FFmpeg (Windows, LGPL shared build)
         if: runner.os == 'Windows'
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          $name = "ffmpeg-n7.1-latest-win64-lgpl-shared-7.1"
-          Invoke-WebRequest "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/$name.zip" -OutFile ffmpeg.zip
+          # BtbN's floating "latest" release carries only the newest FFmpeg
+          # release branches, so pick the newest LGPL shared build that
+          # ffmpeg-next supports (FFmpeg <= 9.0) instead of a fixed version.
+          $names = gh release view latest --repo BtbN/FFmpeg-Builds --json assets --jq '.assets[].name'
+          $builds = foreach ($n in $names) {
+            if ($n -match '^ffmpeg-n(\d+\.\d+)-latest-win64-lgpl-shared-\d+\.\d+\.zip$') {
+              $v = [version]$Matches[1]
+              if ($v -le [version]'9.0') { [pscustomobject]@{ Version = $v; Name = $n } }
+            }
+          }
+          $pick = $builds | Sort-Object Version | Select-Object -Last 1
+          if (-not $pick) { throw "no LGPL shared FFmpeg <= 9.0 build in BtbN's latest release: $names" }
+          $name = [IO.Path]::GetFileNameWithoutExtension($pick.Name)
+          Write-Host "Using $name"
+          Invoke-WebRequest "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/$($pick.Name)" -OutFile ffmpeg.zip
           Expand-Archive ffmpeg.zip -DestinationPath "$env:RUNNER_TEMP"
           $dir = Join-Path $env:RUNNER_TEMP $name
           "FFMPEG_DIR=$dir" | Out-File -FilePath $env:GITHUB_ENV -Append

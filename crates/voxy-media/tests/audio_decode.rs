@@ -99,7 +99,7 @@ fn frame_of(l: f32, r: f32) -> i64 {
 }
 
 fn check_counter(buf: &[f32], first: i64) {
-    for (i, s) in buf.chunks_exact(2).enumerate() {
+    for (i, s) in buf.as_chunks::<2>().0.iter().enumerate() {
         assert_eq!(
             frame_of(s[0], s[1]),
             first + i as i64,
@@ -184,7 +184,9 @@ fn resampling_keeps_timing() {
         "duration preserved: {got}"
     );
     let peak = all
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .enumerate()
         .max_by(|a, b| a.1[0].abs().total_cmp(&b.1[0].abs()))
         .unwrap()
@@ -197,7 +199,9 @@ fn resampling_keeps_timing() {
     let mut part = vec![0f32; 2 * 48_000];
     dec.read(&mut part).unwrap();
     let peak2 = part
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .enumerate()
         .max_by(|a, b| a.1[0].abs().total_cmp(&b.1[0].abs()))
         .unwrap()

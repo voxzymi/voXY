@@ -20,7 +20,7 @@ struct Ramp;
 
 impl AudioSource for Ramp {
     fn render(&mut self, start: i64, out: &mut [f32]) {
-        for (i, f) in out.chunks_exact_mut(2).enumerate() {
+        for (i, f) in out.as_chunks_mut::<2>().0.iter_mut().enumerate() {
             let n = (start + i as i64) as f32;
             f[0] = n;
             f[1] = -n;
@@ -80,7 +80,7 @@ fn engine(latency: Duration) -> (AudioEngine, Device) {
 }
 
 fn assert_continuous(buf: &[f32], first: i64) {
-    for (i, f) in buf.chunks_exact(2).enumerate() {
+    for (i, f) in buf.as_chunks::<2>().0.iter().enumerate() {
         let want = (first + i as i64) as f32;
         assert_eq!(f[0], want, "left sample {i}");
         assert_eq!(f[1], -want, "right sample {i}");

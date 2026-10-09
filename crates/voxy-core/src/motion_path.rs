@@ -64,7 +64,7 @@ impl CubicPath {
     /// Arc length between parameters `a` and `b` (5-point Gauss–Legendre).
     fn length_between(&self, a: f64, b: f64) -> f64 {
         let half = 0.5 * (b - a);
-        let mid = 0.5 * (a + b);
+        let mid = f64::midpoint(a, b);
         GL_NODES
             .iter()
             .zip(GL_WEIGHTS)
@@ -130,7 +130,7 @@ impl CubicPath {
             s = if speed > 1e-12 && newton > lo && newton < hi {
                 newton
             } else {
-                0.5 * (lo + hi)
+                f64::midpoint(lo, hi)
             };
         }
         s

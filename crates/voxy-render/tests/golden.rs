@@ -222,8 +222,10 @@ fn compare(name: &str, actual: &RgbaImage) {
     let mut sq_err = 0f64;
     for (a, e) in actual
         .pixels
-        .chunks_exact(4)
-        .zip(expected.as_raw().chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(expected.as_raw().as_chunks::<4>().0)
     {
         let mut pixel_bad = false;
         for (x, y) in a.iter().zip(e) {
@@ -327,8 +329,8 @@ fn opaque_solid_is_exact() {
         .apply(&mut doc)
         .unwrap();
         let img = render(&gpu, &mut compositor, &doc);
-        for px in img.pixels.chunks_exact(4) {
-            assert_eq!(px, [200, 100, 50, 255], "{space:?}");
+        for px in img.pixels.as_chunks::<4>().0 {
+            assert_eq!(*px, [200, 100, 50, 255], "{space:?}");
         }
     }
 }
@@ -365,7 +367,14 @@ fn missing_images_are_reported_not_fatal() {
     .unwrap()
     .unwrap();
     assert_eq!(report.missing_assets.len(), 1);
-    assert!(image.pixels.chunks_exact(4).all(|p| p == [0, 0, 0, 255]));
+    assert!(
+        image
+            .pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|p| *p == [0, 0, 0, 255])
+    );
 }
 
 #[test]
@@ -485,7 +494,7 @@ fn video_frames_render_exactly_like_images() {
         &provider,
         Time::ZERO,
     );
-    assert!(report.pending_video.is_empty());
+    assert_eq!(report.pending_video, []);
     assert_eq!(as_video, as_image, "video uses the image upload path");
     compare("video_layer", &as_video);
 }
@@ -537,5 +546,12 @@ fn video_frames_upload_once_and_reuse_textures() {
     // No frame yet: the layer is skipped and reported, not an error.
     let (blank, report) = render_with(&gpu, &mut compositor, &doc, &NoVideo, at(0));
     assert_eq!(report.pending_video.len(), 1);
-    assert!(blank.pixels.chunks_exact(4).all(|p| p == [30, 30, 30, 255]));
+    assert!(
+        blank
+            .pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|p| *p == [30, 30, 30, 255])
+    );
 }

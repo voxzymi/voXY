@@ -160,8 +160,9 @@ Want something to look at? Generate a demo project with
 
 Install Rust with the MSVC toolchain (Visual Studio Build Tools with
 "Desktop development with C++") and LLVM (for libclang). For FFmpeg:
-1. Download a *shared* LGPL build, for example `ffmpeg-n7.1-latest-win64-lgpl-shared-7.1.zip`
-   from <https://github.com/BtbN/FFmpeg-Builds/releases>.
+1. Download a *shared* LGPL build of FFmpeg 9.0 or older, for example
+   `ffmpeg-n8.1-latest-win64-lgpl-shared-8.1.zip` from
+   <https://github.com/BtbN/FFmpeg-Builds/releases>.
 2. Set `FFMPEG_DIR` to the folder you unpacked it into.
 3. Add its `bin` folder to `PATH`.
 

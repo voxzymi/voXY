@@ -332,7 +332,7 @@ mod tests {
         s.add_solid();
         assert!(s.selection.is_some());
         s.delete_selection();
-        assert!(s.history.current().root().layers.is_empty());
+        assert_eq!(s.history.current().root().layers, []);
         s.history.undo();
         assert_eq!(s.history.current().root().layers.len(), 1);
         s.history.undo();

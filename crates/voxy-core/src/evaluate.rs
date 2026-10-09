@@ -286,12 +286,7 @@ mod tests {
         let e = evaluate(&doc, doc.root_comp, Time::ZERO).unwrap();
         assert_eq!(e.layers.len(), 1);
         let end = doc.root().duration;
-        assert!(
-            evaluate(&doc, doc.root_comp, end)
-                .unwrap()
-                .layers
-                .is_empty()
-        );
+        assert_eq!(evaluate(&doc, doc.root_comp, end).unwrap().layers, []);
     }
 
     #[test]
@@ -327,11 +322,9 @@ mod tests {
         }
         .apply(&mut doc)
         .unwrap();
-        assert!(
-            evaluate(&doc, comp, Time::from_millis(999))
-                .unwrap()
-                .layers
-                .is_empty()
+        assert_eq!(
+            evaluate(&doc, comp, Time::from_millis(999)).unwrap().layers,
+            []
         );
         let eval = evaluate(&doc, comp, Time::from_millis(1250)).unwrap();
         let EvaluatedContent::Video {

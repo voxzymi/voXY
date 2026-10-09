@@ -218,10 +218,9 @@ mod tests {
         .apply(&mut doc)
         .unwrap();
         let eval = evaluate(&doc, comp, Time::ZERO).unwrap();
-        assert!(
-            RenderPlan::build(&eval, &RenderSettings::default())
-                .draws
-                .is_empty()
+        assert_eq!(
+            RenderPlan::build(&eval, &RenderSettings::default()).draws,
+            []
         );
     }
 }

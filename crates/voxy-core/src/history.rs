@@ -377,7 +377,7 @@ mod tests {
             Value::Scalar(1.0)
         );
         h.undo();
-        assert!(h.current().root().layers.is_empty());
+        assert_eq!(h.current().root().layers, []);
         assert!(!h.can_undo());
     }
 
@@ -394,7 +394,7 @@ mod tests {
         assert_eq!(h.current().root().layers.len(), 2);
         assert_eq!(h.undo_label(), Some("Add Two"));
         h.undo();
-        assert!(h.current().root().layers.is_empty());
+        assert_eq!(h.current().root().layers, []);
 
         let before = h.current().clone();
         h.begin("Abandoned");

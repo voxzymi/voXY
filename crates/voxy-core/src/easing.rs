@@ -133,7 +133,7 @@ fn solve_x(x1: f64, x2: f64, u: f64) -> f64 {
     let (mut lo, mut hi) = (0.0f64, 1.0f64);
     let mut mid = u;
     for _ in 0..64 {
-        mid = 0.5 * (lo + hi);
+        mid = f64::midpoint(lo, hi);
         let x = bezier(x1, x2, mid);
         if (x - u).abs() < EPS {
             break;
