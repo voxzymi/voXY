@@ -5,10 +5,10 @@
 //! # Provisional handle mapping
 //!
 //! **Which parameter each handle controls ([`handle_layout`]) is a
-//! proposal, not a confirmed copy of Alight Motion's behavior.** It is based
+//! proposal, not a confirmed design.** It is based
 //! on the project owner's reading of a promotional image (yellow *main*
-//! handle, white *secondary* handle) and has not been checked against the
-//! app. Everything that depends on the mapping lives in [`handle_layout`]
+//! handle, white *secondary* handle) and has not been confirmed by anything
+//! else. Everything that depends on the mapping lives in [`handle_layout`]
 //! alone; changing the mapping means editing that one function (and the
 //! table in `docs/design-graphs.md` §4). [`HANDLE_MAPPING_PROVISIONAL`] is
 //! shown in the UI tooltip while it is unconfirmed.
@@ -19,7 +19,8 @@ use voxy_core::{
     StepsParams,
 };
 
-/// `true` until the handle mapping has been checked against the app.
+/// `true` while the handle mapping is an unconfirmed design choice that may
+/// still change.
 pub const HANDLE_MAPPING_PROVISIONAL: bool = true;
 
 /// One editable number of an easing.
@@ -392,13 +393,44 @@ pub fn handle_tooltip(spec: &HandleSpec) -> String {
         (None, Some(y)) => format!("up/down: {y}"),
         (None, None) => String::new(),
     };
-    let mut text = format!("{who}. Drag — {what}.");
+    let mut text = format!("{who}. Drag — {what}. Double-click to reset it.");
     if HANDLE_MAPPING_PROVISIONAL {
-        text.push_str(
-            "\nWhich parameter each handle controls is provisional until it is checked against Alight Motion.",
-        );
+        text.push_str("\nWhich parameter each handle controls is provisional and may change.");
     }
     text
+}
+
+/// `value` as the field shows it: scaled, with its decimals and suffix.
+pub fn format_value(d: &ParamDesc, value: f64) -> String {
+    format!("{:.*}{}", d.decimals, value * d.scale, d.suffix)
+}
+
+/// The current values of the parameters a handle drives, for the live
+/// read-out beside it: `"Damping 7.00, Overshoot (launch energy) 0.00"`.
+pub fn handle_readout(interp: &Interp, spec: &HandleSpec) -> String {
+    [spec.x, spec.y]
+        .into_iter()
+        .flatten()
+        .filter_map(|id| {
+            let d = desc(id);
+            get(interp, id).map(|v| format!("{} {}", d.label, format_value(&d, v)))
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// `interp` with the parameters `spec`'s handle drives set back to the
+/// defaults of its kind; everything else is untouched.
+#[must_use]
+pub fn reset_handle(interp: Interp, spec: &HandleSpec) -> Interp {
+    let defaults = interp.kind().default_interp();
+    [spec.x, spec.y]
+        .into_iter()
+        .flatten()
+        .fold(interp, |acc, id| match get(&defaults, id) {
+            Some(v) => with(acc, id, v),
+            None => acc,
+        })
 }
 
 #[cfg(test)]
@@ -558,12 +590,90 @@ mod tests {
     }
 
     #[test]
+    fn readout_shows_current_values_as_the_fields_do() {
+        let spring = handle_layout(InterpKind::Spring);
+        let interp = Interp::Spring(SpringParams {
+            frequency: 3.0,
+            damping: 9.5,
+            overshoot: 0.75,
+        });
+        assert_eq!(
+            handle_readout(&interp, &spring[0]),
+            "Damping 9.50, Overshoot (launch energy) 0.75"
+        );
+        assert_eq!(handle_readout(&interp, &spring[1]), "Frequency 3.00");
+        // Percent parameters are scaled like their fields; counts are whole.
+        let bounce = Interp::Bounce(BounceParams {
+            count: 5,
+            first_height: 0.4,
+            restitution: 0.65,
+        });
+        let b = handle_layout(InterpKind::Bounce);
+        assert_eq!(
+            handle_readout(&bounce, &b[0]),
+            "Bounciness 65%, First bounce height 40%"
+        );
+        assert_eq!(handle_readout(&bounce, &b[1]), "Bounces 5");
+        // A handle of another kind reads nothing.
+        assert_eq!(handle_readout(&Interp::Linear, &spring[0]), "");
+    }
+
+    #[test]
+    fn reset_handle_restores_only_what_the_handle_drives() {
+        for kind in InterpKind::PARAMETRIC {
+            let defaults = kind.default_interp();
+            for spec in handle_layout(kind) {
+                // Move every parameter away from its default, then reset one handle.
+                let mut moved = defaults;
+                for &id in fields(kind) {
+                    let d = desc(id);
+                    let away = if get(&defaults, id) == Some(d.max) {
+                        d.min
+                    } else {
+                        d.max
+                    };
+                    moved = with(moved, id, away);
+                }
+                let after = reset_handle(moved, &spec);
+                let driven: Vec<ParamId> = [spec.x, spec.y].into_iter().flatten().collect();
+                for &id in fields(kind) {
+                    let expected = if driven.contains(&id) {
+                        &defaults
+                    } else {
+                        &moved
+                    };
+                    assert_eq!(get(&after, id), get(expected, id), "{kind:?} {id:?}");
+                }
+                assert_eq!(after.validate(), Ok(()));
+            }
+        }
+        // Jump mode is not a handle parameter and survives a reset.
+        let steps = Interp::Steps(StepsParams {
+            count: 9,
+            jump: voxy_core::JumpMode::Both,
+            hold: 0.5,
+        });
+        let specs = handle_layout(InterpKind::Steps);
+        let Interp::Steps(p) = reset_handle(reset_handle(steps, &specs[0]), &specs[1]) else {
+            panic!()
+        };
+        assert_eq!(
+            (p.count, p.jump, p.hold),
+            (StepsParams::default().count, voxy_core::JumpMode::Both, 0.0)
+        );
+    }
+
+    #[test]
     fn tooltips_say_what_each_handle_does_and_that_it_is_provisional() {
         let spring = handle_layout(InterpKind::Spring);
         let main = handle_tooltip(&spring[0]);
         assert!(main.contains("Main handle (yellow)") && main.contains("Damping"));
         assert!(main.contains("Overshoot"));
         assert!(handle_tooltip(&spring[1]).contains("Frequency"));
-        assert!(main.contains("provisional"));
+        assert!(main.contains("provisional") && main.contains("Double-click"));
+        assert!(
+            !main.contains("Alight"),
+            "no stale reference to the cancelled work"
+        );
     }
 }

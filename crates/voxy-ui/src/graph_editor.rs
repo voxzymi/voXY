@@ -28,7 +28,10 @@ use voxy_core::{
     ValueKind,
 };
 
-use crate::ease_params::{HandleRole, drag_handle, handle_layout, handle_position, handle_tooltip};
+use crate::ease_params::{
+    HandleRole, drag_handle, handle_layout, handle_position, handle_readout, handle_tooltip,
+    reset_handle,
+};
 use crate::ease_ui;
 use crate::state::EditorState;
 use crate::theme::ACCENT;
@@ -728,6 +731,20 @@ fn ease_editor(
                 interp: k0.interp.convert_to(kind),
             });
         }
+        let default = k0.interp.kind().default_interp();
+        if k0.interp.is_parametric()
+            && ui
+                .add_enabled(k0.interp != default, egui::Button::new("Reset").small())
+                .on_hover_text("Put every parameter of this type back to its default.")
+                .on_disabled_hover_text("Already at the defaults.")
+                .clicked()
+        {
+            state.execute(SetEasing {
+                prop: prop.id,
+                time: k0.time,
+                interp: default,
+            });
+        }
     });
 
     let (h1, h2) = match k0.interp {
@@ -841,10 +858,21 @@ fn ease_editor(
                 .interact(
                     Rect::from_center_size(pos, vec2(16.0, 16.0)),
                     Id::new(("param-handle", prop.id, index)),
-                    Sense::drag(),
+                    Sense::click_and_drag(),
                 )
                 .on_hover_cursor(CursorIcon::Grab)
-                .on_hover_text(handle_tooltip(spec));
+                .on_hover_text(format!(
+                    "{}\n{}",
+                    handle_readout(&k0.interp, spec),
+                    handle_tooltip(spec)
+                ));
+            if r.double_clicked() {
+                state.execute(SetEasing {
+                    prop: prop.id,
+                    time: k0.time,
+                    interp: reset_handle(k0.interp, spec),
+                });
+            }
             if r.drag_started() {
                 state.history.begin("Edit Easing");
                 state.graph.drag = Some(GraphDrag::Param {
@@ -864,6 +892,24 @@ fn ease_editor(
             let active = r.hovered() || r.dragged();
             painter.circle_filled(pos, if active { 6.5 } else { 5.5 }, fill);
             painter.circle_stroke(pos, 5.5, Stroke::new(1.5, Color32::from_black_alpha(190)));
+            if r.dragged() {
+                // Egui hides tooltips while dragging, so show the values the
+                // handle is setting right beside it.
+                let text = handle_readout(&k0.interp, spec);
+                let galley =
+                    painter.layout_no_wrap(text, FontId::proportional(11.0), Color32::WHITE);
+                let at = pos2(
+                    (pos.x - galley.size().x / 2.0)
+                        .clamp(outer.left() + 2.0, outer.right() - galley.size().x - 2.0),
+                    (pos.y - 24.0).max(outer.top() + 2.0),
+                );
+                painter.rect_filled(
+                    Rect::from_min_size(at, galley.size()).expand(3.0),
+                    3.0,
+                    Color32::from_black_alpha(220),
+                );
+                painter.galley(at, galley, Color32::WHITE);
+            }
         }
         if let Some(edited) = ease_ui::param_fields(ui, &k0.interp) {
             state.execute(SetEasing {
@@ -1020,18 +1066,18 @@ fn easing_clipboard_and_presets(
                 }
             });
             ui.horizontal(|ui| {
-                ui.add(
+                let field = ui.add(
                     egui::TextEdit::singleline(&mut state.graph.preset_name)
                         .hint_text("Name")
                         .desired_width(110.0),
                 );
+                let entered = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 let name = state.graph.preset_name.trim().to_owned();
-                if ui
+                let clicked = ui
                     .add_enabled(!name.is_empty(), egui::Button::new("Save").small())
-                    .on_hover_text("Save this segment's easing under that name (replaces one with the same name).")
-                    .clicked()
-                    && state.prefs.save_easing_preset(&name, current)
-                {
+                    .on_hover_text("Save this segment's easing under that name (replaces one with the same name). Enter does the same.")
+                    .clicked();
+                if (clicked || entered) && state.prefs.save_easing_preset(&name, current) {
                     state.save_prefs();
                     state.graph.preset_name.clear();
                 }

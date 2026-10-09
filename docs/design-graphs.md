@@ -126,13 +126,14 @@ f(u) = 1 − D(u) + R·h(u),         h(u) = u²(3 − 2u)
   (where the first peak overshoots by about 25 %), and up to about 37 % at
   `damping = 1`. Low damping is allowed, but the end is then visibly
   "pinched" onto the target by the window.
-- **Interpretation to confirm.** The addendum names three parameters:
+- **Interpretation.** The addendum names three parameters:
   frequency, damping and "overshoot amount". For a physical spring released
   from rest, frequency and damping already fix the overshoot, so a third
   independent knob needs a third degree of freedom. voXY uses the launch
-  speed for it. If Alight Motion's "overshoot" means something else
-  (for example the peak height), say so and this will be re-parameterized
-  before it is exposed in the UI.
+  speed for it. This is voXY's own parameterization; if it should mean
+  something else (for example the peak height), say so and it can be
+  re-parameterized. The UI shows the resulting peak overshoot so either way
+  the user sees the outcome.
 
 ### 2.2 Bounce
 
@@ -263,9 +264,8 @@ Each plateau climbs with slope `ramp`; each jump has height
 ## 4. Handles (H-B; **provisional**, unconfirmed)
 
 The addendum's reading of the promotional image: a yellow *main* handle and a
-white *secondary* handle per graph. voXY has no access to the app, so this
-mapping is **provisional: it has not been checked against Alight Motion**, and
-the handle tooltips say so while `HANDLE_MAPPING_PROVISIONAL` is `true`. All
+white *secondary* handle per graph. Nothing has confirmed this mapping, so it
+is **provisional and may change**, and the handle tooltips say so while `HANDLE_MAPPING_PROVISIONAL` is `true`. All
 of it lives in one function, `handle_layout` in
 `crates/voxy-ui/src/ease_params.rs`; changing the mapping means editing that
 function and this table, nothing else.
@@ -285,7 +285,12 @@ edge, secondary handles just below the baseline, the ramp handle on the right
 edge). Every parameter also has a numeric field and a tooltip, and the curve
 is redrawn live while a handle or field is dragged. A handle drag is one undo
 step (one history transaction re-derived from the drag's starting easing on
-every frame); field edits merge through `SetEasing`'s merge key. Parameters
+every frame); field edits merge through `SetEasing`'s merge key. While a
+handle is dragged the values it is setting are drawn beside it (egui hides
+tooltips during drags), and hovering shows them too; **double-clicking a handle
+resets the parameters it drives** to the type's defaults, and a **Reset** button
+beside the type selector resets them all. In "My easings", Enter saves the
+named preset. Parameters
 are clamped to the ranges above, so `f(0) = 0` and `f(1) = 1` cannot be
 broken (tested for every handle position).
 
@@ -295,8 +300,7 @@ broken (tested for every handle position).
   tooltip saying so. Beside it the editor shows a read-only **"Peak
   overshoot"** percentage: how far the first swing goes past the target,
   `SpringParams::peak_overshoot()`. It is a result of the three parameters,
-  not a fourth one. If Alight Motion's overshoot knob turns out to mean peak
-  height, the parameterization will be revisited.
+  not a fourth one.
 - Bounce `restitution` is labelled **"Bounciness"** (higher = longer-lasting
   bounces).
 - Steps and stepped ramp offer four jump positions. **"No end jumps (extra)"**
