@@ -7,7 +7,7 @@ CI fails if this file is stale. The policy that every license must satisfy is in
 The list covers every target platform, so it includes crates that are only
 compiled on Windows, macOS or Linux.
 
-381 crates.
+384 crates.
 
 ## By license
 
@@ -16,7 +16,7 @@ compiled on Windows, macOS or Linux.
 | `(MIT OR Apache-2.0) AND OFL-1.1 AND Ubuntu-font-1.0` | 1 |
 | `(MIT OR Apache-2.0) AND Unicode-3.0` | 1 |
 | `0BSD OR MIT OR Apache-2.0` | 1 |
-| `Apache-2.0` | 12 |
+| `Apache-2.0` | 13 |
 | `Apache-2.0 AND MIT` | 1 |
 | `Apache-2.0 OR GPL-2.0-only` | 1 |
 | `Apache-2.0 OR MIT` | 46 |
@@ -26,8 +26,8 @@ compiled on Windows, macOS or Linux.
 | `BSD-3-Clause OR MIT OR Apache-2.0` | 2 |
 | `BSL-1.0` | 2 |
 | `ISC` | 1 |
-| `MIT` | 87 |
-| `MIT OR Apache-2.0` | 194 |
+| `MIT` | 88 |
+| `MIT OR Apache-2.0` | 195 |
 | `MIT OR Apache-2.0 OR LGPL-2.1-or-later` | 1 |
 | `MIT OR Apache-2.0 OR Zlib` | 6 |
 | `MIT OR Zlib OR Apache-2.0` | 1 |
@@ -327,6 +327,7 @@ compiled on Windows, macOS or Linux.
 | [`tracing-log`](https://github.com/tokio-rs/tracing) | 0.2.0 | `MIT` |
 | [`tracing-subscriber`](https://github.com/tokio-rs/tracing) | 0.3.23 | `MIT` |
 | [`type-map`](https://github.com/kardeiz/type-map) | 0.5.1 | `MIT OR Apache-2.0` |
+| [`typed-path`](https://github.com/chipsenkbeil/typed-path) | 0.12.3 | `MIT OR Apache-2.0` |
 | [`uds_windows`](https://github.com/haraldh/rust_uds_windows) | 1.2.1 | `MIT` |
 | [`unarray`](https://github.com/cameron1024/unarray) | 0.1.4 | `MIT OR Apache-2.0` |
 | [`unicode-general-category`](https://github.com/yeslogic/unicode-general-category) | 1.1.0 | `Apache-2.0` |
@@ -413,8 +414,10 @@ compiled on Windows, macOS or Linux.
 | [`zcheapstr`](https://github.com/z-galaxy/zcheapstr/) | 1.1.0 | `MIT` |
 | [`zerocopy`](https://github.com/google/zerocopy) | 0.8.62 | `BSD-2-Clause OR Apache-2.0 OR MIT` |
 | [`zerocopy-derive`](https://github.com/google/zerocopy) | 0.8.62 | `BSD-2-Clause OR Apache-2.0 OR MIT` |
+| [`zip`](https://github.com/zip-rs/zip2) | 9.0.0 | `MIT` |
 | [`zlib-rs`](https://github.com/trifectatechfoundation/zlib-rs) | 0.6.8 | `Zlib` |
 | [`zmij`](https://github.com/dtolnay/zmij) | 1.0.23 | `MIT` |
+| [`zopfli`](https://github.com/zopfli-rs/zopfli) | 0.8.3 | `Apache-2.0` |
 | [`zune-core`](https://github.com/etemesi254/zune-image) | 0.5.3 | `MIT OR Apache-2.0 OR Zlib` |
 | [`zune-jpeg`](https://github.com/etemesi254/zune-image/tree/dev/crates/zune-jpeg) | 0.5.15 | `MIT OR Apache-2.0 OR Zlib` |
 | [`zvariant`](https://github.com/z-galaxy/zbus/) | 5.15.0 | `MIT` |

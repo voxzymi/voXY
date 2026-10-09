@@ -97,6 +97,14 @@ when loaded and saved. See [`docs/voxy-format.md`](docs/voxy-format.md).
 - golden-image tests for the renderer, run headless on lavapipe in CI;
 - CI on Windows, Linux, and macOS (both arm64 and x64).
 
+**Alight Motion interoperability (groundwork):**
+- a lossless XML tree and zip/bare-file container: unedited files write back
+  byte-for-byte;
+- sample tooling: `cargo xtask am-inspect` and `cargo xtask am-diff`.
+
+Parsing Alight Motion's actual format waits for real sample files; see
+[`docs/am-format.md`](docs/am-format.md) for the requested batch.
+
 ## Building
 
 You need a Rust **stable** toolchain, 1.97 or newer, from <https://rustup.rs>.

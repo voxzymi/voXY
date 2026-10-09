@@ -88,6 +88,13 @@ impl Attribute {
     pub fn raw_value(&self) -> &str {
         &self.raw_value
     }
+
+    /// The unescaped value, or the raw text if it contains an invalid
+    /// reference. For reporting, where showing *something* beats failing.
+    pub fn value_lossy(&self) -> String {
+        self.value()
+            .map_or_else(|_| self.raw_value.clone(), std::borrow::Cow::into_owned)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

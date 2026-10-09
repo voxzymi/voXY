@@ -1,0 +1,34 @@
+[package]
+name = "voxy-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+voxy-am-compat = { path = "../crates/voxy-am-compat" }
+voxy-core = { path = "../crates/voxy-core" }
+
+[[bin]]
+name = "am_xml"
+path = "fuzz_targets/am_xml.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "am_container"
+path = "fuzz_targets/am_container.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "voxy_project"
+path = "fuzz_targets/voxy_project.rs"
+test = false
+doc = false
+bench = false
