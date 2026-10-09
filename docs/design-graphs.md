@@ -1,8 +1,10 @@
 # Design: advanced parametric graphs
 
-**Status: Milestones H-A (data model, evaluators, format, tests) and H-B
-(inspector, handles, numeric fields, live preview, thumbnails) implemented.**
-H-C and H-D are described here but not built.
+**Status: Milestones H-A (data model, evaluators, format, tests), H-B
+(inspector, handles, numeric fields, live preview, thumbnails) and H-C
+(step jumps in the value/speed graph, user presets, copy/paste, apply to many,
+actions) implemented.** H-D (Alight Motion import and export) is described
+here but not built.
 
 This file is the specification the code in `crates/voxy-core/src/shapes.rs`
 implements. Where this file and the code disagree, that is a bug in one of
@@ -324,6 +326,53 @@ continuous parts (0 on step plateaus, `ramp` on ramp plateaus).
   bit-for-bit, so a "jump at start" staircase shows the left key's value at
   that single instant and the first step from the next instant on.
 
+### 5.1 Step jumps in the value and speed graphs (implemented)
+
+`graph_editor::jump_windows` finds each jump (`KeyframeTrack::segment_jumps`)
+and brackets it with two flick-level samples a couple of flicks apart, so the
+plateaus end exactly where they do. A test checks, for every jump mode and a
+range of counts, that the value really steps by the jump's height across its
+window and is flat on both sides.
+
+- **Value graph:** the curve is drawn as separate runs, never joined across a
+  jump; a thin dashed connector bridges each jump, with a hover tooltip giving
+  the change per component (`Step jump: +45°`).
+- **Speed graph:** samples within a quarter frame of a jump are left out (a
+  central difference across a jump is a meaningless spike) and the vertical
+  scale ignores them. Each jump gets an **∞** marker and a faint vertical line
+  instead of a curve; plateaus show their real speed (0 on steps, `ramp × Δ`
+  on a stepped ramp), and a caption explains the symbol. The speed strip in
+  the ease inspector marks jumps the same way.
+
+### 5.2 Copy, paste, presets and apply to many (implemented)
+
+- **`SegmentEase`** (`voxy-core`): an easing as a value, the left key's
+  `Interp` plus the two Bézier handles. It is what copy and paste carry and what
+  a preset stores. Handles are only written when the easing is Bézier, so
+  applying a spring never destroys a target segment's own curve.
+- **`ApplyEasing`** (command): writes one `SegmentEase` onto many segments,
+  across properties, **as one undo step**; the last key of a track starts no
+  segment and is skipped; it fails without changes for a missing key or invalid
+  parameters, or if there was nothing to write to.
+- **Which segments:** in the graph editor, presets, thumbnails and Paste apply
+  to *all selected segments* if the inspected segment is part of a selection of
+  more than one, and to just that segment otherwise; the panel says so. "Apply
+  to N" gives all selected segments the inspected segment's easing.
+- **Copy** keeps the easing on an in-session clipboard and also puts its JSON on
+  the system clipboard (for bug reports). Pasting reads the in-session
+  clipboard only.
+- **User presets** ("My easings" in the inspector) are saved by name in the
+  per-user preferences file (`easing_presets`, TOML), not in the project:
+  embedding presets in projects is H-D. Names are trimmed and unique (saving
+  replaces); right-click deletes. An entry that does not parse (hand-edited, or
+  from a newer build with an easing this build does not know) is dropped on its
+  own and never costs the other presets or preferences.
+- **Actions** (rebindable in the shortcut editor, no default shortcuts):
+  `ease.copy`, `ease.paste`, `ease.apply_spring`, `ease.apply_bounce`,
+  `ease.apply_oscillation`, `ease.apply_steps`, `ease.apply_stepped_ramp`, in
+  the new **Keyframe** menu. They need a selected keyframe that starts a
+  segment and say why when they cannot run.
+
 ## 6. Remaining milestones
 
 - **H-B (done)** — segment inspector in the graph editor's ease panel: a type
@@ -336,11 +385,11 @@ continuous parts (0 on step plateaus, `ramp` on ramp plateaus).
   the easings themselves (original artwork). New undoable command
   `SetEasing`. Checked by running the app headlessly: a handle drag edits the
   easing live and leaves one "Edit Easing" undo step.
-- **H-C** — value/speed toggle with discontinuity markers (§5), copy/paste,
-  user presets, apply-to-many (one undo step), action-table entries (apply
-  spring, apply bounce, …). **The value/speed toggle, user presets and
-  curve copy/paste are G-C/G-D features that do not exist yet**, so H-C
-  includes building their minimum.
+- **H-C (done)** — scoped to what the five types need. The Value/Speed
+  toggle already existed (`GraphMode`, Milestone 2c); what was missing was
+  discontinuities, now handled (§5.1). User presets and copy/paste did not
+  exist and were built (§5.2). Full G-D (presets embedded in projects, Alight
+  Motion curve import and export) stays in H-D.
 - **H-D** — Alight Motion import and export, fidelity tests (SSIM/PSNR),
   polish. Blocked on samples; see `docs/am-format.md`.
 

@@ -24,7 +24,8 @@ use voxy_core::command::{
 };
 use voxy_core::glam::{DVec2, DVec3};
 use voxy_core::{
-    CubicEase, EaseHandle, EasePreset, Interp, PropId, Property, Time, Unit, Value, ValueKind,
+    CubicEase, EaseHandle, EasePreset, Interp, PropId, Property, SegmentEase, Time, Unit, Value,
+    ValueKind,
 };
 
 use crate::ease_params::{HandleRole, drag_handle, handle_layout, handle_position, handle_tooltip};
@@ -54,6 +55,8 @@ pub struct GraphView {
     pub prop: Option<PropId>,
     /// Height of the ease inspector's panel last frame (sizes its square).
     panel_height: f32,
+    /// The name being typed for "save as preset".
+    pub preset_name: String,
     drag: Option<GraphDrag>,
 }
 
@@ -94,6 +97,73 @@ enum GraphDrag {
         y_range: (f64, f64),
         last: Option<(f64, f64)>,
     },
+}
+
+/// Where a step easing jumps, in comp time, for drawing.
+///
+/// `before` and `after` are flick-level samples either side of the jump (a
+/// couple of flicks apart) so the plateau values can be read exactly; `at`
+/// is the ideal instant, where the speed marker goes. A jump at the left
+/// key (jump-start) is bracketed by the key itself and `t0 + 2`; one at the
+/// right key (jump-end) by `t1 − 1` and the key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct JumpWindow {
+    pub before: Time,
+    pub after: Time,
+    pub at: Time,
+}
+
+/// The step jumps of every segment of `track` that starts at or before
+/// `end`, in time order.
+pub(crate) fn jump_windows(track: &voxy_core::KeyframeTrack, end: Time) -> Vec<JumpWindow> {
+    let keys = track.keys();
+    let mut out = Vec::new();
+    for i in 0..keys.len().saturating_sub(1) {
+        let (t0, t1) = (keys[i].time.0, keys[i + 1].time.0);
+        if t0 > end.0 {
+            break;
+        }
+        let span = (t1 - t0) as f64;
+        for jump in track.segment_jumps(i) {
+            let ideal = (t0 + (jump.at * span).round() as i64).clamp(t0, t1);
+            let (before, after) = match ideal {
+                t if t == t0 => (t0, (t0 + 2).min(t1)),
+                t if t == t1 => ((t1 - 1).max(t0), t1),
+                t => ((t - 1).max(t0), (t + 2).min(t1)),
+            };
+            out.push(JumpWindow {
+                before: Time(before),
+                after: Time(after),
+                at: Time(ideal),
+            });
+        }
+    }
+    out
+}
+
+/// The runs of consecutive points to draw as one polyline. A point with
+/// `valid[i] == false` is dropped and ends the run; `break_after[i]` ends the
+/// run after point `i` (the line is not continued across a jump).
+pub(crate) fn split_runs(valid: &[bool], break_after: &[bool]) -> Vec<std::ops::Range<usize>> {
+    let mut runs = Vec::new();
+    let mut start = None;
+    for (i, &ok) in valid.iter().enumerate() {
+        if !ok {
+            if let Some(s) = start.take() {
+                runs.push(s..i);
+            }
+            continue;
+        }
+        let s = *start.get_or_insert(i);
+        if break_after.get(i).copied().unwrap_or(false) {
+            runs.push(s..i + 1);
+            start = None;
+        }
+    }
+    if let Some(s) = start {
+        runs.push(s..valid.len());
+    }
+    runs
 }
 
 /// Number of graphable components of a property, if it can be graphed.
@@ -325,8 +395,29 @@ fn value_graph(
     let samples = (plot.width() / 2.0).max(8.0) as usize;
     // Central-difference step for speeds: a quarter frame.
     let h = Time((rate.frame_to_time(1).flicks() / 4).max(1));
-    let times: Vec<Time> = (0..=samples)
+    let mut times: Vec<Time> = (0..=samples)
         .map(|i| Time::from_secs_f64(duration * i as f64 / samples as f64))
+        .collect();
+    // Step jumps: sample either side of each one exactly, so the plateaus
+    // end where they do, and remember where to break the line.
+    let windows = jump_windows(track, Time::from_secs_f64(duration));
+    times.extend(windows.iter().flat_map(|w| [w.before, w.after]));
+    times.sort();
+    times.dedup();
+    // Speed is infinite at a jump: leave the samples around one out (a
+    // central difference across it is a meaningless spike) and mark it.
+    let valid: Vec<bool> = times
+        .iter()
+        .map(|&t| {
+            mode == GraphMode::Value
+                || !windows
+                    .iter()
+                    .any(|w| t + h >= w.before && t - h <= w.after)
+        })
+        .collect();
+    let break_after: Vec<bool> = times
+        .iter()
+        .map(|&t| windows.iter().any(|w| w.before == t))
         .collect();
     let series: Vec<Vec<f64>> = match mode {
         GraphMode::Value => (0..dim_count)
@@ -337,7 +428,13 @@ fn value_graph(
                     .collect()
             })
             .collect(),
-        GraphMode::Speed => vec![times.iter().map(|&t| speed_at(prop, t, h)).collect()],
+        GraphMode::Speed => vec![
+            times
+                .iter()
+                .zip(&valid)
+                .map(|(&t, &ok)| if ok { speed_at(prop, t, h) } else { 0.0 })
+                .collect(),
+        ],
     };
 
     let y_range = match &state.graph.drag {
@@ -348,9 +445,11 @@ fn value_graph(
             let mut lo = f64::INFINITY;
             let mut hi = f64::NEG_INFINITY;
             for s in &series {
-                for &x in s {
-                    lo = lo.min(x);
-                    hi = hi.max(x);
+                for (&x, &ok) in s.iter().zip(&valid) {
+                    if ok {
+                        lo = lo.min(x);
+                        hi = hi.max(x);
+                    }
                 }
             }
             if mode == GraphMode::Speed {
@@ -408,12 +507,83 @@ fn value_graph(
         } else {
             COMPONENT_COLORS[c]
         };
-        let pts: Vec<Pos2> = times
-            .iter()
-            .zip(s)
-            .map(|(t, &val)| pos2(x_of(t.as_secs_f64()), y_of(val)))
-            .collect();
-        painter.add(Shape::line(pts, Stroke::new(1.8, color)));
+        let point = |i: usize| pos2(x_of(times[i].as_secs_f64()), y_of(s[i]));
+        for run in split_runs(&valid, &break_after) {
+            if run.len() > 1 {
+                painter.add(Shape::line(
+                    run.map(point).collect(),
+                    Stroke::new(1.8, color),
+                ));
+            }
+        }
+        // A jump is not part of the curve: a thin dashed connector between
+        // the two plateaus.
+        if mode == GraphMode::Value {
+            for w in &windows {
+                if let (Ok(a), Ok(b)) = (
+                    times.binary_search(&w.before),
+                    times.binary_search(&w.after),
+                ) {
+                    painter.extend(Shape::dashed_line(
+                        &[point(a), point(b)],
+                        Stroke::new(1.0, color.gamma_multiply(0.5)),
+                        3.0,
+                        3.0,
+                    ));
+                    if c == 0 {
+                        let (from, to) = (
+                            components(&prop.value_at(w.before)),
+                            components(&prop.value_at(w.after)),
+                        );
+                        let change: Vec<String> = (0..dim_count)
+                            .filter(|&k| (to[k] - from[k]).abs() > 1e-9)
+                            .map(|k| {
+                                let delta = (to[k] - from[k]) * factor;
+                                let axis = if dim_count == 1 {
+                                    ""
+                                } else {
+                                    ["X ", "Y ", "Z "][k]
+                                };
+                                format!("{axis}{delta:+.2}{suffix}")
+                            })
+                            .collect();
+                        let hit = Rect::from_two_pos(point(a), point(b)).expand(5.0);
+                        ui.interact(
+                            hit,
+                            Id::new(("graph-jump", prop.id, w.at.0)),
+                            Sense::hover(),
+                        )
+                        .on_hover_text(format!("Step jump: {}", change.join(", ")));
+                    }
+                }
+            }
+        }
+    }
+    // Speed marks every jump with an infinity cap instead of a curve.
+    if mode == GraphMode::Speed {
+        for w in &windows {
+            let x = x_of(w.at.as_secs_f64());
+            painter.line_segment(
+                [pos2(x, plot.top() + 12.0), pos2(x, plot.bottom())],
+                Stroke::new(1.0, Color32::from_white_alpha(50)),
+            );
+            painter.text(
+                pos2(x, plot.top()),
+                Align2::CENTER_TOP,
+                "∞",
+                FontId::proportional(12.0),
+                ACCENT,
+            );
+        }
+        if !windows.is_empty() {
+            painter.text(
+                pos2(plot.right() - 4.0, plot.top() + 2.0),
+                Align2::RIGHT_TOP,
+                "∞ = step jump (speed is infinite)",
+                FontId::proportional(9.0),
+                label_color,
+            );
+        }
     }
 
     // Keyframes.
@@ -744,12 +914,136 @@ fn ease_editor(
             });
         }
     });
+    let targets = state.easing_targets(prop.id, k0.time);
+    let segments: usize = targets.iter().map(|(_, t)| t.len()).sum();
+    let current = SegmentEase {
+        interp: k0.interp,
+        ease_out: k0.ease_out,
+        ease_in: k1.ease_in,
+    };
     if let Some(interp) = ease_ui::preset_strip(ui, &k0.interp) {
-        state.execute(SetEasing {
-            prop: prop.id,
-            time: k0.time,
-            interp,
+        if segments > 1 {
+            state.apply_easing(targets.clone(), SegmentEase::new(interp));
+        } else {
+            state.execute(SetEasing {
+                prop: prop.id,
+                time: k0.time,
+                interp,
+            });
+        }
+    }
+    easing_clipboard_and_presets(ui, state, &targets, segments, current);
+}
+
+/// Copy, paste, apply-to-selection and the user's saved easings. Everything
+/// that writes goes through `ApplyEasing`, so applying to many segments is
+/// one undo step.
+fn easing_clipboard_and_presets(
+    ui: &mut Ui,
+    state: &mut EditorState,
+    targets: &[(PropId, Vec<Time>)],
+    segments: usize,
+    current: SegmentEase,
+) {
+    ui.horizontal_wrapped(|ui| {
+        if ui
+            .small_button("Copy")
+            .on_hover_text("Copy this segment's easing: its type, parameters and curve.")
+            .clicked()
+        {
+            state.copy_easing(current);
+        }
+        let paste = ui.add_enabled(
+            state.ease_clipboard.is_some(),
+            egui::Button::new("Paste").small(),
+        );
+        let paste = match state.ease_clipboard {
+            Some(clip) => paste.on_hover_text(format!(
+                "Paste the copied {} easing onto {}.",
+                clip.label(),
+                segment_count_text(segments)
+            )),
+            None => paste.on_disabled_hover_text("Copy an easing first."),
+        };
+        if paste.clicked()
+            && let Some(clip) = state.ease_clipboard
+        {
+            state.apply_easing(targets.to_vec(), clip);
+        }
+        if segments > 1
+            && ui
+                .small_button(format!("Apply to {segments}"))
+                .on_hover_text(format!(
+                    "Give all {segments} selected segments this segment's easing (one undo step)."
+                ))
+                .clicked()
+        {
+            state.apply_easing(targets.to_vec(), current);
+        }
+    });
+    if segments > 1 {
+        ui.label(
+            egui::RichText::new(format!(
+                "Presets and Paste apply to {segments} selected segments."
+            ))
+            .small()
+            .weak(),
+        );
+    }
+
+    egui::CollapsingHeader::new("My easings")
+        .default_open(!state.prefs.easing_presets.is_empty())
+        .show(ui, |ui| {
+            let saved = state.prefs.easing_presets.clone();
+            if saved.is_empty() {
+                ui.weak("Name the current easing below to keep it here.");
+            }
+            ui.horizontal_wrapped(|ui| {
+                for preset in &saved {
+                    let response = ui
+                        .small_button(&preset.name)
+                        .on_hover_text(format!(
+                            "{} — click to apply to {}. Right-click to delete.",
+                            preset.ease.label(),
+                            segment_count_text(segments)
+                        ));
+                    if response.clicked() {
+                        state.apply_easing(targets.to_vec(), preset.ease);
+                    }
+                    response.context_menu(|ui| {
+                        if ui.button("Delete").clicked() {
+                            state.prefs.remove_easing_preset(&preset.name);
+                            state.save_prefs();
+                            ui.close();
+                        }
+                    });
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut state.graph.preset_name)
+                        .hint_text("Name")
+                        .desired_width(110.0),
+                );
+                let name = state.graph.preset_name.trim().to_owned();
+                if ui
+                    .add_enabled(!name.is_empty(), egui::Button::new("Save").small())
+                    .on_hover_text("Save this segment's easing under that name (replaces one with the same name).")
+                    .clicked()
+                    && state.prefs.save_easing_preset(&name, current)
+                {
+                    state.save_prefs();
+                    state.graph.preset_name.clear();
+                }
+            });
         });
+}
+
+fn segment_count_text(segments: usize) -> String {
+    if segments == 1 {
+        "this segment".to_owned()
+    } else {
+        format!("{segments} segments")
     }
 }
 
@@ -938,6 +1232,99 @@ mod tests {
             let (u2, p2) = sq.unproject(sq.project(u, p));
             assert!((u - u2).abs() < 1e-5 && (p - p2).abs() < 1e-5);
         }
+    }
+
+    #[test]
+    fn runs_split_at_jumps_and_invalid_points() {
+        let t = true;
+        let f = false;
+        assert_eq!(split_runs(&[t; 4], &[f; 4]), vec![0..4]);
+        // A break after point 1: the line does not continue across it.
+        assert_eq!(split_runs(&[t; 4], &[f, t, f, f]), vec![0..2, 2..4]);
+        // Invalid points are dropped and end the run.
+        assert_eq!(split_runs(&[t, t, f, f, t], &[f; 5]), vec![0..2, 4..5]);
+        // A break on the last point and an empty input.
+        assert_eq!(split_runs(&[t; 3], &[f, f, t]), vec![0..3]);
+        assert_eq!(split_runs(&[], &[]).len(), 0);
+        assert_eq!(split_runs(&[f, f], &[f, f]).len(), 0);
+    }
+
+    fn two_key_scalar(interp: Interp, secs: i64, from: f64, to: f64) -> voxy_core::KeyframeTrack {
+        let mut a = voxy_core::Keyframe::new(Time::ZERO, Value::Scalar(from));
+        a.interp = interp;
+        voxy_core::KeyframeTrack::try_from(vec![
+            a,
+            voxy_core::Keyframe::new(Time::from_secs(secs), Value::Scalar(to)),
+        ])
+        .unwrap()
+    }
+
+    #[test]
+    fn jump_windows_bracket_every_step_jump() {
+        use voxy_core::{JumpMode, StepsParams};
+        let secs = 2;
+        for jump in JumpMode::ALL {
+            for count in [1u32, 2, 4, 7] {
+                let interp = Interp::Steps(StepsParams {
+                    count,
+                    jump,
+                    hold: 0.0,
+                });
+                let track = two_key_scalar(interp, secs, 10.0, 110.0);
+                let windows = jump_windows(&track, Time::from_secs(secs));
+                let jumps = track.segment_jumps(0);
+                assert_eq!(windows.len(), jumps.len(), "{jump:?} {count}");
+                let at = |t: Time| track.evaluate(t, false).as_scalar().unwrap();
+                for (w, j) in windows.iter().zip(&jumps) {
+                    assert!(w.before < w.after && w.before <= w.at && w.at <= w.after);
+                    assert!(w.after.0 - w.before.0 <= 3, "a window is a few flicks wide");
+                    // The value really steps by the jump's height across it.
+                    let step = at(w.after) - at(w.before);
+                    assert!(
+                        (step - j.height * 100.0).abs() < 1e-6,
+                        "{jump:?} {count}: {step} vs {}",
+                        j.height * 100.0
+                    );
+                    // And it is flat on both sides of the window.
+                    assert_eq!(at(w.before), at(Time(w.before.0 - 1).max(Time::ZERO)));
+                }
+                assert!(windows.windows(2).all(|p| p[0].at < p[1].at), "ascending");
+            }
+        }
+    }
+
+    #[test]
+    fn windows_sit_at_the_segment_ends_for_start_and_end_jumps() {
+        use voxy_core::{JumpMode, StepsParams};
+        let make = |jump| {
+            let interp = Interp::Steps(StepsParams {
+                count: 4,
+                jump,
+                hold: 0.0,
+            });
+            jump_windows(&two_key_scalar(interp, 2, 0.0, 1.0), Time::from_secs(2))
+        };
+        let start = make(JumpMode::Start);
+        assert_eq!((start[0].before, start[0].at), (Time::ZERO, Time::ZERO));
+        let end = make(JumpMode::End);
+        let last = end.last().unwrap();
+        assert_eq!(
+            (last.after, last.at),
+            (Time::from_secs(2), Time::from_secs(2))
+        );
+        // Legacy and continuous easings have none.
+        for interp in [Interp::Linear, Interp::Hold, Interp::Bezier] {
+            assert_eq!(
+                jump_windows(&two_key_scalar(interp, 2, 0.0, 1.0), Time::from_secs(2)).len(),
+                0
+            );
+        }
+        // Segments after `end` are not listed.
+        let interp = Interp::Steps(StepsParams::default());
+        assert_eq!(
+            jump_windows(&two_key_scalar(interp, 2, 0.0, 1.0), Time(-1)).len(),
+            0
+        );
     }
 
     #[test]

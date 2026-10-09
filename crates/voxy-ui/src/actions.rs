@@ -24,6 +24,9 @@ pub enum Requires {
     Layer,
     /// At least one selected item in the Project panel.
     ProjectSelection,
+    /// At least one selected keyframe that starts a segment (any keyframe
+    /// but the last of its property).
+    Keyframe,
 }
 
 /// Tooltip for an action that needs a composition.
@@ -54,6 +57,8 @@ pub struct ActionContext {
     pub has_comp: bool,
     pub has_layer: bool,
     pub project_selection: usize,
+    /// Selected keyframes that start a segment.
+    pub selected_segments: usize,
 }
 
 /// A command with a stable id, a label and default shortcuts.
@@ -86,6 +91,13 @@ pub enum Action {
     RevealSourceInProject,
     RevealInComposition,
     RevealInFileManager,
+    EaseCopy,
+    EasePaste,
+    EaseApplySpring,
+    EaseApplyBounce,
+    EaseApplyOscillation,
+    EaseApplySteps,
+    EaseApplySteppedRamp,
 }
 
 /// Static description of an [`Action`].
@@ -178,10 +190,17 @@ impl Action {
         Action::RevealSourceInProject,
         Action::RevealInComposition,
         Action::RevealInFileManager,
+        Action::EaseCopy,
+        Action::EasePaste,
+        Action::EaseApplySpring,
+        Action::EaseApplyBounce,
+        Action::EaseApplyOscillation,
+        Action::EaseApplySteps,
+        Action::EaseApplySteppedRamp,
     ];
 
     pub fn def(self) -> ActionDef {
-        use Requires::{Composition, Layer, Nothing, ProjectSelection};
+        use Requires::{Composition, Keyframe, Layer, Nothing, ProjectSelection};
         use Scope::{Editor, Global, Project};
         match self {
             // New Composition takes Ctrl/Cmd+N and New Project moves to
@@ -422,6 +441,31 @@ impl Action {
                 Global,
                 &[],
             ),
+            // Keyframe easing. No default shortcuts: they exist so the
+            // shortcut editor can bind them.
+            Action::EaseCopy => def("ease.copy", "Copy Easing", Keyframe, Editor, &[]),
+            Action::EasePaste => def("ease.paste", "Paste Easing", Keyframe, Editor, &[]),
+            Action::EaseApplySpring => {
+                def("ease.apply_spring", "Apply Spring", Keyframe, Editor, &[])
+            }
+            Action::EaseApplyBounce => {
+                def("ease.apply_bounce", "Apply Bounce", Keyframe, Editor, &[])
+            }
+            Action::EaseApplyOscillation => def(
+                "ease.apply_oscillation",
+                "Apply Oscillation",
+                Keyframe,
+                Editor,
+                &[],
+            ),
+            Action::EaseApplySteps => def("ease.apply_steps", "Apply Steps", Keyframe, Editor, &[]),
+            Action::EaseApplySteppedRamp => def(
+                "ease.apply_stepped_ramp",
+                "Apply Stepped Ramp",
+                Keyframe,
+                Editor,
+                &[],
+            ),
         }
     }
 
@@ -460,6 +504,10 @@ impl Action {
             Requires::Layer => Err("Select a layer first."),
             Requires::ProjectSelection if cx.project_selection > 0 => Ok(()),
             Requires::ProjectSelection => Err("Select an item in the Project panel first."),
+            Requires::Keyframe if cx.selected_segments > 0 => Ok(()),
+            Requires::Keyframe => {
+                Err("Select a keyframe that is followed by another keyframe first.")
+            }
         }
     }
 }

@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::color::LinearRgba;
 use crate::easing::{EaseHandle, EasePreset};
 use crate::id::PropId;
-use crate::keyframe::{Interp, Keyframe, KeyframeTrack, SpatialTangents, TrackError};
+use crate::keyframe::{Interp, Keyframe, KeyframeTrack, SegmentEase, SpatialTangents, TrackError};
 use crate::time::Time;
 use crate::value::{Value, ValueKind};
 
@@ -281,6 +281,31 @@ impl Property {
             k.interp = interp;
             Ok(())
         })
+    }
+
+    /// Writes `ease` onto the segments that start at `times`, atomically.
+    /// Keys that start no segment (the last key) are skipped. Returns how
+    /// many segments were written.
+    pub fn apply_easing(
+        &mut self,
+        times: &[Time],
+        ease: &SegmentEase,
+    ) -> Result<usize, PropertyError> {
+        let key = self.desc.key.clone();
+        let track = self.track_mut()?;
+        let mut next = track.clone();
+        let mut applied = 0;
+        for &t in times {
+            let wrote =
+                next.apply_segment_ease(t, ease)
+                    .map_err(|source| PropertyError::Track {
+                        key: key.clone(),
+                        source,
+                    })?;
+            applied += usize::from(wrote);
+        }
+        *track = next;
+        Ok(applied)
     }
 
     /// Sets a key's incoming and/or outgoing ease handle.

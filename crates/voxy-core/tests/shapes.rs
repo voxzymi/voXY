@@ -632,3 +632,184 @@ fn set_easing_merges_into_one_undo_step() {
         .interp;
     assert_eq!(key, spring(4.0));
 }
+
+// ───────────────────── SegmentEase and ApplyEasing ─────────────────────
+
+mod apply {
+    use voxy_core::command::{AddKeyframe, AddSolidLayer, ApplyEasing, Command, SetProperty};
+    use voxy_core::{
+        CompSettings, Document, EaseHandle, History, Interp, InterpKind, JumpMode, LinearRgba,
+        PropId, SegmentEase, SpringParams, StepsParams, Time, Value,
+    };
+
+    /// A solid whose rotation and opacity each have three keys (0 s, 1 s,
+    /// 2 s), so each has two segments and a last key with none.
+    fn doc() -> (Document, PropId, PropId) {
+        let mut doc = Document::with_comp("T", CompSettings::default());
+        let comp = doc.main_comp.unwrap();
+        AddSolidLayer {
+            comp,
+            name: None,
+            color: LinearRgba::WHITE,
+            index: 0,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let t = &doc.main().unwrap().layers[0].transform;
+        let (rot, opa) = (t.rotation.id, t.opacity.id);
+        for prop in [rot, opa] {
+            AddKeyframe {
+                prop,
+                time: Time::ZERO,
+            }
+            .apply(&mut doc)
+            .unwrap();
+            for (s, v) in [(1, 0.5), (2, 1.0)] {
+                SetProperty {
+                    prop,
+                    time: Time::from_secs(s),
+                    value: Value::Scalar(v),
+                }
+                .apply(&mut doc)
+                .unwrap();
+            }
+        }
+        (doc, rot, opa)
+    }
+
+    fn track(d: &Document, prop: PropId) -> &voxy_core::KeyframeTrack {
+        let l = &d.main().unwrap().layers[0];
+        l.properties()
+            .into_iter()
+            .find(|p| p.id == prop)
+            .unwrap()
+            .track()
+            .unwrap()
+    }
+
+    fn secs(s: &[i64]) -> Vec<Time> {
+        s.iter().map(|&s| Time::from_secs(s)).collect()
+    }
+
+    #[test]
+    fn apply_to_many_is_one_undo_step_and_skips_last_keys() {
+        let (doc, rot, opa) = doc();
+        let mut h = History::new(doc);
+        let before = h.current().clone();
+        let steps = SegmentEase::new(Interp::Steps(StepsParams {
+            count: 6,
+            jump: JumpMode::Both,
+            hold: 0.0,
+        }));
+        // Segments 0 and 1 of rotation, segment 0 of opacity, plus the last
+        // key of opacity (no segment: skipped).
+        h.execute(ApplyEasing {
+            targets: vec![(rot, secs(&[0, 1])), (opa, secs(&[0, 2]))],
+            ease: steps,
+        })
+        .unwrap();
+        for (prop, i, expect) in [
+            (rot, 0, true),
+            (rot, 1, true),
+            (opa, 0, true),
+            (opa, 1, false),
+        ] {
+            let got = track(h.current(), prop).segment_ease(i).unwrap().interp == steps.interp;
+            assert_eq!(got, expect, "{prop:?} segment {i}");
+        }
+        assert_eq!(h.undo_label(), Some("Apply Steps to 4 Segments"));
+        assert!(h.undo());
+        assert_eq!(h.current(), &before, "one undo restores everything");
+        assert!(h.redo());
+    }
+
+    #[test]
+    fn bezier_handles_travel_only_with_bezier_easings() {
+        let (doc, rot, _) = doc();
+        let mut h = History::new(doc);
+        // Give segment 0 a custom Bézier curve, then copy it to segment 1.
+        let custom = SegmentEase {
+            interp: Interp::Bezier,
+            ease_out: EaseHandle::new(0.1, 0.9).unwrap(),
+            ease_in: EaseHandle::new(0.8, 0.2).unwrap(),
+        };
+        h.execute(ApplyEasing {
+            targets: vec![(rot, secs(&[0]))],
+            ease: custom,
+        })
+        .unwrap();
+        assert_eq!(track(h.current(), rot).segment_ease(0), Some(custom));
+        let copied = track(h.current(), rot).segment_ease(0).unwrap();
+        h.execute(ApplyEasing {
+            targets: vec![(rot, secs(&[1]))],
+            ease: copied,
+        })
+        .unwrap();
+        assert_eq!(track(h.current(), rot).segment_ease(1), Some(custom));
+
+        // Applying a spring to segment 0 leaves its Bézier handles in place,
+        // so switching back restores the curve.
+        let spring = SegmentEase::new(Interp::Spring(SpringParams::default()));
+        h.execute(ApplyEasing {
+            targets: vec![(rot, secs(&[0]))],
+            ease: spring,
+        })
+        .unwrap();
+        let now = track(h.current(), rot).segment_ease(0).unwrap();
+        assert_eq!(now.interp.kind(), InterpKind::Spring);
+        assert_eq!(
+            (now.ease_out, now.ease_in),
+            (custom.ease_out, custom.ease_in)
+        );
+    }
+
+    #[test]
+    fn invalid_or_empty_applications_change_nothing() {
+        let (doc, rot, opa) = doc();
+        let mut h = History::new(doc);
+        let before = h.current().clone();
+        let bad = SegmentEase::new(Interp::Spring(SpringParams {
+            frequency: 99.0,
+            ..Default::default()
+        }));
+        assert!(
+            h.execute(ApplyEasing {
+                targets: vec![(rot, secs(&[0]))],
+                ease: bad
+            })
+            .is_err()
+        );
+        let ok = SegmentEase::new(Interp::Linear);
+        // Only last keys: nothing to write.
+        assert!(
+            h.execute(ApplyEasing {
+                targets: vec![(rot, secs(&[2]))],
+                ease: ok
+            })
+            .is_err()
+        );
+        // A missing key fails the whole command, even after valid targets.
+        assert!(
+            h.execute(ApplyEasing {
+                targets: vec![(rot, secs(&[0])), (opa, secs(&[7]))],
+                ease: SegmentEase::new(Interp::Hold),
+            })
+            .is_err()
+        );
+        assert_eq!(h.current(), &before);
+    }
+
+    #[test]
+    fn segment_ease_serializes_with_default_handles() {
+        let e = SegmentEase::new(Interp::Bounce(voxy_core::BounceParams::default()));
+        let json = serde_json::to_string(&e).unwrap();
+        assert_eq!(serde_json::from_str::<SegmentEase>(&json).unwrap(), e);
+        // Handles may be omitted (hand-written presets).
+        let minimal: SegmentEase = serde_json::from_str(r#"{"interp":"hold"}"#).unwrap();
+        assert_eq!(minimal, SegmentEase::new(Interp::Hold));
+        assert!(
+            serde_json::from_str::<SegmentEase>(r#"{"interp":{"spring":{"damping":999.0}}}"#)
+                .is_err()
+        );
+    }
+}
