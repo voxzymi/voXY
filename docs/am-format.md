@@ -1,5 +1,14 @@
 # Alight Motion format notes (living document)
 
+> **ON HOLD BY DECISION.** Alight Motion compatibility is not being worked on:
+> the project owner dropped it (no import, no export, no easing-graph
+> mapping, no second sample batch, no fidelity tests against reference
+> renders). **Do not pick it up by accident.** Nothing here is deleted so the
+> work can resume if the decision changes: the `voxy-am-compat` crate (lossless
+> container, inspection, inventory and diff tooling), this document and the
+> sample requests below all stay as they are. The sample requests are
+> **withdrawn**: nothing is being waited for. Only the owner can lift the hold.
+
 **Status: no samples received yet. Nothing below is known about the format.**
 
 This document records what voXY learns about Alight Motion's project
@@ -105,7 +114,8 @@ only way to export a type, the export report will say so explicitly.
 
 **Requested sample batch for these graphs (second batch, "H" files).** One
 export pass, in this order, so every file differs from its neighbor in exactly
-one thing. Do not start Alight Motion import or export work until these arrive.
+one thing. **(Withdrawn: Alight Motion compatibility is on hold by decision, see
+the note at the top. Kept for reference only; nothing is waiting on these.)**
 
 ### The one scene every file uses
 

@@ -3,8 +3,9 @@
 **Status: Milestones H-A (data model, evaluators, format, tests), H-B
 (inspector, handles, numeric fields, live preview, thumbnails) and H-C
 (step jumps in the value/speed graph, user presets, copy/paste, apply to many,
-actions) implemented.** H-D (Alight Motion import and export) is described
-here but not built.
+actions) implemented.** H-D (Alight Motion import and export) is **cancelled /
+on hold by the owner's decision** (see `docs/am-format.md`); nothing in it is
+being built.
 
 This file is the specification the code in `crates/voxy-core/src/shapes.rs`
 implements. Where this file and the code disagree, that is a bug in one of
@@ -394,13 +395,14 @@ window and is flat on both sides.
 - **H-C (done)** — scoped to what the five types need. The Value/Speed
   toggle already existed (`GraphMode`, Milestone 2c); what was missing was
   discontinuities, now handled (§5.1). User presets and copy/paste did not
-  exist and were built (§5.2). Full G-D (presets embedded in projects, Alight
-  Motion curve import and export) stays in H-D.
-- **H-D** — Alight Motion import and export, fidelity tests (SSIM/PSNR),
-  polish. Blocked on samples; see `docs/am-format.md`.
+  exist and were built (§5.2). Presets embedded in projects are not built
+  (they would change the file format, so they wait for the owner's decision).
+- **H-D (cancelled / on hold)** — Alight Motion import and export, fidelity
+  tests (SSIM/PSNR). Dropped by the owner; the `voxy-am-compat` crate and
+  `docs/am-format.md` are kept untouched in case that changes.
 
 Golden-image tests exist (`crates/voxy-render/tests/golden.rs`,
 `parametric_easings_render_as_pinned`): a square sliding and turning under
 each easing, five instants per easing, one reference PNG each in
 `tests/golden/render/easing_*.png`, plus a check that frames render
-identically twice. Not yet done: the Alight Motion import fuzz target (H-D).
+identically twice.
