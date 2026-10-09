@@ -2,6 +2,7 @@
 //! panels (`egui_dock`), menus, shortcuts and a GPU viewport.
 
 mod app;
+mod graph_editor;
 mod panels;
 mod state;
 mod theme;

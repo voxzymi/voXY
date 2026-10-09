@@ -20,6 +20,7 @@ pub struct EditorState {
     pub time: Time,
     pub status: Option<Status>,
     pub timeline: crate::timeline::TimelineView,
+    pub graph: crate::graph_editor::GraphView,
 }
 
 impl EditorState {
@@ -31,6 +32,7 @@ impl EditorState {
             time: Time::ZERO,
             status: None,
             timeline: crate::timeline::TimelineView::default(),
+            graph: crate::graph_editor::GraphView::default(),
         }
     }
 

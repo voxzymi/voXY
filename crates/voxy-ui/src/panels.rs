@@ -21,6 +21,7 @@ use crate::viewport::ViewportRenderer;
 pub enum Tab {
     Viewport,
     Timeline,
+    Graph,
     Properties,
     Media,
 }
@@ -30,6 +31,7 @@ impl Tab {
         match self {
             Tab::Viewport => "Viewport",
             Tab::Timeline => "Timeline",
+            Tab::Graph => "Graph Editor",
             Tab::Properties => "Properties",
             Tab::Media => "Media",
         }
@@ -42,7 +44,8 @@ pub fn default_layout() -> egui_dock::DockState<Tab> {
     use egui_dock::NodeIndex;
     let mut dock = egui_dock::DockState::new(vec![Tab::Viewport]);
     let tree = dock.main_surface_mut();
-    let [top, _timeline] = tree.split_below(NodeIndex::root(), 0.68, vec![Tab::Timeline]);
+    let [top, _timeline] =
+        tree.split_below(NodeIndex::root(), 0.68, vec![Tab::Timeline, Tab::Graph]);
     let [center, _properties] = tree.split_right(top, 0.76, vec![Tab::Properties]);
     let [_media, _viewport] = tree.split_left(center, 0.22, vec![Tab::Media]);
     dock
@@ -74,6 +77,7 @@ impl TabViewer for Panels<'_> {
         match tab {
             Tab::Viewport => self.viewport_ui(ui),
             Tab::Timeline => self.timeline_ui(ui),
+            Tab::Graph => crate::graph_editor::show(ui, self.state),
             Tab::Properties => self.properties_ui(ui),
             Tab::Media => self.media_ui(ui),
         }

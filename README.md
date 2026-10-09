@@ -11,12 +11,13 @@ macOS, written in Rust.
 
 voXY is an original product. Its name, artwork, icons and theme are its own.
 
-> **Status: Milestone 2b (in progress).** Milestone 1 is complete: the project model,
+> **Status: Milestone 2c.** Milestone 1 is complete: the project model,
 > undo/redo, `.voxy` save/load, the GPU compositor and the application
 > shell. Milestone 2a adds the keyframe and interpolation model: hold,
 > linear and cubic-bezier timing with ease presets, plus arc-length
-> ("speed-aware") motion paths. Milestone 2b adds the timeline panel; the
-> graph editor and on-canvas motion-path handles come next. See [`docs/design-proposal.md`](docs/design-proposal.md) for
+> ("speed-aware") motion paths. Milestone 2b adds the timeline panel and
+> 2c the graph editor; on-canvas motion paths and transform gizmos come
+> next. See [`docs/design-proposal.md`](docs/design-proposal.md) for
 > the plan.
 
 ## What works today
@@ -55,6 +56,18 @@ voXY is an original product. Its name, artwork, icons and theme are its own.
 
   Every drag is one undo step. Keyframes cannot be dragged onto each other
   or before time 0.
+- The Graph Editor panel (Milestone 2c), a tab next to Timeline:
+  - **value or speed graph** of the selected layer's animated properties,
+    one curve per component (X red, Y green, Z blue). In value mode, drag a
+    keyframe in time (snapped to frames) and in value. Speed mode shows the
+    rate of change, which for position is the speed along the motion path;
+  - **ease curve** of the selected segment as a normalized cubic-bezier
+    with two draggable handles (overshoot allowed), its `cubic-bezier(...)`
+    readout, a speed preview and preset buttons. Dragging a handle on a
+    linear segment turns it into a Bézier segment.
+
+  The segment edited is the one starting at the selected keyframe, or the
+  one under the playhead.
 - A prompt before discarding unsaved changes.
 
 **Undo/redo for every edit.** Each edit records a document snapshot, and
