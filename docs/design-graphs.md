@@ -1,7 +1,8 @@
 # Design: advanced parametric graphs
 
-**Status: Milestone H-A implemented (data model, evaluators, format, tests).**
-H-B to H-D are described here but not built.
+**Status: Milestones H-A (data model, evaluators, format, tests) and H-B
+(inspector, handles, numeric fields, live preview, thumbnails) implemented.**
+H-C and H-D are described here but not built.
 
 This file is the specification the code in `crates/voxy-core/src/shapes.rs`
 implements. Where this file and the code disagree, that is a bug in one of
@@ -242,11 +243,15 @@ Each plateau climbs with slope `ramp`; each jump has height
   ordinary undoable command; consecutive parameter edits from a handle drag
   will use the same merge mechanism as `SetEase` (H-B).
 
-## 4. Handles (H-B; proposed, unconfirmed)
+## 4. Handles (H-B; **provisional**, unconfirmed)
 
 The addendum's reading of the promotional image: a yellow *main* handle and a
 white *secondary* handle per graph. voXY has no access to the app, so this
-mapping is **a proposal, to be confirmed or replaced before H-B is built**:
+mapping is **provisional: it has not been checked against Alight Motion**, and
+the handle tooltips say so while `HANDLE_MAPPING_PROVISIONAL` is `true`. All
+of it lives in one function, `handle_layout` in
+`crates/voxy-ui/src/ease_params.rs`; changing the mapping means editing that
+function and this table, nothing else.
 
 | Type | Main handle (yellow) | Secondary handle (white) |
 |---|---|---|
@@ -256,9 +261,30 @@ mapping is **a proposal, to be confirmed or replaced before H-B is built**:
 | Steps | x → count (snaps) | x → hold |
 | Stepped ramp | x → count (snaps) | y → ramp |
 
-Every parameter also gets a numeric field, a live preview of the whole curve
-while dragging, and a tooltip. Drags merge into one undo step; parameters are
-clamped to the ranges above so `f(0) = 0` and `f(1) = 1` cannot be broken.
+Handles live in the graph's unit square: a mapped axis follows its parameter
+over the parameter's whole range (damping on a log scale, counts snap to whole
+numbers); an unmapped axis rests at a fixed place (main handles on the top
+edge, secondary handles just below the baseline, the ramp handle on the right
+edge). Every parameter also has a numeric field and a tooltip, and the curve
+is redrawn live while a handle or field is dragged. A handle drag is one undo
+step (one history transaction re-derived from the drag's starting easing on
+every frame); field edits merge through `SetEasing`'s merge key. Parameters
+are clamped to the ranges above, so `f(0) = 0` and `f(1) = 1` cannot be
+broken (tested for every handle position).
+
+**UI wording.** Labels follow what the parameters do, not just their names:
+
+- Spring `overshoot` is labelled **"Overshoot (launch energy)"**, with a
+  tooltip saying so. Beside it the editor shows a read-only **"Peak
+  overshoot"** percentage: how far the first swing goes past the target,
+  `SpringParams::peak_overshoot()`. It is a result of the three parameters,
+  not a fourth one. If Alight Motion's overshoot knob turns out to mean peak
+  height, the parameterization will be revisited.
+- Bounce `restitution` is labelled **"Bounciness"** (higher = longer-lasting
+  bounces).
+- Steps and stepped ramp offer four jump positions. **"No end jumps (extra)"**
+  (CSS `jump-none`) is an addition beyond the five graph types and is marked as
+  such in the selector and its tooltip.
 
 ## 5. Discontinuities and display rules
 
@@ -292,11 +318,16 @@ continuous parts (0 on step plateaus, `ramp` on ramp plateaus).
 
 ## 6. Remaining milestones
 
-- **H-B** — segment inspector with a type selector and numeric fields,
-  handles, live preview, preset-strip thumbnails (original artwork). Needs the
-  handle mapping in §4 confirmed. Switching type keeps compatible parameters:
-  Steps ↔ Stepped ramp share `count` and `jump`; Spring ↔ Oscillation map
-  `frequency ↔ cycles` and `damping ↔ decay`.
+- **H-B (done)** — segment inspector in the graph editor's ease panel: a type
+  selector (`Interp::convert_to` keeps compatible parameters: Steps ↔ Stepped
+  ramp share `count` and `jump`; Spring ↔ Oscillation map `frequency ↔
+  cycles` and `damping ↔ decay`, clamped), numeric fields driven by one table
+  (`ease_params::desc`, ranges taken from `voxy-core`), the two handles (§4,
+  provisional), live preview, a speed strip that marks step jumps with ∞
+  instead of drawing through them, and a strip of five thumbnails drawn from
+  the easings themselves (original artwork). New undoable command
+  `SetEasing`. Checked by running the app headlessly: a handle drag edits the
+  easing live and leaves one "Edit Easing" undo step.
 - **H-C** — value/speed toggle with discontinuity markers (§5), copy/paste,
   user presets, apply-to-many (one undo step), action-table entries (apply
   spring, apply bounce, …). **The value/speed toggle, user presets and
@@ -305,6 +336,8 @@ continuous parts (0 on step plateaus, `ramp` on ramp plateaus).
 - **H-D** — Alight Motion import and export, fidelity tests (SSIM/PSNR),
   polish. Blocked on samples; see `docs/am-format.md`.
 
-Also not yet done: golden-image tests with animated properties under each
-type (they belong with H-C, when the types can be applied from the UI), and
-the Alight Motion import fuzz target (H-D).
+Golden-image tests exist (`crates/voxy-render/tests/golden.rs`,
+`parametric_easings_render_as_pinned`): a square sliding and turning under
+each easing, five instants per easing, one reference PNG each in
+`tests/golden/render/easing_*.png`, plus a check that frames render
+identically twice. Not yet done: the Alight Motion import fuzz target (H-D).

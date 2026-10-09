@@ -56,6 +56,60 @@ pub enum Interp {
     SteppedRamp(SteppedRampParams),
 }
 
+/// The kind of an [`Interp`], without its parameters: what a type selector
+/// chooses between.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum InterpKind {
+    Hold,
+    Linear,
+    Bezier,
+    Spring,
+    Bounce,
+    Oscillation,
+    Steps,
+    SteppedRamp,
+}
+
+impl InterpKind {
+    pub const ALL: [InterpKind; 8] = [
+        InterpKind::Linear,
+        InterpKind::Bezier,
+        InterpKind::Hold,
+        InterpKind::Spring,
+        InterpKind::Bounce,
+        InterpKind::Oscillation,
+        InterpKind::Steps,
+        InterpKind::SteppedRamp,
+    ];
+
+    /// The five parametric kinds.
+    pub const PARAMETRIC: [InterpKind; 5] = [
+        InterpKind::Spring,
+        InterpKind::Bounce,
+        InterpKind::Oscillation,
+        InterpKind::Steps,
+        InterpKind::SteppedRamp,
+    ];
+
+    pub fn label(self) -> &'static str {
+        self.default_interp().label()
+    }
+
+    /// The easing of this kind with default parameters.
+    pub fn default_interp(self) -> Interp {
+        match self {
+            InterpKind::Hold => Interp::Hold,
+            InterpKind::Linear => Interp::Linear,
+            InterpKind::Bezier => Interp::Bezier,
+            InterpKind::Spring => Interp::Spring(SpringParams::default()),
+            InterpKind::Bounce => Interp::Bounce(BounceParams::default()),
+            InterpKind::Oscillation => Interp::Oscillation(OscillationParams::default()),
+            InterpKind::Steps => Interp::Steps(StepsParams::default()),
+            InterpKind::SteppedRamp => Interp::SteppedRamp(SteppedRampParams::default()),
+        }
+    }
+}
+
 impl Serialize for Interp {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         Self::serialize(self, serializer)
@@ -81,6 +135,60 @@ impl Interp {
             Interp::Steps(StepsParams::default()),
             Interp::SteppedRamp(SteppedRampParams::default()),
         ]
+    }
+
+    pub fn kind(&self) -> InterpKind {
+        match self {
+            Interp::Hold => InterpKind::Hold,
+            Interp::Linear => InterpKind::Linear,
+            Interp::Bezier => InterpKind::Bezier,
+            Interp::Spring(_) => InterpKind::Spring,
+            Interp::Bounce(_) => InterpKind::Bounce,
+            Interp::Oscillation(_) => InterpKind::Oscillation,
+            Interp::Steps(_) => InterpKind::Steps,
+            Interp::SteppedRamp(_) => InterpKind::SteppedRamp,
+        }
+    }
+
+    /// Switches to another kind, carrying over the parameters that mean the
+    /// same thing in both and defaulting the rest:
+    ///
+    /// - Steps ↔ Stepped ramp: `count` and `jump`;
+    /// - Spring ↔ Oscillation: `frequency` ↔ `cycles` and `damping` ↔
+    ///   `decay` (clamped into the target's range).
+    ///
+    /// Everything else starts from the target's defaults. The result is
+    /// always valid.
+    #[must_use]
+    pub fn convert_to(self, kind: InterpKind) -> Interp {
+        if self.kind() == kind {
+            return self;
+        }
+        let target = kind.default_interp();
+        match (self, target) {
+            (Interp::Steps(s), Interp::SteppedRamp(r)) => Interp::SteppedRamp(SteppedRampParams {
+                count: s.count,
+                jump: s.jump,
+                ..r
+            }),
+            (Interp::SteppedRamp(r), Interp::Steps(s)) => Interp::Steps(StepsParams {
+                count: r.count,
+                jump: r.jump,
+                ..s
+            }),
+            (Interp::Spring(s), Interp::Oscillation(o)) => Interp::Oscillation(OscillationParams {
+                cycles: s.frequency,
+                decay: s.damping,
+                ..o
+            }),
+            (Interp::Oscillation(o), Interp::Spring(s)) => Interp::Spring(SpringParams {
+                frequency: o.cycles,
+                damping: o.decay,
+                ..s
+            }),
+            _ => target,
+        }
+        .sanitized()
     }
 
     /// Display name, also used in undo labels.

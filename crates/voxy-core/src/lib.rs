@@ -49,7 +49,7 @@ pub use evaluate::{
 };
 pub use history::{History, SharedDocument};
 pub use id::{AssetId, CompId, FolderId, LayerId, PropId};
-pub use keyframe::{Interp, Keyframe, KeyframeTrack, SpatialTangents, TrackError};
+pub use keyframe::{Interp, InterpKind, Keyframe, KeyframeTrack, SpatialTangents, TrackError};
 pub use layer::{
     BlendMode, ForeignData, Layer, LayerFlags, LayerKind, PlaceholderInfo, PlaceholderKind,
     SourceRef, Transform,

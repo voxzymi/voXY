@@ -481,3 +481,154 @@ fn every_easing_is_bit_identical_to_the_pinned_table() {
         panic!("easing output changed; first difference: {first:?}");
     }
 }
+
+// ───────────────────── type switching and SetEasing ─────────────────────
+
+#[test]
+fn switching_type_keeps_compatible_parameters() {
+    use voxy_core::InterpKind;
+
+    let steps = Interp::Steps(StepsParams {
+        count: 9,
+        jump: JumpMode::Both,
+        hold: 0.4,
+    });
+    assert_eq!(
+        steps.convert_to(InterpKind::SteppedRamp),
+        Interp::SteppedRamp(SteppedRampParams {
+            count: 9,
+            jump: JumpMode::Both,
+            ..Default::default()
+        })
+    );
+    let ramp = Interp::SteppedRamp(SteppedRampParams {
+        count: 6,
+        ramp: 0.9,
+        jump: JumpMode::Start,
+    });
+    assert_eq!(
+        ramp.convert_to(InterpKind::Steps),
+        Interp::Steps(StepsParams {
+            count: 6,
+            jump: JumpMode::Start,
+            ..Default::default()
+        })
+    );
+    // Spring <-> oscillation: frequency/cycles and damping/decay, clamped.
+    let spring = Interp::Spring(SpringParams {
+        frequency: 7.0,
+        damping: 20.0,
+        overshoot: 1.0,
+    });
+    let Interp::Oscillation(o) = spring.convert_to(InterpKind::Oscillation) else {
+        panic!()
+    };
+    assert_eq!(
+        (o.cycles, o.decay),
+        (7.0, 12.0),
+        "decay is clamped to its range"
+    );
+    let Interp::Spring(s) = Interp::Oscillation(OscillationParams {
+        cycles: 0.25,
+        decay: 0.0,
+        ..Default::default()
+    })
+    .convert_to(InterpKind::Spring) else {
+        panic!()
+    };
+    assert_eq!(
+        (s.frequency, s.damping),
+        (0.5, 1.0),
+        "clamped up into range"
+    );
+    // Same kind: untouched. Unrelated kinds: defaults. Always valid.
+    assert_eq!(spring.convert_to(InterpKind::Spring), spring);
+    assert_eq!(
+        spring.convert_to(InterpKind::Bounce),
+        Interp::Bounce(BounceParams::default())
+    );
+    for from in Interp::parametric_defaults() {
+        for kind in InterpKind::ALL {
+            let to = from.convert_to(kind);
+            assert_eq!(to.kind(), kind);
+            assert_eq!(to.validate(), Ok(()));
+        }
+    }
+}
+
+#[test]
+fn set_easing_merges_into_one_undo_step() {
+    use voxy_core::command::{AddKeyframe, AddSolidLayer, Command, SetEasing, SetProperty};
+    use voxy_core::{CompSettings, Document, History, LinearRgba};
+
+    let mut doc = Document::with_comp("T", CompSettings::default());
+    let comp = doc.main_comp.unwrap();
+    AddSolidLayer {
+        comp,
+        name: None,
+        color: LinearRgba::WHITE,
+        index: 0,
+    }
+    .apply(&mut doc)
+    .unwrap();
+    let prop = doc.main().unwrap().layers[0].transform.rotation.id;
+    for (t, v) in [(0, 0.0), (2, 90.0)] {
+        if t == 0 {
+            AddKeyframe {
+                prop,
+                time: Time::ZERO,
+            }
+            .apply(&mut doc)
+            .unwrap();
+        }
+        SetProperty {
+            prop,
+            time: Time::from_secs(t),
+            value: Value::Scalar(v),
+        }
+        .apply(&mut doc)
+        .unwrap();
+    }
+    let mut h = History::new(doc);
+    let before = h.current().clone();
+    let spring = |frequency| {
+        Interp::Spring(SpringParams {
+            frequency,
+            ..Default::default()
+        })
+    };
+    // A drag: many edits, one step.
+    for f in [1.0, 2.0, 3.0, 4.0] {
+        h.execute(SetEasing {
+            prop,
+            time: Time::ZERO,
+            interp: spring(f),
+        })
+        .unwrap();
+    }
+    h.end_interaction();
+    // An invalid edit is rejected and changes nothing.
+    assert!(
+        h.execute(SetEasing {
+            prop,
+            time: Time::ZERO,
+            interp: spring(99.0)
+        })
+        .is_err()
+    );
+    assert!(h.undo());
+    assert_eq!(
+        h.current(),
+        &before,
+        "one undo restores the document exactly"
+    );
+    assert!(h.redo());
+    let key = h.current().main().unwrap().layers[0]
+        .transform
+        .rotation
+        .track()
+        .unwrap()
+        .first()
+        .interp;
+    assert_eq!(key, spring(4.0));
+}

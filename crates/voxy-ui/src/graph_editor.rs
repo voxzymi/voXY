@@ -19,12 +19,16 @@
 use egui::{
     Align2, Color32, CursorIcon, FontId, Id, Pos2, Rect, Sense, Shape, Stroke, Ui, pos2, vec2,
 };
-use voxy_core::command::{ApplyEasePreset, MoveKeyframes, SetEase, SetInterpolation, SetProperty};
+use voxy_core::command::{
+    ApplyEasePreset, MoveKeyframes, SetEase, SetEasing, SetInterpolation, SetProperty,
+};
 use voxy_core::glam::{DVec2, DVec3};
 use voxy_core::{
     CubicEase, EaseHandle, EasePreset, Interp, PropId, Property, Time, Unit, Value, ValueKind,
 };
 
+use crate::ease_params::{HandleRole, drag_handle, handle_layout, handle_position, handle_tooltip};
+use crate::ease_ui;
 use crate::state::EditorState;
 use crate::theme::ACCENT;
 
@@ -48,6 +52,8 @@ pub struct GraphView {
     pub mode: GraphMode,
     /// The property shown, if the user picked one.
     pub prop: Option<PropId>,
+    /// Height of the ease inspector's panel last frame (sizes its square).
+    panel_height: f32,
     drag: Option<GraphDrag>,
 }
 
@@ -72,6 +78,18 @@ enum GraphDrag {
         /// The opposite handle as shown when the drag began; written back
         /// so converting a linear segment keeps that side unchanged.
         other: EaseHandle,
+        square: Rect,
+        y_range: (f64, f64),
+        last: Option<(f64, f64)>,
+    },
+    /// A handle of a parametric easing; `handle` indexes
+    /// [`handle_layout`] for the easing's kind.
+    Param {
+        prop: PropId,
+        t0: Time,
+        handle: usize,
+        /// The easing when the drag began; every frame re-derives from it.
+        base: Interp,
         square: Rect,
         y_range: (f64, f64),
         last: Option<(f64, f64)>,
@@ -263,9 +281,15 @@ pub fn show(ui: &mut Ui, state: &mut EditorState) {
             vec2((avail.x - ease_w - 12.0).max(120.0), avail.y),
         );
         ui.separator();
+        state.graph.panel_height = avail.y;
         ui.vertical(|ui| {
             ui.set_width(ease_w);
-            ease_editor(ui, state, prop, selected_key, ease_w);
+            egui::ScrollArea::vertical()
+                .id_salt("ease-inspector")
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    ease_editor(ui, state, prop, selected_key, ease_w - 14.0);
+                });
         });
     });
 
@@ -525,13 +549,23 @@ fn ease_editor(
         ))
         .small(),
     );
+    ui.horizontal(|ui| {
+        ui.label("Type");
+        if let Some(kind) = ease_ui::type_selector(ui, ("ease-type", prop.id), &k0.interp) {
+            state.execute(SetEasing {
+                prop: prop.id,
+                time: k0.time,
+                interp: k0.interp.convert_to(kind),
+            });
+        }
+    });
 
     let (h1, h2) = match k0.interp {
         Interp::Bezier => (k0.ease_out, k1.ease_in),
         _ => (EaseHandle::LINEAR_OUT, EaseHandle::LINEAR_IN),
     };
     let y_range = match &state.graph.drag {
-        Some(GraphDrag::Handle { y_range, .. }) => *y_range,
+        Some(GraphDrag::Handle { y_range, .. } | GraphDrag::Param { y_range, .. }) => *y_range,
         _ if k0.interp.is_parametric() => {
             // Springs and oscillations leave 0..1: fit the sampled curve.
             let (mut lo, mut hi) = (0.0f64, 1.0f64);
@@ -544,8 +578,8 @@ fn ease_editor(
         }
         _ => ease_y_range(h1, h2),
     };
-    // Leave room below the square for the readout, speed strip and presets.
-    let height = (width * 0.9).min(ui.available_height() - 110.0).max(80.0);
+    // The inspector below the square scrolls, so the square keeps a fixed shape.
+    let height = (state.graph.panel_height * 0.5).min(width * 0.75).max(80.0);
     let (outer, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
     let rect = outer.shrink2(vec2(8.0, 6.0));
     let sq = EaseSquare { rect, y_range };
@@ -627,54 +661,69 @@ fn ease_editor(
         painter.circle_stroke(pos, 5.0, Stroke::new(1.5, ACCENT));
     }
 
-    ui.label(
-        egui::RichText::new(if parametric {
-            format!("{:?}", k0.interp)
-        } else {
-            format!(
+    // Handles of a parametric easing: yellow = main, white = secondary.
+    // (Which parameter each one drives is provisional; see `ease_params`.)
+    if parametric {
+        for (index, spec) in handle_layout(k0.interp.kind()).iter().enumerate() {
+            let (hu, hp) = handle_position(&k0.interp, spec);
+            let pos = sq.project(hu, hp);
+            let r = ui
+                .interact(
+                    Rect::from_center_size(pos, vec2(16.0, 16.0)),
+                    Id::new(("param-handle", prop.id, index)),
+                    Sense::drag(),
+                )
+                .on_hover_cursor(CursorIcon::Grab)
+                .on_hover_text(handle_tooltip(spec));
+            if r.drag_started() {
+                state.history.begin("Edit Easing");
+                state.graph.drag = Some(GraphDrag::Param {
+                    prop: prop.id,
+                    t0: k0.time,
+                    handle: index,
+                    base: k0.interp,
+                    square: rect,
+                    y_range,
+                    last: None,
+                });
+            }
+            let fill = match spec.role {
+                HandleRole::Main => Color32::from_rgb(240, 190, 80),
+                HandleRole::Secondary => Color32::WHITE,
+            };
+            let active = r.hovered() || r.dragged();
+            painter.circle_filled(pos, if active { 6.5 } else { 5.5 }, fill);
+            painter.circle_stroke(pos, 5.5, Stroke::new(1.5, Color32::from_black_alpha(190)));
+        }
+        if let Some(edited) = ease_ui::param_fields(ui, &k0.interp) {
+            state.execute(SetEasing {
+                prop: prop.id,
+                time: k0.time,
+                interp: edited,
+            });
+        }
+    } else {
+        ui.label(
+            egui::RichText::new(format!(
                 "cubic-bezier({}, {}, {}, {})",
                 trim_number(h1.x()),
                 trim_number(h1.y()),
                 trim_number(h2.x()),
                 trim_number(h2.y())
-            )
-        })
-        .monospace()
-        .small(),
-    );
+            ))
+            .monospace()
+            .small(),
+        );
+    }
 
     // Speed preview: d(progress)/du across the segment.
     if k0.interp == Interp::Bezier {
         let ease = CubicEase { p1: h1, p2: h2 };
-        let slopes: Vec<f64> = (0..=64)
-            .map(|i| ease.slope(f64::from(i) / 64.0).abs().min(20.0))
-            .collect();
-        let max = slopes.iter().copied().fold(1e-9, f64::max);
-        let (strip, _) = ui.allocate_exact_size(vec2(width, 34.0), Sense::hover());
-        let sp = ui.painter_at(strip);
-        sp.rect_filled(strip, 2.0, ui.visuals().extreme_bg_color);
-        let inner = strip.shrink(4.0);
-        let pts: Vec<Pos2> = slopes
-            .iter()
-            .enumerate()
-            .map(|(i, &s)| {
-                pos2(
-                    inner.left() + inner.width() * i as f32 / 64.0,
-                    inner.bottom() - (s / max) as f32 * inner.height(),
-                )
-            })
-            .collect();
-        sp.add(Shape::line(
-            pts,
-            Stroke::new(1.5, Color32::from_rgb(240, 190, 80)),
-        ));
-        sp.text(
-            inner.left_top(),
-            Align2::LEFT_TOP,
-            "speed",
-            FontId::proportional(9.0),
-            ui.visuals().weak_text_color(),
-        );
+        ease_ui::speed_strip(ui, width, |u| ease.slope(u), &[]);
+    } else if parametric {
+        let interp = k0.interp;
+        let jumps = interp.shape_jumps();
+        ease_ui::speed_strip(ui, width, |u| interp.shape_slope(u).unwrap_or(0.0), &jumps);
     }
 
     ui.horizontal_wrapped(|ui| {
@@ -695,6 +744,13 @@ fn ease_editor(
             });
         }
     });
+    if let Some(interp) = ease_ui::preset_strip(ui, &k0.interp) {
+        state.execute(SetEasing {
+            prop: prop.id,
+            time: k0.time,
+            interp,
+        });
+    }
 }
 
 fn drive_drag(ui: &Ui, state: &mut EditorState, rate: voxy_core::FrameRate) {
@@ -802,6 +858,41 @@ fn drive_drag(ui: &Ui, state: &mut EditorState, rate: voxy_core::FrameRate) {
                         square,
                         y_range,
                         last: Some(handle),
+                    });
+                }
+            }
+            GraphDrag::Param {
+                prop,
+                t0,
+                handle,
+                base,
+                square,
+                y_range,
+                last,
+            } => {
+                let sq = EaseSquare {
+                    rect: square,
+                    y_range,
+                };
+                let target = sq.unproject(pos);
+                if Some(target) != last
+                    && let Some(spec) = handle_layout(base.kind()).get(handle)
+                {
+                    state.history.rollback();
+                    state.history.begin("Edit Easing");
+                    let _ = state.history.execute(SetEasing {
+                        prop,
+                        time: t0,
+                        interp: drag_handle(base, spec, target),
+                    });
+                    state.graph.drag = Some(GraphDrag::Param {
+                        prop,
+                        t0,
+                        handle,
+                        base,
+                        square,
+                        y_range,
+                        last: Some(target),
                     });
                 }
             }

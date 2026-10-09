@@ -7,6 +7,8 @@ mod comp_dialog;
 mod comp_draft;
 mod compat;
 mod dialogs;
+mod ease_params;
+mod ease_ui;
 mod graph_editor;
 mod media;
 mod menu;

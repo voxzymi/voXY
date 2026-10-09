@@ -551,6 +551,35 @@ impl Command for SetInterpolation {
     }
 }
 
+/// Replaces the easing of the segment leaving one key: a type change or a
+/// parameter edit from a field or handle. Consecutive edits of one property
+/// merge into one undo step until the interaction ends, so dragging a value
+/// field or a handle is a single step.
+#[derive(Debug, Clone)]
+pub struct SetEasing {
+    pub prop: PropId,
+    pub time: Time,
+    pub interp: Interp,
+}
+
+impl Command for SetEasing {
+    fn label(&self) -> Cow<'static, str> {
+        format!("Edit {} Easing", self.interp.label()).into()
+    }
+
+    fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
+        prop_mut(doc, self.prop)?.set_interp(&[self.time], self.interp)?;
+        Ok(())
+    }
+
+    fn merge_key(&self) -> Option<MergeKey> {
+        Some(MergeKey {
+            kind: "set-easing",
+            target: self.prop.raw(),
+        })
+    }
+}
+
 /// Edits one key's ease handles (graph-editor handle drags).
 #[derive(Debug, Clone)]
 pub struct SetEase {

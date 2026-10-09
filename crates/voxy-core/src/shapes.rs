@@ -176,6 +176,21 @@ impl SpringParams {
     }
 }
 
+impl SpringParams {
+    /// How far the first peak rises past the target, as a fraction of the
+    /// change (`0.25` = 25 % overshoot), found by sampling the curve. A
+    /// display aid for the editor: it is the result of the three parameters,
+    /// not a fourth one. Deterministic, like everything in this module.
+    pub fn peak_overshoot(self) -> f64 {
+        const SAMPLES: u32 = 2048;
+        let mut peak = 1.0f64;
+        for i in 1..SAMPLES {
+            peak = peak.max(self.progress(f64::from(i) / f64::from(SAMPLES)));
+        }
+        peak - 1.0
+    }
+}
+
 impl Default for SpringParams {
     fn default() -> Self {
         SpringParams {
@@ -928,6 +943,39 @@ mod tests {
         };
         assert!((kick.slope(0.0) - 8.0).abs() < 1e-12, "{}", kick.slope(0.0));
         assert!(kick.progress(peak_u * 0.8) > p.progress(peak_u * 0.8));
+    }
+
+    #[test]
+    fn peak_overshoot_matches_the_closed_form_and_the_curve() {
+        // Released from rest: e^(−aπ/ω), up to the end window, whose size is
+        // bounded by e^(−a)·√(1 + B²) (documented in design-graphs.md §2.1).
+        for (frequency, damping) in [(2.5, 7.0), (4.0, 10.0), (1.0, 5.0), (8.0, 20.0)] {
+            let p = SpringParams {
+                frequency,
+                damping,
+                overshoot: 0.0,
+            };
+            let expected = (-damping * PI / (TAU * frequency)).exp();
+            let b = damping / (TAU * frequency);
+            let window = (-damping).exp() * (1.0 + b * b).sqrt();
+            assert!(
+                (p.peak_overshoot() - expected).abs() < window + 1e-3,
+                "{p:?}: {} vs {expected}",
+                p.peak_overshoot()
+            );
+        }
+        // More launch energy, taller peak; never negative.
+        let calm = SpringParams {
+            frequency: 2.5,
+            damping: 24.0,
+            overshoot: 0.0,
+        };
+        let kicked = SpringParams {
+            overshoot: 2.0,
+            ..calm
+        };
+        assert!(calm.peak_overshoot() >= 0.0);
+        assert!(kicked.peak_overshoot() > calm.peak_overshoot());
     }
 
     // ── Bounce ──
