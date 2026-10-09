@@ -71,10 +71,18 @@ IEEE-754 operations, so it returns the same bits on every platform; `std`'s
 There is no fast-math, no FMA contraction (Rust does not fuse by default) and
 no SIMD reassociation. `tests/fixtures/shapes_golden.txt` pins the exact bits
 of ten parameterizations at 513 points each (value and speed). It was
-generated on Linux x86-64. The CI jobs on Windows, macOS arm64 and macOS x64
-run the same comparison against that file; **the cross-platform proof is only
-established once those jobs pass**, which has not happened yet for this
-change.
+generated on Linux x86-64.
+
+**Result (CI run 37980901457, commit `32f1c94`, debug builds):** the pinned
+table, `legacy_interp.txt` and the other `voxy-core` tests **passed on Windows
+x64, macOS arm64 and macOS x64**, and on Linux x64, so the evaluators are
+bit-identical on those four targets. A release build was also checked on
+Linux. Two limits on that claim: CI does not run release builds on the other
+platforms, and it covers only these targets and the Rust version CI used
+(1.99). The golden-*image* tests (`parametric_easings_render_as_pinned`) are a
+different matter: they need a GPU, which only the Linux job has (software
+Vulkan, required there), so on Windows and macOS they are skipped and prove
+nothing about rendering on those systems.
 `tests/fixtures/legacy_interp.txt` does the same for hold, linear, Bézier and
 spatial interpolation, and was generated **before** the new code was added, so
 passing it proves legacy projects evaluate bit-for-bit as before.
