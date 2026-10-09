@@ -11,6 +11,19 @@ publish = false
 [lints]
 workspace = true
 
+[features]
+default = ["ffmpeg"]
+# Video decode through FFmpeg (needs FFmpeg development libraries; see README).
+ffmpeg = ["dep:ffmpeg-next"]
+
 [dependencies]
+voxy-core.workspace = true
+ffmpeg-next = { workspace = true, optional = true }
 image.workspace = true
 thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+ffmpeg-next.workspace = true
+proptest.workspace = true
+tempfile.workspace = true

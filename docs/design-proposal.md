@@ -640,3 +640,31 @@ with the approved design.
 - **Editing an animated property** at the current time creates or updates
   the key there, as in common motion-design tools.
 - **Format 0.2.0** adds keyframed properties. 0.1.0 files load unchanged.
+
+## Implementation notes (Milestone 3a: video decode)
+
+- **Bindings.** `ffmpeg-next` 9, which supports FFmpeg 3.0 to 9.0 and links
+  dynamically. Behind the `ffmpeg` feature of `voxy-media`, on by default.
+- **Time.** Stream timestamps convert to flicks through `TimeBase`: exact
+  for every common time base, and round-tripping
+  (`floor(to_time(pts)) == pts`) for all of them, including the inexact
+  ones (1/15 360, µs). Times are measured from the stream's first frame.
+- **Seeking.** `frame_at(t)` returns the last frame whose real timestamp is
+  at or before `t`. Nearby targets decode forward; others seek to the
+  keyframe at or before the target and decode up to it.
+  - After a seek, packets are skipped until a keyframe, and leading
+    open-GOP frames are dropped.
+  - A seek that lands late is retried further back; as a last resort the
+    file is reopened, which MPEG-TS needs.
+  - `frame_at_index(n)` samples the middle of the nominal frame interval, so
+    container timestamp rounding (Matroska milliseconds) never selects a
+    neighbouring frame. The compositor will use it for frame-grid requests.
+- **Hardware.** Device-context hwaccel: VAAPI or CUDA on Linux,
+  VideoToolbox on macOS, D3D11VA, DXVA2 or CUDA on Windows. Hardware formats
+  are negotiated in `get_format`, and frames are downloaded with
+  `av_hwframe_transfer_data`. Any failure falls back to software;
+  `hardware()` reports what is in use.
+- **Colour.** YUV→RGBA8 with the stream's matrix (601/709/2020, with a
+  height-based default) and range. A higher-precision upload path for the
+  linear compositor, and the decode thread with prefetch, come with
+  playback (3b).

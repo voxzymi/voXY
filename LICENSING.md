@@ -20,8 +20,12 @@ Rust crates are statically linked into the `voxy` executable, so they must be
 under permissive licenses. The allow-list in `deny.toml` is:
 
 MIT, Apache-2.0 (optionally WITH LLVM-exception), BSD-2-Clause, BSD-3-Clause,
-ISC, Zlib, BSL-1.0, 0BSD, Unlicense and Unicode-3.0, plus OFL-1.1 and
+ISC, Zlib, BSL-1.0, 0BSD, Unlicense, Unicode-3.0 and WTFPL, plus OFL-1.1 and
 Ubuntu-font-1.0 for the fonts egui bundles for the UI.
+
+WTFPL covers only the Rust bindings to FFmpeg (`ffmpeg-next`,
+`ffmpeg-sys-next`). It is maximally permissive. FFmpeg itself is a separate
+LGPL library; see the FFmpeg section below.
 
 If a crate is offered under several licenses (`A OR B`), voXY uses it under
 one of the permissive options. Concretely:
@@ -70,6 +74,12 @@ loads them at run time in a separate sandbox process and does not distribute
 them, so their licenses do not affect voXY's.
 
 ## FFmpeg (from Milestone 3)
+
+voXY reaches FFmpeg through the `ffmpeg-next` bindings (WTFPL), which link
+the system's or the bundled FFmpeg shared libraries at run time. Development
+builds may use whatever FFmpeg the OS provides. Ubuntu's, for example, is a
+GPL build; that is fine for local development, but it is not what voXY
+distributes.
 
 voXY uses FFmpeg for video and audio decoding and encoding, with these
 constraints:

@@ -40,6 +40,8 @@ i_overlay = "9.0.1"
 
 # General
 anyhow = "1.0.104"
+# FFmpeg bindings: dynamically linked; voXY ships an LGPL build (LICENSING.md).
+ffmpeg-next = { version = "9.0.0", default-features = false, features = ["codec", "format", "software-scaling"] }
 arc-swap = "1.9.2"
 bytemuck = { version = "1.25.2", features = ["derive"] }
 glam = { version = "0.34.1", features = ["serde"] }

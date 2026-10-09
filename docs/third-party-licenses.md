@@ -7,7 +7,7 @@ CI fails if this file is stale. The policy that every license must satisfy is in
 The list covers every target platform, so it includes crates that are only
 compiled on Windows, macOS or Linux.
 
-384 crates.
+395 crates.
 
 ## By license
 
@@ -16,22 +16,24 @@ compiled on Windows, macOS or Linux.
 | `(MIT OR Apache-2.0) AND OFL-1.1 AND Ubuntu-font-1.0` | 1 |
 | `(MIT OR Apache-2.0) AND Unicode-3.0` | 1 |
 | `0BSD OR MIT OR Apache-2.0` | 1 |
-| `Apache-2.0` | 13 |
+| `Apache-2.0` | 14 |
 | `Apache-2.0 AND MIT` | 1 |
 | `Apache-2.0 OR GPL-2.0-only` | 1 |
-| `Apache-2.0 OR MIT` | 46 |
+| `Apache-2.0 OR MIT` | 47 |
 | `Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT` | 4 |
 | `BSD-2-Clause OR Apache-2.0 OR MIT` | 2 |
+| `BSD-3-Clause` | 1 |
 | `BSD-3-Clause OR Apache-2.0` | 2 |
 | `BSD-3-Clause OR MIT OR Apache-2.0` | 2 |
 | `BSL-1.0` | 2 |
 | `ISC` | 1 |
-| `MIT` | 88 |
-| `MIT OR Apache-2.0` | 195 |
+| `MIT` | 89 |
+| `MIT OR Apache-2.0` | 200 |
 | `MIT OR Apache-2.0 OR LGPL-2.1-or-later` | 1 |
 | `MIT OR Apache-2.0 OR Zlib` | 6 |
 | `MIT OR Zlib OR Apache-2.0` | 1 |
 | `Unlicense OR MIT` | 7 |
+| `WTFPL` | 2 |
 | `Zlib` | 3 |
 | `Zlib OR Apache-2.0 OR MIT` | 6 |
 
@@ -74,6 +76,7 @@ compiled on Windows, macOS or Linux.
 | [`atspi-common`](https://github.com/odilia-app/atspi) | 0.13.0 | `Apache-2.0 OR MIT` |
 | [`atspi-proxies`](https://github.com/odilia-app/atspi) | 0.13.0 | `Apache-2.0 OR MIT` |
 | [`autocfg`](https://github.com/cuviper/autocfg) | 1.5.1 | `Apache-2.0 OR MIT` |
+| [`bindgen`](https://github.com/rust-lang/rust-bindgen) | 0.72.1 | `BSD-3-Clause` |
 | [`bit-set`](https://github.com/contain-rs/bit-set) | 0.10.0, 0.8.0 | `Apache-2.0 OR MIT` |
 | [`bit-vec`](https://github.com/contain-rs/bit-vec) | 0.8.0, 0.9.1 | `Apache-2.0 OR MIT` |
 | [`bitflags`](https://github.com/bitflags/bitflags) | 1.3.2, 2.13.2 | `MIT OR Apache-2.0` |
@@ -87,9 +90,11 @@ compiled on Windows, macOS or Linux.
 | [`calloop`](https://github.com/Smithay/calloop) | 0.13.0, 0.14.5 | `MIT` |
 | [`calloop-wayland-source`](https://github.com/smithay/calloop-wayland-source) | 0.3.0, 0.4.1 | `MIT` |
 | [`cc`](https://github.com/rust-lang/cc-rs) | 1.6.0 | `MIT OR Apache-2.0` |
+| [`cexpr`](https://github.com/jethrogb/rust-cexpr) | 0.6.0 | `Apache-2.0 OR MIT` |
 | [`cfg-if`](https://github.com/rust-lang/cfg-if) | 1.0.5 | `MIT OR Apache-2.0` |
 | [`cfg_aliases`](https://github.com/katharostech/cfg_aliases) | 0.2.2 | `MIT` |
 | [`cgl`](https://github.com/servo/cgl-rs) | 0.3.2 | `MIT OR Apache-2.0` |
+| [`clang-sys`](https://github.com/KyleMayes/clang-sys) | 1.9.1 | `Apache-2.0` |
 | [`clipboard-win`](https://github.com/DoumanAsh/clipboard-win) | 5.4.1 | `BSL-1.0` |
 | [`codespan-reporting`](https://github.com/brendanzab/codespan) | 0.13.1 | `Apache-2.0` |
 | [`color`](https://github.com/linebender/color) | 0.3.3 | `Apache-2.0 OR MIT` |
@@ -134,6 +139,8 @@ compiled on Windows, macOS or Linux.
 | [`fax`](https://github.com/pdf-rs/fax) | 0.2.7 | `MIT` |
 | [`fdeflate`](https://github.com/image-rs/fdeflate) | 0.3.7 | `MIT OR Apache-2.0` |
 | [`fearless_simd`](https://github.com/linebender/fearless_simd) | 0.4.1 | `Apache-2.0 OR MIT` |
+| [`ffmpeg-next`](https://github.com/zmwangx/rust-ffmpeg) | 9.0.0 | `WTFPL` |
+| [`ffmpeg-sys-next`](https://github.com/zmwangx/rust-ffmpeg-sys) | 9.0.0 | `WTFPL` |
 | [`find-msvc-tools`](https://github.com/rust-lang/cc-rs) | 0.1.14 | `MIT OR Apache-2.0` |
 | [`flate2`](https://github.com/rust-lang/flate2-rs) | 1.1.10 | `MIT OR Apache-2.0` |
 | [`fnv`](https://github.com/servo/rust-fnv) | 1.0.7 | `Apache-2.0 OR MIT` |
@@ -154,6 +161,7 @@ compiled on Windows, macOS or Linux.
 | [`gl_generator`](https://github.com/brendanzab/gl-rs/) | 0.14.0 | `Apache-2.0` |
 | [`glam`](https://github.com/bitshifter/glam-rs) | 0.34.1 | `MIT OR Apache-2.0` |
 | [`glifo`](https://github.com/linebender/vello) | 0.2.0 | `Apache-2.0 OR MIT` |
+| [`glob`](https://github.com/rust-lang/glob) | 0.3.4 | `MIT OR Apache-2.0` |
 | [`glow`](https://github.com/grovesNL/glow) | 0.17.0 | `MIT OR Apache-2.0 OR Zlib` |
 | [`glutin`](https://github.com/rust-windowing/glutin) | 0.32.3 | `Apache-2.0` |
 | [`glutin-winit`](https://github.com/rust-windowing/glutin) | 0.5.0 | `MIT` |
@@ -170,7 +178,7 @@ compiled on Windows, macOS or Linux.
 | [`hex`](https://github.com/KokaKiwi/rust-hex) | 0.4.3 | `MIT OR Apache-2.0` |
 | [`image`](https://github.com/image-rs/image) | 0.25.10 | `MIT OR Apache-2.0` |
 | [`indexmap`](https://github.com/indexmap-rs/indexmap) | 2.14.2 | `Apache-2.0 OR MIT` |
-| [`itertools`](https://github.com/rust-itertools/itertools) | 0.15.0 | `MIT OR Apache-2.0` |
+| [`itertools`](https://github.com/rust-itertools/itertools) | 0.13.0, 0.15.0 | `MIT OR Apache-2.0` |
 | [`itoa`](https://github.com/dtolnay/itoa) | 1.0.18 | `MIT OR Apache-2.0` |
 | [`jni`](https://github.com/jni-rs/jni-rs) | 0.22.4 | `MIT OR Apache-2.0` |
 | [`jni-macros`](https://github.com/jni-rs/jni-rs) | 0.22.4 | `MIT OR Apache-2.0` |
@@ -195,6 +203,7 @@ compiled on Windows, macOS or Linux.
 | [`memchr`](https://github.com/BurntSushi/memchr) | 2.8.3 | `Unlicense OR MIT` |
 | [`memmap2`](https://github.com/RazrFalcon/memmap2-rs) | 0.9.11 | `MIT OR Apache-2.0` |
 | [`memoffset`](https://github.com/Gilnaa/memoffset) | 0.9.1 | `MIT` |
+| [`minimal-lexical`](https://github.com/Alexhuszagh/minimal-lexical) | 0.2.1 | `MIT OR Apache-2.0` |
 | [`miniz_oxide`](https://github.com/Frommi/miniz_oxide/tree/master/miniz_oxide) | 0.8.9, 0.9.1 | `MIT OR Zlib OR Apache-2.0` |
 | [`moxcms`](https://github.com/awxkee/moxcms.git) | 0.8.1 | `BSD-3-Clause OR Apache-2.0` |
 | [`naga`](https://github.com/gfx-rs/wgpu) | 30.0.1 | `MIT OR Apache-2.0` |
@@ -203,8 +212,10 @@ compiled on Windows, macOS or Linux.
 | [`ndk-context`](https://github.com/rust-windowing/android-ndk-rs) | 0.1.1 | `MIT OR Apache-2.0` |
 | [`ndk-sys`](https://github.com/rust-mobile/ndk) | 0.6.0+11769913 | `MIT OR Apache-2.0` |
 | [`nohash-hasher`](https://github.com/paritytech/nohash-hasher) | 0.2.0 | `Apache-2.0 OR MIT` |
+| [`nom`](https://github.com/Geal/nom) | 7.1.3 | `MIT` |
 | [`nu-ansi-term`](https://github.com/nushell/nu-ansi-term) | 0.50.3 | `MIT` |
 | [`num-traits`](https://github.com/rust-num/num-traits) | 0.2.19 | `MIT OR Apache-2.0` |
+| [`num_cpus`](https://github.com/seanmonstar/num_cpus) | 1.17.0 | `MIT OR Apache-2.0` |
 | [`num_enum`](https://github.com/illicitonion/num_enum) | 0.7.6 | `BSD-3-Clause OR MIT OR Apache-2.0` |
 | [`num_enum_derive`](https://github.com/illicitonion/num_enum) | 0.7.6 | `BSD-3-Clause OR MIT OR Apache-2.0` |
 | [`objc-sys`](https://github.com/madsmtm/objc2) | 0.3.5 | `MIT` |
@@ -274,6 +285,7 @@ compiled on Windows, macOS or Linux.
 | [`raw-window-metal`](https://github.com/rust-windowing/raw-window-metal) | 1.1.0 | `MIT OR Apache-2.0` |
 | [`read-fonts`](https://github.com/googlefonts/fontations) | 0.41.0 | `MIT OR Apache-2.0` |
 | [`redox_syscall`](https://gitlab.redox-os.org/redox-os/syscall) | 0.4.1, 0.5.18, 0.9.4 | `MIT` |
+| [`regex`](https://github.com/rust-lang/regex) | 1.13.1 | `MIT OR Apache-2.0` |
 | [`regex-automata`](https://github.com/rust-lang/regex) | 0.4.18 | `MIT OR Apache-2.0` |
 | [`regex-syntax`](https://github.com/rust-lang/regex) | 0.8.11 | `MIT OR Apache-2.0` |
 | [`renderdoc-sys`](https://github.com/ebkalderon/renderdoc-rs) | 1.1.0 | `MIT OR Apache-2.0` |
@@ -294,7 +306,7 @@ compiled on Windows, macOS or Linux.
 | [`serde_json`](https://github.com/serde-rs/json) | 1.0.151 | `MIT OR Apache-2.0` |
 | [`serde_repr`](https://github.com/dtolnay/serde-repr) | 0.1.21 | `MIT OR Apache-2.0` |
 | [`sharded-slab`](https://github.com/hawkw/sharded-slab) | 0.1.7 | `MIT` |
-| [`shlex`](https://github.com/comex/rust-shlex) | 2.0.1 | `MIT OR Apache-2.0` |
+| [`shlex`](https://github.com/comex/rust-shlex) | 1.3.0, 2.0.1 | `MIT OR Apache-2.0` |
 | [`signal-hook-registry`](https://github.com/vorner/signal-hook) | 1.4.8 | `MIT OR Apache-2.0` |
 | [`simd-adler32`](https://github.com/mcountryman/simd-adler32) | 0.3.10 | `MIT` |
 | [`simd_cesu8`](https://github.com/seancroach/simd_cesu8) | 1.2.0 | `Apache-2.0 OR MIT` |
@@ -336,6 +348,7 @@ compiled on Windows, macOS or Linux.
 | [`unicode-width`](https://github.com/unicode-rs/unicode-width) | 0.2.2 | `MIT OR Apache-2.0` |
 | [`uuid`](https://github.com/uuid-rs/uuid) | 1.27.0 | `Apache-2.0 OR MIT` |
 | [`valuable`](https://github.com/tokio-rs/valuable) | 0.1.1 | `MIT` |
+| [`vcpkg`](https://github.com/mcgoo/vcpkg-rs) | 0.2.15 | `MIT OR Apache-2.0` |
 | [`vello`](https://github.com/linebender/vello) | 0.11.0 | `Apache-2.0 OR MIT` |
 | [`vello_common`](https://github.com/linebender/vello) | 0.1.0 | `Apache-2.0 OR MIT` |
 | [`vello_cpu`](https://github.com/linebender/vello) | 0.1.0 | `Apache-2.0 OR MIT` |

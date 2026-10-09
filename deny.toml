@@ -20,6 +20,9 @@ allow = [
     "0BSD",
     "Unlicense",
     "Unicode-3.0",
+    # ffmpeg-next / ffmpeg-sys-next (the Rust bindings; FFmpeg itself is
+    # LGPL and dynamically linked, see LICENSING.md).
+    "WTFPL",
     # Fonts bundled by egui for the UI chrome (Ubuntu Light, emoji fonts).
     "OFL-1.1",
     "Ubuntu-font-1.0",

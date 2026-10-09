@@ -1,10 +1,19 @@
 //! Media I/O for voXY.
 //!
-//! Milestone 1 only decodes still images (PNG, JPEG) with the pure-Rust
-//! `image` crate. FFmpeg-based video/audio decode and encode (dynamically
-//! linked LGPL build) and `cpal` audio output arrive in Milestone 3.
+//! - Still images (PNG, JPEG) with the pure-Rust `image` crate.
+//! - [`video`] (feature `ffmpeg`, on by default): FFmpeg demuxing and
+//!   decoding with optional hardware acceleration, frame-accurate seeking
+//!   and flick timestamps. FFmpeg is linked dynamically; voXY ships an LGPL
+//!   build (see `LICENSING.md`).
+//! - [`timebase`]: exact conversion between stream time bases and flicks.
+//!
+//! Audio decode and `cpal` output arrive in Milestone 3b.
 
 use std::path::Path;
+
+pub mod timebase;
+#[cfg(feature = "ffmpeg")]
+pub mod video;
 
 /// A decoded still image: 8-bit RGBA, sRGB-encoded, straight alpha,
 /// rows top to bottom with no padding.
@@ -38,6 +47,9 @@ pub enum MediaError {
         #[source]
         source: image::ImageError,
     },
+    /// A video or audio file could not be opened, probed or decoded.
+    #[error("{path}: {message}")]
+    Media { path: String, message: String },
 }
 
 fn decode_err(path: &Path, source: image::ImageError) -> MediaError {

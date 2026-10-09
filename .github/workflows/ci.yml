@@ -48,12 +48,28 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - name: Install Linux packages (lavapipe for headless GPU tests, X11/Wayland runtime libs)
+      - name: Install Linux packages (lavapipe, X11/Wayland runtime libs, FFmpeg dev)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            mesa-vulkan-drivers libvulkan1 libxkbcommon-x11-0 libwayland-client0
+            mesa-vulkan-drivers libvulkan1 libxkbcommon-x11-0 libwayland-client0 \
+            pkg-config clang libavcodec-dev libavformat-dev libavutil-dev \
+            libswscale-dev libswresample-dev libavfilter-dev libavdevice-dev
+      - name: Install FFmpeg (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ffmpeg pkg-config
+      - name: Install FFmpeg (Windows, LGPL shared build)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $name = "ffmpeg-n7.1-latest-win64-lgpl-shared-7.1"
+          Invoke-WebRequest "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/$name.zip" -OutFile ffmpeg.zip
+          Expand-Archive ffmpeg.zip -DestinationPath "$env:RUNNER_TEMP"
+          $dir = Join-Path $env:RUNNER_TEMP $name
+          "FFMPEG_DIR=$dir" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "LIBCLANG_PATH=C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_ENV -Append
+          (Join-Path $dir "bin") | Out-File -FilePath $env:GITHUB_PATH -Append
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked
       - name: Test

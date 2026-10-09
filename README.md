@@ -107,8 +107,12 @@ Parsing Alight Motion's actual format waits for real sample files; see
 
 ## Building
 
-You need a Rust **stable** toolchain, 1.97 or newer, from <https://rustup.rs>.
-Milestone 1 has no FFmpeg dependency; FFmpeg arrives in Milestone 3.
+You need a Rust **stable** toolchain, 1.97 or newer, from <https://rustup.rs>,
+plus **FFmpeg development libraries (3.0 to 9.0)** and **libclang**, which
+the FFmpeg bindings use at build time. voXY links FFmpeg dynamically.
+Development builds can use any FFmpeg; release builds ship an LGPL build
+(see [`LICENSING.md`](LICENSING.md)). To build without video support, use
+`cargo build -p voxy-media --no-default-features`.
 
 ```sh
 cargo run -p voxy-app --release             # start voXY
@@ -123,24 +127,35 @@ Want something to look at? Generate a demo project with
 ### Windows 10+ (x64)
 
 Install Rust with the MSVC toolchain (Visual Studio Build Tools with
-"Desktop development with C++"). voXY renders through Direct3D 12 or Vulkan.
+"Desktop development with C++") and LLVM (for libclang). For FFmpeg:
+1. Download a *shared* LGPL build, for example `ffmpeg-n7.1-latest-win64-lgpl-shared-7.1.zip`
+   from <https://github.com/BtbN/FFmpeg-Builds/releases>.
+2. Set `FFMPEG_DIR` to the folder you unpacked it into.
+3. Add its `bin` folder to `PATH`.
+
+voXY renders through Direct3D 12 or Vulkan.
 
 ### Linux: Ubuntu 22.04+ (x64)
 
-Nothing extra is needed to build. To run voXY you need a Vulkan or OpenGL ES
-driver and the usual desktop libraries:
-
 ```sh
+# build
+sudo apt install pkg-config clang libavcodec-dev libavformat-dev libavutil-dev \
+  libswscale-dev libswresample-dev libavfilter-dev libavdevice-dev
+# run
 sudo apt install libxkbcommon-x11-0 libwayland-client0 libvulkan1 mesa-vulkan-drivers
 ```
+
+Running voXY also needs a Vulkan or OpenGL ES driver. Hardware video
+decoding uses VAAPI (or CUDA) when available.
 
 `mesa-vulkan-drivers` provides lavapipe, a CPU Vulkan driver. It lets the GPU
 tests run on machines without a GPU (`WGPU_BACKEND=vulkan`).
 
 ### macOS 12+ (Apple Silicon and Intel)
 
-Install the Xcode command-line tools (`xcode-select --install`). voXY renders
-through Metal.
+Install the Xcode command-line tools (`xcode-select --install`) and
+`brew install ffmpeg pkg-config`. voXY renders through Metal and decodes video
+with VideoToolbox.
 
 ## Pinned GPU stack
 
@@ -171,7 +186,7 @@ show a single version.
 | `voxy-core` | Document model, integer time (flicks), properties, commands, snapshot undo/redo, evaluation, `.voxy` I/O. No GPU, media or UI dependencies. |
 | `voxy-render` | wgpu compositor: render planning, WGSL shaders, image preparation, output transform, readback. |
 | `voxy-vector` | Vector geometry and text (kurbo, parley, i_overlay, vello). Placeholder until Milestone 4. |
-| `voxy-media` | Image decoding now; FFmpeg decode/encode and cpal audio in Milestone 3. |
+| `voxy-media` | Image decoding; FFmpeg video decoding (demux, decode, hardware acceleration, frame-accurate seeking, flick timestamps). Audio and encoding come later in Milestone 3. |
 | `voxy-ofx-sys` / `voxy-ofx-host` / `voxy-ofx-sandbox` | OpenFX bindings, host, and out-of-process plugin runner (one per bundle). From Milestone 7. |
 | `voxy-am-compat` | Alight Motion interoperability. From Compat 2a, built only from real sample files. |
 | `voxy-ui` | eframe/egui shell: docking, panels, menus, shortcuts, viewport. |
