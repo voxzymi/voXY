@@ -11,6 +11,7 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 voxy-am-compat = { path = "../crates/voxy-am-compat" }
 voxy-core = { path = "../crates/voxy-core" }
+serde_json = "1"
 
 [[bin]]
 name = "am_xml"
@@ -29,6 +30,13 @@ bench = false
 [[bin]]
 name = "voxy_project"
 path = "fuzz_targets/voxy_project.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ease_json"
+path = "fuzz_targets/ease_json.rs"
 test = false
 doc = false
 bench = false

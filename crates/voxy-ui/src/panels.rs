@@ -362,12 +362,13 @@ impl Panels<'_> {
         if let Some(k) = key {
             diamond.context_menu(|ui| {
                 ui.label(RichText::new("Interpolation").weak());
-                for (interp, label) in [
-                    (Interp::Linear, "Linear"),
-                    (Interp::Bezier, "Bézier"),
-                    (Interp::Hold, "Hold"),
-                ] {
-                    if ui.radio(k.interp == interp, label).clicked() {
+                let mut choices = vec![Interp::Linear, Interp::Bezier, Interp::Hold];
+                choices.extend(Interp::parametric_defaults());
+                for interp in choices {
+                    // A parametric type is "selected" whatever its parameters.
+                    let selected =
+                        std::mem::discriminant(&k.interp) == std::mem::discriminant(&interp);
+                    if ui.radio(selected, interp.label()).clicked() && !selected {
                         self.state.execute(SetInterpolation {
                             prop: p.id,
                             times: vec![time],

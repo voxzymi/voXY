@@ -6,7 +6,8 @@
 //!   nest compositions.
 //! - [`Time`] is integer flicks; [`FrameRate`] is rational.
 //! - Properties are static or keyframed ([`KeyframeTrack`]): hold, linear or
-//!   cubic-bezier timing ([`easing`]) and arc-length motion paths
+//!   cubic-bezier timing ([`easing`]), analytic spring, bounce, oscillation,
+//!   steps and stepped-ramp easings ([`shapes`]) and arc-length motion paths
 //!   ([`motion_path`]) for spatial properties.
 //! - Every edit is a [`Command`]; [`History`] provides snapshot-based
 //!   undo/redo, transactions and drag merging.
@@ -30,6 +31,7 @@ pub mod motion_path;
 pub mod persist;
 mod pool;
 pub mod property;
+pub mod shapes;
 mod time;
 pub mod timecode;
 mod value;
@@ -54,6 +56,9 @@ pub use layer::{
 };
 pub use pool::{ExpandedItems, Folder, PoolItem, Usage};
 pub use property::{Animation, Property, PropertyDesc, PropertyError, Unit};
+pub use shapes::{
+    BounceParams, Jump, JumpMode, OscillationParams, SpringParams, SteppedRampParams, StepsParams,
+};
 pub use time::{FLICKS_PER_SECOND, FrameRate, Time};
 pub use value::{Value, ValueKind};
 

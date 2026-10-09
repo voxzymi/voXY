@@ -9,7 +9,12 @@
 //!    - [`Interp::Hold`] keeps `k0`'s value until `t1`;
 //!    - [`Interp::Linear`] uses `p = u`;
 //!    - [`Interp::Bezier`] uses the [`CubicEase`] with `P1 = k0.ease_out` and
-//!      `P2 = k1.ease_in`.
+//!      `P2 = k1.ease_in`;
+//!    - [`Interp::Spring`], [`Interp::Bounce`], [`Interp::Oscillation`],
+//!      [`Interp::Steps`] and [`Interp::SteppedRamp`] use the analytic
+//!      functions of [`crate::shapes`], which carry their parameters and
+//!      ignore the keys' ease handles. They may overshoot `[0, 1]` (spring,
+//!      oscillation) or jump (steps).
 //! 2. **Value.** Numbers, vectors and colors move from `v0` to `v1` by `p`.
 //!    For *spatial* properties (position, anchor point) with tangents, the
 //!    value travels along the cubic motion path and `p` is the fraction of the
@@ -25,17 +30,139 @@ use serde::{Deserialize, Serialize};
 use crate::color::LinearRgba;
 use crate::easing::{CubicEase, EaseHandle, EasePreset};
 use crate::motion_path::CubicPath;
+use crate::shapes::{
+    BounceParams, Jump, OscillationParams, SpringParams, SteppedRampParams, StepsParams,
+};
 use crate::time::Time;
 use crate::value::Value;
 
 /// How the segment leaving a keyframe is timed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+///
+/// The parametric variants carry their parameters. They are validated
+/// whenever they are read (deserializing an `Interp` rejects out-of-range
+/// values), when a track is built ([`TrackError::InvalidEase`]) and when an
+/// edit is applied.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", remote = "Self")]
 pub enum Interp {
     Hold,
     #[default]
     Linear,
     Bezier,
+    Spring(SpringParams),
+    Bounce(BounceParams),
+    Oscillation(OscillationParams),
+    Steps(StepsParams),
+    SteppedRamp(SteppedRampParams),
+}
+
+impl Serialize for Interp {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        Self::serialize(self, serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Interp {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error;
+        let interp = Self::deserialize(deserializer)?;
+        interp.validate().map_err(D::Error::custom)?;
+        Ok(interp)
+    }
+}
+
+impl Interp {
+    /// The five parametric types with default parameters, in menu order.
+    pub fn parametric_defaults() -> [Interp; 5] {
+        [
+            Interp::Spring(SpringParams::default()),
+            Interp::Bounce(BounceParams::default()),
+            Interp::Oscillation(OscillationParams::default()),
+            Interp::Steps(StepsParams::default()),
+            Interp::SteppedRamp(SteppedRampParams::default()),
+        ]
+    }
+
+    /// Display name, also used in undo labels.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Interp::Hold => "Hold",
+            Interp::Linear => "Linear",
+            Interp::Bezier => "Bézier",
+            Interp::Spring(_) => "Spring",
+            Interp::Bounce(_) => "Bounce",
+            Interp::Oscillation(_) => "Oscillation",
+            Interp::Steps(_) => "Steps",
+            Interp::SteppedRamp(_) => "Stepped Ramp",
+        }
+    }
+
+    /// `true` for the five analytic easings that carry parameters.
+    pub fn is_parametric(&self) -> bool {
+        !matches!(self, Interp::Hold | Interp::Linear | Interp::Bezier)
+    }
+
+    /// Checks parameter ranges. Always `Ok` for the legacy modes.
+    pub fn validate(&self) -> Result<(), String> {
+        match self {
+            Interp::Hold | Interp::Linear | Interp::Bezier => Ok(()),
+            Interp::Spring(p) => p.validate(),
+            Interp::Bounce(p) => p.validate(),
+            Interp::Oscillation(p) => p.validate(),
+            Interp::Steps(p) => p.validate(),
+            Interp::SteppedRamp(p) => p.validate(),
+        }
+    }
+
+    /// The same easing with every parameter forced into its documented
+    /// range (non-finite values become the default).
+    #[must_use]
+    pub fn sanitized(self) -> Self {
+        match self {
+            Interp::Hold | Interp::Linear | Interp::Bezier => self,
+            Interp::Spring(p) => Interp::Spring(p.sanitized()),
+            Interp::Bounce(p) => Interp::Bounce(p.sanitized()),
+            Interp::Oscillation(p) => Interp::Oscillation(p.sanitized()),
+            Interp::Steps(p) => Interp::Steps(p.sanitized()),
+            Interp::SteppedRamp(p) => Interp::SteppedRamp(p.sanitized()),
+        }
+    }
+
+    /// Progress of a parametric easing at `u`; `None` for the legacy modes,
+    /// whose curves depend on the keys.
+    pub fn shape_progress(&self, u: f64) -> Option<f64> {
+        Some(match self {
+            Interp::Hold | Interp::Linear | Interp::Bezier => return None,
+            Interp::Spring(p) => p.progress(u),
+            Interp::Bounce(p) => p.progress(u),
+            Interp::Oscillation(p) => p.progress(u),
+            Interp::Steps(p) => p.progress(u),
+            Interp::SteppedRamp(p) => p.progress(u),
+        })
+    }
+
+    /// d(progress)/du of a parametric easing where it is defined (flat
+    /// plateaus report their slope; jumps are in [`Self::shape_jumps`]).
+    pub fn shape_slope(&self, u: f64) -> Option<f64> {
+        Some(match self {
+            Interp::Hold | Interp::Linear | Interp::Bezier => return None,
+            Interp::Spring(p) => p.slope(u),
+            Interp::Bounce(p) => p.slope(u),
+            Interp::Oscillation(p) => p.slope(u),
+            Interp::Steps(p) => p.slope(u),
+            Interp::SteppedRamp(p) => p.slope(u),
+        })
+    }
+
+    /// Discontinuities of a parametric easing, ascending. Empty for
+    /// everything but steps and stepped ramps.
+    pub fn shape_jumps(&self) -> Vec<Jump> {
+        match self {
+            Interp::Steps(p) => p.jumps(),
+            Interp::SteppedRamp(p) => p.jumps(),
+            _ => Vec::new(),
+        }
+    }
 }
 
 /// Motion-path tangents of a spatial keyframe, relative to its value.
@@ -111,6 +238,8 @@ pub enum TrackError {
     NoKeyframe(Time),
     #[error("keyframes would collide at {0}")]
     Collision(Time),
+    #[error("invalid easing parameters at {time}: {reason}")]
+    InvalidEase { time: Time, reason: String },
 }
 
 /// A property's keyframes. See the module documentation for the
@@ -136,6 +265,14 @@ impl TryFrom<Vec<Keyframe>> for KeyframeTrack {
             if w[0].time > w[1].time {
                 return Err(TrackError::Unordered(w[1].time));
             }
+        }
+        for k in &keys {
+            k.interp
+                .validate()
+                .map_err(|reason| TrackError::InvalidEase {
+                    time: k.time,
+                    reason,
+                })?;
         }
         Ok(KeyframeTrack { keys })
     }
@@ -319,6 +456,11 @@ impl KeyframeTrack {
         match k0.interp {
             Interp::Hold => None,
             Interp::Linear => Some(u),
+            Interp::Spring(_)
+            | Interp::Bounce(_)
+            | Interp::Oscillation(_)
+            | Interp::Steps(_)
+            | Interp::SteppedRamp(_) => k0.interp.shape_progress(u),
             Interp::Bezier => {
                 let k1 = &self.keys[index + 1];
                 Some(
@@ -330,6 +472,34 @@ impl KeyframeTrack {
                 )
             }
         }
+    }
+
+    /// d(progress)/du of segment `index` at `u`: the speed curve the graph
+    /// editor draws. `None` for hold segments. At a step jump the speed is
+    /// infinite and not reported here; see [`Self::segment_jumps`].
+    pub fn segment_slope(&self, index: usize, u: f64) -> Option<f64> {
+        let k0 = &self.keys[index];
+        match k0.interp {
+            Interp::Hold => None,
+            Interp::Linear => Some(1.0),
+            Interp::Bezier => {
+                let k1 = &self.keys[index + 1];
+                Some(
+                    CubicEase {
+                        p1: k0.ease_out,
+                        p2: k1.ease_in,
+                    }
+                    .slope(u),
+                )
+            }
+            _ => k0.interp.shape_slope(u),
+        }
+    }
+
+    /// Discontinuities of segment `index`'s progress (step jumps). A hold
+    /// segment's single jump to the next key is not listed.
+    pub fn segment_jumps(&self, index: usize) -> Vec<Jump> {
+        self.keys[index].interp.shape_jumps()
     }
 
     /// The motion path of segment `index` if the keys carry tangents.

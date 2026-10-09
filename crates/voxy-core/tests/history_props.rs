@@ -15,9 +15,12 @@ use voxy_core::command::{
     SetWorkingSpace, UnprecomposeLayer,
 };
 use voxy_core::glam::{DVec2, DVec3};
+use voxy_core::shapes::Range;
 use voxy_core::{
-    CompId, CompSettings, Document, EaseHandle, EasePreset, FrameRate, History, Interp, Layer,
-    LinearRgba, PoolItem, PropId, SourceRef, SpatialTangents, Time, Value, WorkingSpace, persist,
+    BounceParams, CompId, CompSettings, Document, EaseHandle, EasePreset, FrameRate, History,
+    Interp, JumpMode, Layer, LinearRgba, OscillationParams, PoolItem, PropId, SourceRef,
+    SpatialTangents, SpringParams, SteppedRampParams, StepsParams, Time, Value, WorkingSpace,
+    persist,
 };
 
 /// An edit described independently of the IDs that exist at run time; layer
@@ -40,6 +43,10 @@ enum Edit {
     RemoveKey(usize, u8, usize),
     MoveKey(usize, u8, usize, i64),
     Interp(usize, u8, usize, u8),
+    /// A parametric easing: (layer, property, key, type, four unit-interval
+    /// parameter draws). Draws map slightly past the documented ranges so
+    /// rejected (out-of-range) edits are exercised too.
+    Shape(usize, u8, usize, u8, [f64; 4]),
     Preset(usize, u8, usize, usize),
     Ease(usize, u8, usize, [f64; 4]),
     Tangent(usize, usize, f64, f64),
@@ -61,6 +68,45 @@ enum Edit {
     Undo,
     Redo,
     EndInteraction,
+}
+
+/// Maps unit-interval draws onto each type's parameters, stretching every
+/// range by 10 % on both sides so some draws are invalid and rejected.
+fn shape(kind: u8, a: [f64; 4]) -> Interp {
+    let at = |r: Range, x: f64| {
+        let span = r.max - r.min;
+        r.min - 0.1 * span + 1.2 * span * x
+    };
+    let count = |x: f64| (x * 70.0) as u32;
+    let jump = |x: f64| JumpMode::ALL[((x * 4.0) as usize).min(3)];
+    match kind {
+        0 => Interp::Spring(SpringParams {
+            frequency: at(SpringParams::FREQUENCY, a[0]),
+            damping: at(SpringParams::DAMPING, a[1]),
+            overshoot: at(SpringParams::OVERSHOOT, a[2]),
+        }),
+        1 => Interp::Bounce(BounceParams {
+            count: (a[0] * 14.0) as u32,
+            first_height: at(BounceParams::FIRST_HEIGHT, a[1]),
+            restitution: at(BounceParams::RESTITUTION, a[2]),
+        }),
+        2 => Interp::Oscillation(OscillationParams {
+            cycles: at(OscillationParams::CYCLES, a[0]),
+            amplitude: at(OscillationParams::AMPLITUDE, a[1]),
+            phase: at(OscillationParams::PHASE, a[2]),
+            decay: at(OscillationParams::DECAY, a[3]),
+        }),
+        3 => Interp::Steps(StepsParams {
+            count: count(a[0]),
+            jump: jump(a[1]),
+            hold: at(StepsParams::HOLD, a[2]),
+        }),
+        _ => Interp::SteppedRamp(SteppedRampParams {
+            count: count(a[0]),
+            ramp: at(SteppedRampParams::RAMP, a[1]),
+            jump: jump(a[2]),
+        }),
+    }
 }
 
 fn edit() -> impl Strategy<Value = Edit> {
@@ -86,6 +132,14 @@ fn edit() -> impl Strategy<Value = Edit> {
             .prop_map(|(i, p, k, d)| Edit::MoveKey(i, p, k, d)),
         (any::<usize>(), 0u8..4, any::<usize>(), 0u8..3)
             .prop_map(|(i, p, k, m)| Edit::Interp(i, p, k, m)),
+        (
+            any::<usize>(),
+            0u8..4,
+            any::<usize>(),
+            0u8..5,
+            prop::array::uniform4(0.0f64..=1.0)
+        )
+            .prop_map(|(i, p, k, t, a)| Edit::Shape(i, p, k, t, a)),
         (
             any::<usize>(),
             0u8..4,
@@ -352,6 +406,17 @@ fn apply(h: &mut History, e: &Edit, focus: &mut Option<CompId>) {
                     prop,
                     times: vec![t],
                     interp: [Interp::Hold, Interp::Linear, Interp::Bezier][usize::from(*m)],
+                }),
+                None => Ok(()),
+            },
+            None => Ok(()),
+        },
+        Edit::Shape(i, sel, k, kind, a) => match pick(*i).map(|l| target(l, *sel, 0.0).0) {
+            Some(prop) => match key_time(&doc, prop, *k) {
+                Some(t) => h.execute(SetInterpolation {
+                    prop,
+                    times: vec![t],
+                    interp: shape(*kind, *a),
                 }),
                 None => Ok(()),
             },

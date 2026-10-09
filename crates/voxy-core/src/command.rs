@@ -542,12 +542,7 @@ pub struct SetInterpolation {
 
 impl Command for SetInterpolation {
     fn label(&self) -> Cow<'static, str> {
-        match self.interp {
-            Interp::Hold => "Hold Keyframes",
-            Interp::Linear => "Linear Keyframes",
-            Interp::Bezier => "Bézier Keyframes",
-        }
-        .into()
+        format!("{} Keyframes", self.interp.label()).into()
     }
 
     fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {

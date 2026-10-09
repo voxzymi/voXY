@@ -19,7 +19,9 @@ pub const PACKAGE_EXTENSION: &str = "voxyz";
 /// Value of the envelope's `format` field.
 pub const FORMAT_ID: &str = "voxy-project";
 /// The format version this build writes, and the newest it reads.
-pub const FORMAT_VERSION: Version = Version::new(0, 5, 0);
+pub const FORMAT_VERSION: Version = Version::new(0, 6, 0);
+/// The version written for a document that uses nothing newer than 0.5.0.
+const BASE_VERSION: Version = Version::new(0, 5, 0);
 /// Version of the `ui_state` section this build writes. The section is
 /// opaque to this crate; see [`to_json_with_ui`].
 pub const UI_STATE_VERSION: u32 = 1;
@@ -75,6 +77,27 @@ struct EnvelopeIn {
     ui_state: Option<serde_json::Value>,
 }
 
+/// The lowest format version that can represent `doc`: 0.6.0 if any keyframe
+/// uses a parametric easing (spring, bounce, oscillation, steps, stepped
+/// ramp), 0.5.0 otherwise. Writing the lowest version keeps projects that do
+/// not use newer features openable by older builds, which refuse (rather
+/// than misread) the files that need 0.6.0.
+pub fn required_version(doc: &Document) -> Version {
+    let parametric = doc.comps.values().any(|comp| {
+        comp.layers.iter().any(|layer| {
+            layer.properties().iter().any(|p| {
+                p.track()
+                    .is_some_and(|t| t.keys().iter().any(|k| k.interp.is_parametric()))
+            })
+        })
+    });
+    if parametric {
+        FORMAT_VERSION
+    } else {
+        BASE_VERSION
+    }
+}
+
 /// Encodes a document as pretty-printed project JSON.
 pub fn to_json(doc: &Document) -> Result<String, SaveError> {
     to_json_with_ui(doc, None)
@@ -91,7 +114,7 @@ pub fn to_json_with_ui(
     doc.validate()?;
     let env = EnvelopeOut {
         format: FORMAT_ID,
-        format_version: FORMAT_VERSION.to_string(),
+        format_version: required_version(doc).to_string(),
         generator: format!("voXY {}", env!("CARGO_PKG_VERSION")),
         project: doc,
         ui_state,
@@ -137,6 +160,8 @@ pub fn from_json_with_ui(json: &str) -> Result<(Document, Option<serde_json::Val
     // - 0.4.0 → 0.5.0: only adds the optional composition fields
     //   `start_offset`, `drop_frame` and `preview_resolution` (and the same
     //   in the project's new-composition defaults); no rewrite.
+    // - 0.5.0 → 0.6.0: only adds the parametric `interp` values (`spring`,
+    //   `bounce`, `oscillation`, `steps`, `stepped_ramp`); no rewrite.
     let env: EnvelopeIn = serde_json::from_str(json)?;
     let mut project = env.project;
     if found_core < Version::new(0, 4, 0) {
@@ -269,8 +294,8 @@ mod tests {
 
     #[test]
     fn newer_versions_are_refused() {
-        let current = format!("\"{FORMAT_VERSION}\"");
-        let json = to_json(&sample()).unwrap().replace(&current, "\"0.6.0\"");
+        let current = format!("\"{}\"", required_version(&sample()));
+        let json = to_json(&sample()).unwrap().replace(&current, "\"0.7.0\"");
         assert!(matches!(from_json(&json), Err(LoadError::TooNew { .. })));
         let json = to_json(&sample()).unwrap().replace(&current, "\"banana\"");
         assert!(matches!(from_json(&json), Err(LoadError::BadVersion(_))));
@@ -281,13 +306,65 @@ mod tests {
         // A 0.1.0 file (static properties only) or 0.2.0 file (no video) is
         // valid 0.3.0 content. (Real 0.3.0 files: `tests/pool.rs`.)
         let doc = sample();
-        let current = format!("\"{FORMAT_VERSION}\"");
+        let current = format!("\"{}\"", required_version(&doc));
         for old in ["0.1.0", "0.2.0"] {
             let json = to_json(&doc)
                 .unwrap()
                 .replace(&current, &format!("\"{old}\""));
             assert_eq!(from_json(&json).unwrap(), doc, "{old}");
         }
+    }
+
+    #[test]
+    fn version_written_is_the_lowest_that_fits() {
+        use crate::Time;
+        use crate::command::{AddKeyframe, SetInterpolation};
+        use crate::keyframe::Interp;
+        use crate::shapes::SpringParams;
+
+        let mut doc = sample();
+        assert_eq!(required_version(&doc), Version::new(0, 5, 0));
+        assert!(
+            to_json(&doc)
+                .unwrap()
+                .contains("\"format_version\": \"0.5.0\"")
+        );
+
+        // A legacy easing does not raise it.
+        let prop = doc.main().unwrap().layers[0].transform.opacity.id;
+        AddKeyframe {
+            prop,
+            time: Time::ZERO,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        SetInterpolation {
+            prop,
+            times: vec![Time::ZERO],
+            interp: Interp::Bezier,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        assert_eq!(required_version(&doc), Version::new(0, 5, 0));
+
+        // A parametric one does, and the file round-trips.
+        SetInterpolation {
+            prop,
+            times: vec![Time::ZERO],
+            interp: Interp::Spring(SpringParams::default()),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        assert_eq!(required_version(&doc), FORMAT_VERSION);
+        let json = to_json(&doc).unwrap();
+        assert!(json.contains("\"format_version\": \"0.6.0\""));
+        assert_eq!(from_json(&json).unwrap(), doc);
+
+        // The same content labelled 0.5.0 is still read (the label is
+        // advisory for newer builds); an out-of-range parameter is rejected.
+        let bad = json.replace("\"damping\": 7.0", "\"damping\": 700.0");
+        assert_ne!(bad, json);
+        assert!(from_json(&bad).is_err());
     }
 
     #[test]

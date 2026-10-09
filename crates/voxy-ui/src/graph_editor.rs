@@ -521,11 +521,7 @@ fn ease_editor(
             "Segment {} to {} ({})",
             timecode_secs(k0.time),
             timecode_secs(k1.time),
-            match k0.interp {
-                Interp::Hold => "hold",
-                Interp::Linear => "linear",
-                Interp::Bezier => "Bézier",
-            }
+            k0.interp.label().to_lowercase()
         ))
         .small(),
     );
@@ -536,6 +532,16 @@ fn ease_editor(
     };
     let y_range = match &state.graph.drag {
         Some(GraphDrag::Handle { y_range, .. }) => *y_range,
+        _ if k0.interp.is_parametric() => {
+            // Springs and oscillations leave 0..1: fit the sampled curve.
+            let (mut lo, mut hi) = (0.0f64, 1.0f64);
+            for i in 0..=96 {
+                let p = k0.interp.shape_progress(f64::from(i) / 96.0).unwrap_or(0.0);
+                lo = lo.min(p);
+                hi = hi.max(p);
+            }
+            (lo - 0.15, hi + 0.15)
+        }
         _ => ease_y_range(h1, h2),
     };
     // Leave room below the square for the readout, speed strip and presets.
@@ -571,22 +577,30 @@ fn ease_editor(
                 }
                 Interp::Linear => u,
                 Interp::Bezier => CubicEase { p1: h1, p2: h2 }.progress(u),
+                shaped => shaped.shape_progress(u).unwrap_or(u),
             };
             sq.project(u, p)
         })
         .collect();
     painter.add(Shape::line(pts, Stroke::new(2.0, ACCENT)));
 
-    // Handles (drawn for every interpolation: dragging one makes the
-    // segment Bézier).
+    // Bézier handles (drawn for hold, linear and Bézier segments: dragging
+    // one makes the segment Bézier). Parametric easings have their own
+    // parameters, so they get no Bézier handles.
+    let parametric = k0.interp.is_parametric();
     let a = sq.project(0.0, 0.0);
     let b = sq.project(1.0, 1.0);
     let p1 = sq.project(h1.x(), h1.y());
     let p2 = sq.project(h2.x(), h2.y());
     let handle_stroke = Stroke::new(1.2, Color32::from_white_alpha(140));
-    painter.line_segment([a, p1], handle_stroke);
-    painter.line_segment([b, p2], handle_stroke);
-    for (pos, outgoing) in [(p1, true), (p2, false)] {
+    if !parametric {
+        painter.line_segment([a, p1], handle_stroke);
+        painter.line_segment([b, p2], handle_stroke);
+    }
+    for (pos, outgoing) in [(p1, true), (p2, false)]
+        .into_iter()
+        .filter(|_| !parametric)
+    {
         let id = Id::new(("ease-handle", prop.id, outgoing));
         let r = ui
             .interact(
@@ -614,13 +628,17 @@ fn ease_editor(
     }
 
     ui.label(
-        egui::RichText::new(format!(
-            "cubic-bezier({}, {}, {}, {})",
-            trim_number(h1.x()),
-            trim_number(h1.y()),
-            trim_number(h2.x()),
-            trim_number(h2.y())
-        ))
+        egui::RichText::new(if parametric {
+            format!("{:?}", k0.interp)
+        } else {
+            format!(
+                "cubic-bezier({}, {}, {}, {})",
+                trim_number(h1.x()),
+                trim_number(h1.y()),
+                trim_number(h2.x()),
+                trim_number(h2.y())
+            )
+        })
         .monospace()
         .small(),
     );

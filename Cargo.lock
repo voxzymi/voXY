@@ -3709,6 +3709,7 @@ version = "0.1.0"
 dependencies = [
  "arc-swap",
  "glam",
+ "libm",
  "proptest",
  "semver",
  "serde",

@@ -212,6 +212,15 @@ impl Property {
     /// at the same time and turning animation on if needed.
     pub fn insert_keyframe(&mut self, mut key: Keyframe) -> Result<(), PropertyError> {
         key.value = validate(&self.desc, key.value)?;
+        if let Err(reason) = key.interp.validate() {
+            return Err(PropertyError::Track {
+                key: self.desc.key.clone(),
+                source: TrackError::InvalidEase {
+                    time: key.time,
+                    reason,
+                },
+            });
+        }
         if key.spatial.is_some_and(|s| !s.is_finite()) {
             return Err(PropertyError::NonFinite {
                 key: self.desc.key.clone(),
@@ -259,6 +268,15 @@ impl Property {
     }
 
     pub fn set_interp(&mut self, times: &[Time], interp: Interp) -> Result<(), PropertyError> {
+        if let Err(reason) = interp.validate() {
+            return Err(PropertyError::Track {
+                key: self.desc.key.clone(),
+                source: TrackError::InvalidEase {
+                    time: times.first().copied().unwrap_or(Time::ZERO),
+                    reason,
+                },
+            });
+        }
         self.edit_keys(times, |k| {
             k.interp = interp;
             Ok(())

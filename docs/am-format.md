@@ -78,6 +78,49 @@ conclusive:
 If one change per export is practical, splitting #4 into move-only,
 scale-only, rotate-only and opacity-only exports is even better.
 
+## Parametric graphs: spring, bounce, oscillation, steps, stepped ramp
+
+**Nothing here is confirmed.** voXY has no sample of these graph types. The
+only source so far is the project owner's reading of a promotional image of
+five graph shapes, which is **not** the app's documentation and is recorded
+here only as a list of questions, not as findings. voXY's own definitions of
+the five easings (`docs/design-graphs.md`) were built independently of the
+app's format.
+
+| Question | Why it matters | Status |
+|---|---|---|
+| Are these graph types stored as a type identifier plus parameters, or as sampled or bézier-approximated curves? | Decides whether import can map to voXY's analytic types or must keep the data verbatim and approximate. | Unknown |
+| Identifier strings and parameter names for each type | Needed to map import and to write export. | Unknown |
+| Parameter encoding and normalization (units, ranges, whether 0..1) | voXY's parameters (frequency in cycles, damping as decay rate, …) may not match the app's. | Unknown |
+| Does the app's "overshoot" (spring) mean peak height, launch energy, or something else? | voXY currently uses launch energy (`design-graphs.md` §2.1). | Unknown |
+| What do the two handles (main and secondary) control, per type? | The handle mapping in `design-graphs.md` §4 is a proposal only. | Unknown |
+| How does each type behave at its ends (does it hit the target exactly)? | voXY guarantees `f(0)=0`, `f(1)=1`. | Unknown |
+| Step jump positions and the "hold on last value" behavior | voXY uses CSS `steps()` semantics. | Unknown |
+
+Until these are answered from samples: **import keeps the original data
+verbatim** (the existing lossless rule), renders an approximation, and
+reports it; **export writes what it can represent and reports what it cannot**.
+If an approximation (for example a sampled or bézier fit) turns out to be the
+only way to export a type, the export report will say so explicitly.
+
+**Requested sample batch for these graphs.** Same app version and OS as the
+first batch, each with the matching rendered video for the fidelity tests.
+Use a single scalar property (opacity or rotation) from 0 to 100 over 2 s so
+the curve is easy to read, and change nothing else.
+
+| # | File | What to make in the app |
+|---|---|---|
+| 12 | `12-ease-spring-default` | Two keyframes with the spring graph at its default parameters. |
+| 13 | `13-ease-spring-<param>` | #12 with exactly one spring parameter changed, one file per parameter (name what you changed in the file name). |
+| 14 | `14-ease-bounce-default` | The same with the bounce graph; then one file per changed parameter. |
+| 15 | `15-ease-oscillation-default` | The oscillation graph; then one file per changed parameter. |
+| 16 | `16-ease-steps-default` | The steps graph; then one file per changed parameter, including each jump position. |
+| 17 | `17-ease-stepped-ramp-default` | The stepped-ramp graph; then one file per changed parameter. |
+| 18 | `18-ease-handles` | For each type, one export with only the main handle dragged and one with only the secondary handle dragged, and a note of which numbers the app shows. |
+
+Also useful: a screenshot of each graph's editor with its handles, so the
+yellow/white handle roles can be confirmed against the real UI.
+
 ## Container
 
 *Unknown.* For each sample, check: is it a zip? What does it contain? What
