@@ -41,6 +41,8 @@ pub struct TimelineView {
     scroll: f64,
     pub expanded: HashSet<LayerId>,
     pub selected_keys: HashSet<(PropId, Time)>,
+    /// Scroll this layer into view on the next frame (set by Reveal).
+    pub reveal: Option<LayerId>,
     drag: Option<Drag>,
 }
 
@@ -129,6 +131,17 @@ pub fn show(ui: &mut Ui, state: &mut EditorState) {
         .pps
         .get_or_insert(f64::from(lane_w) / duration);
     let mut scroll = state.timeline.scroll;
+    // Reveal: bring a layer that starts outside the visible time range into view.
+    if let Some(id) = state.timeline.reveal
+        && let Some(layer) = comp.layer(id)
+    {
+        let visible = f64::from(lane_w) / pps;
+        let start = layer.in_point.as_secs_f64();
+        if start < scroll || start > scroll + visible {
+            scroll = (start - visible * 0.1).max(0.0);
+            state.timeline.scroll = scroll;
+        }
+    }
 
     // Zoom and pan with the pointer over the lanes.
     if let Some(p) = ui
@@ -308,6 +321,10 @@ fn layer_rows(ui: &mut Ui, state: &mut EditorState, layer: &Layer, cx: Cx) {
     let selected = state.selection == Some(layer.id);
     let expanded = state.timeline.expanded.contains(&layer.id);
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::hover());
+    if state.timeline.reveal == Some(layer.id) {
+        ui.scroll_to_rect(rect, Some(egui::Align::Center));
+        state.timeline.reveal = None;
+    }
     let header = Rect::from_min_size(rect.min, vec2(HEADER_W, ROW_H));
     let lane = Rect::from_min_max(pos2(cx.axis.left, rect.top()), rect.max);
     let painter = ui.painter_at(rect);
@@ -325,9 +342,19 @@ fn layer_rows(ui: &mut Ui, state: &mut EditorState, layer: &Layer, cx: Cx) {
 
     // Header: expand arrow, visibility dot, name.
     let name_id = Id::new(("tl-name", layer.id));
-    if ui.interact(header, name_id, Sense::click()).clicked() {
+    let name_resp = ui.interact(header, name_id, Sense::click());
+    if name_resp.clicked() || name_resp.secondary_clicked() {
         state.selection = Some(layer.id);
     }
+    name_resp.context_menu(|ui| {
+        for a in [
+            crate::actions::Action::RevealSourceInProject,
+            crate::actions::Action::RevealInFileManager,
+            crate::actions::Action::LayerDelete,
+        ] {
+            crate::menu::action_item(ui, state, a);
+        }
+    });
     let arrow = Rect::from_min_size(header.min + vec2(2.0, 0.0), vec2(18.0, ROW_H));
     if ui
         .interact(arrow, Id::new(("tl-expand", layer.id)), Sense::click())

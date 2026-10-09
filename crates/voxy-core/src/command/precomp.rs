@@ -13,7 +13,8 @@ use std::sync::Arc;
 use glam::{DAffine2, DVec2, DVec3};
 
 use super::pool::{
-    numbered_name, remap_parents, renumber_layer, source_duration, source_size, validate_name,
+    numbered_name, precomps_folder, remap_parents, renumber_layer, source_duration, source_size,
+    validate_name,
 };
 use super::{Command, CommandError, CommandReport, comp_mut, new_layer};
 use crate::color::LinearRgba;
@@ -112,6 +113,8 @@ fn move_attributes(
         name,
         ..CompSettings::of(parent)
     });
+    let folder = precomps_folder(doc, report);
+    comp_mut(doc, child)?.folder = Some(folder);
     let mut kept = Vec::new();
     let mut inside = Vec::new();
     for l in &parent.layers {
@@ -159,12 +162,7 @@ fn move_attributes(
         transform,
     );
     kept.insert(top, Arc::new(precomp));
-    let folder = parent.folder;
-    {
-        let c = comp_mut(doc, child)?;
-        c.layers = inside;
-        c.folder = folder;
-    }
+    comp_mut(doc, child)?.layers = inside;
     comp_mut(doc, parent.id)?.layers = kept;
     report.created_comps.push(child);
     report.created_layers.push(id);
@@ -263,6 +261,8 @@ fn leave_attributes(
         duration,
         background: doc.meta.settings.new_comp.background,
     });
+    let folder = precomps_folder(doc, report);
+    comp_mut(doc, child)?.folder = Some(folder);
     let (inner_kind, outer_kind) = match layer.kind.clone() {
         LayerKind::Precomp {
             comp,
@@ -307,12 +307,7 @@ fn leave_attributes(
         duration,
         transform,
     );
-    let folder = parent.folder;
-    {
-        let c = comp_mut(doc, child)?;
-        c.layers = vec![Arc::new(inner)];
-        c.folder = folder;
-    }
+    comp_mut(doc, child)?.layers = vec![Arc::new(inner)];
     comp_mut(doc, parent.id)?
         .layer_mut(id)
         .expect("checked")

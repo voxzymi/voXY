@@ -166,7 +166,7 @@ mod tests {
 
     #[test]
     fn plan_applies_scale_space_and_opacity() {
-        let mut doc = Document::new(
+        let mut doc = Document::with_comp(
             "Plan",
             CompSettings {
                 width: 100,
@@ -216,7 +216,7 @@ mod tests {
 
     #[test]
     fn invisible_layers_are_dropped() {
-        let mut doc = Document::new("Plan", CompSettings::default());
+        let mut doc = Document::with_comp("Plan", CompSettings::default());
         let comp = doc.main_comp.unwrap();
         AddSolidLayer {
             comp,
@@ -247,7 +247,7 @@ mod tests {
         use voxy_core::command::{
             AddImageLayer, AddSourceLayer, CreateComposition, RemoveItems, RemoveMode,
         };
-        let mut doc = Document::new("Plan", CompSettings::default());
+        let mut doc = Document::with_comp("Plan", CompSettings::default());
         let comp = doc.main_comp.unwrap();
         AddImageLayer {
             comp,

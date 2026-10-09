@@ -307,6 +307,74 @@ impl Command for CreateFolder {
     }
 }
 
+/// Name of the root folder pre-composed compositions go in.
+pub const PRECOMPS_FOLDER: &str = "Pre-comps";
+
+/// The root folder named [`PRECOMPS_FOLDER`], created if there is none.
+/// It is found by exact name, so renaming it makes the next pre-compose
+/// create a new one.
+pub(crate) fn precomps_folder(doc: &mut Document, report: &mut CommandReport) -> FolderId {
+    if let Some(f) = doc
+        .folders
+        .values()
+        .find(|f| f.parent.is_none() && f.name == PRECOMPS_FOLDER)
+    {
+        return f.id;
+    }
+    let id: FolderId = doc.alloc_id();
+    Arc::make_mut(&mut doc.folders).insert(
+        id,
+        Folder {
+            id,
+            name: PRECOMPS_FOLDER.to_owned(),
+            parent: None,
+        },
+    );
+    report.created_folders.push(id);
+    id
+}
+
+/// Adds media to the project without placing it in any composition.
+/// Importing never creates a composition. The assets' IDs are assigned
+/// here and returned in the report; the `id` and `folder` fields of the
+/// given assets are ignored.
+#[derive(Debug, Clone)]
+pub struct ImportAssets {
+    pub assets: Vec<crate::Asset>,
+    pub folder: Option<FolderId>,
+}
+
+impl Command for ImportAssets {
+    fn label(&self) -> Cow<'static, str> {
+        "Import".into()
+    }
+
+    fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
+        self.apply_reported(doc, &mut CommandReport::default())
+    }
+
+    fn apply_reported(
+        &self,
+        doc: &mut Document,
+        report: &mut CommandReport,
+    ) -> Result<(), CommandError> {
+        if self.assets.is_empty() {
+            return Err(CommandError::Invalid("nothing to import".into()));
+        }
+        check_folder(doc, self.folder)?;
+        for asset in &self.assets {
+            if asset.path.trim().is_empty() {
+                return Err(CommandError::Invalid("a media path cannot be empty".into()));
+            }
+            let mut asset = asset.clone();
+            asset.name = validate_name(&asset.name)?;
+            asset.folder = self.folder;
+            report.created_assets.push(doc.add_asset(asset));
+        }
+        Ok(())
+    }
+}
+
 /// Moves items into `folder` (`None`: the top level). A folder cannot move
 /// into itself or its own subfolders.
 #[derive(Debug, Clone)]

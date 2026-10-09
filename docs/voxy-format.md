@@ -33,7 +33,7 @@ MyProject.assets/
 | `format_version` | Semantic version of the schema below. |
 | `generator` | The program that wrote the file. Informational only. |
 | `project` | The document. |
-| `ui_state` | Optional (0.4.0). Editor state: open composition tabs, playheads, zoom, selection, panel state. It never affects rendering, is versioned on its own (`ui_state.version`), and a loader that does not understand it ignores it. Tabs pointing at compositions that no longer exist are dropped. |
+| `ui_state` | Optional (0.4.0). Editor state: open composition tabs, playheads, zoom, selection, panel state. It never affects rendering, is versioned on its own (`ui_state.version`), and a loader that does not understand it ignores it. Tabs pointing at compositions that no longer exist are dropped. Version 2 (voXY with the Project panel) stores the panel as `project_panel` (`sort`, `descending`, `filter`, `search`, `columns`, `expanded`); version 1 stored it as `media_panel` and still loads. Invalid fields are dropped one by one. |
 
 ### Version policy
 
@@ -83,7 +83,7 @@ folder, flushed, then renamed over the target.
 | `assets` | array of Asset | |
 | `comps` | array of Composition | |
 | `folders` | array of Folder | Optional (0.4.0). Project panel folders. |
-| `main_comp` | ID or `null` | The composition shown when no other is open, and the default for export. `null` when the project has no compositions. Called `root_comp` before 0.4.0. |
+| `main_comp` | ID or `null` | The composition shown when no other is open, and the default for export. `null` when the project has no compositions: a new project is saved that way (`comps` empty, no tabs) and opens without creating one. Called `root_comp` before 0.4.0. |
 | `foreign` | object | Optional. |
 | `next_id` | integer | Greater than every ID in the file. |
 

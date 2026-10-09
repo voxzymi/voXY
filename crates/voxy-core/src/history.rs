@@ -303,7 +303,7 @@ mod tests {
     use crate::{LinearRgba, Value};
 
     fn history() -> History {
-        History::new(Document::new("Test", CompSettings::default()))
+        History::new(Document::with_comp("Test", CompSettings::default()))
     }
 
     fn add_solid(h: &mut History) {

@@ -1,7 +1,5 @@
 //! The dockable panels.
 
-use std::fmt::Write as _;
-
 use egui::{Id, RichText, Ui, WidgetText};
 use egui_dock::TabViewer;
 use voxy_core::command::{
@@ -23,23 +21,44 @@ pub enum Tab {
     Timeline,
     Graph,
     Properties,
-    Media,
+    /// The Project panel (called the Media panel before it listed
+    /// compositions and folders).
+    Project,
 }
 
 impl Tab {
-    fn title(self) -> &'static str {
+    pub const ALL: [Tab; 5] = [
+        Tab::Viewport,
+        Tab::Timeline,
+        Tab::Graph,
+        Tab::Properties,
+        Tab::Project,
+    ];
+
+    pub(crate) fn title(self) -> &'static str {
         match self {
             Tab::Viewport => "Viewport",
             Tab::Timeline => "Timeline",
             Tab::Graph => "Graph Editor",
             Tab::Properties => "Properties",
-            Tab::Media => "Media",
+            Tab::Project => "Project",
         }
+    }
+
+    /// The panel a saved layout's panel name stands for, including names
+    /// from before the rename ("Media").
+    #[allow(
+        dead_code,
+        reason = "used when the dock layout is saved (Preferences, P-D); covered by tests"
+    )]
+    pub fn from_saved(name: &str) -> Option<Tab> {
+        let current = crate::compat::panel_name(name)?;
+        Tab::ALL.into_iter().find(|t| t.title() == current)
     }
 }
 
-/// Default layout: media left, viewport center, properties right, timeline
-/// along the bottom.
+/// Default layout: Project panel left, viewport center, properties right,
+/// timeline along the bottom.
 pub fn default_layout() -> egui_dock::DockState<Tab> {
     use egui_dock::NodeIndex;
     let mut dock = egui_dock::DockState::new(vec![Tab::Viewport]);
@@ -47,7 +66,7 @@ pub fn default_layout() -> egui_dock::DockState<Tab> {
     let [top, _timeline] =
         tree.split_below(NodeIndex::root(), 0.68, vec![Tab::Timeline, Tab::Graph]);
     let [center, _properties] = tree.split_right(top, 0.76, vec![Tab::Properties]);
-    let [_media, _viewport] = tree.split_left(center, 0.22, vec![Tab::Media]);
+    let [_project, _viewport] = tree.split_left(center, 0.26, vec![Tab::Project]);
     dock
 }
 
@@ -79,7 +98,14 @@ impl TabViewer for Panels<'_> {
             Tab::Timeline => self.timeline_ui(ui),
             Tab::Graph => crate::graph_editor::show(ui, self.state),
             Tab::Properties => self.properties_ui(ui),
-            Tab::Media => self.media_ui(ui),
+            Tab::Project => self.project_ui(ui),
+        }
+        // A press inside a panel gives it keyboard focus, which decides what
+        // Delete, Enter and Select All mean (Project panel or editor).
+        let pressed =
+            ui.input(|i| i.pointer.any_pressed()) && ui.rect_contains_pointer(ui.max_rect());
+        if pressed {
+            self.state.project.focused = matches!(tab, Tab::Project);
         }
     }
 }
@@ -374,54 +400,22 @@ impl Panels<'_> {
         }
     }
 
-    fn media_ui(&mut self, ui: &mut Ui) {
-        ui.horizontal(|ui| {
-            if ui.button("Import Image…").clicked() {
-                self.state.import_image_dialog();
-            }
-            if ui.button("Import Video…").clicked() {
-                self.state.import_video_dialog();
-            }
-        });
-        ui.separator();
-        let doc = self.state.history.current().clone();
-        if doc.assets.0.is_empty() {
-            ui.weak("No media yet.");
-        }
-        let missing = &self
+    fn project_ui(&mut self, ui: &mut Ui) {
+        // Footage the viewport could not decode, with the reason.
+        let problems: std::collections::HashMap<voxy_core::AssetId, String> = self
             .viewport
             .as_ref()
-            .map(|v| v.last_report.missing_assets.clone())
+            .map(|v| {
+                self.state
+                    .history
+                    .current()
+                    .assets
+                    .iter()
+                    .filter_map(|a| v.media.failure(a.id).map(|e| (a.id, e.to_owned())))
+                    .collect()
+            })
             .unwrap_or_default();
-        for a in doc.assets.iter() {
-            let failure = self
-                .viewport
-                .as_ref()
-                .and_then(|v| v.media.failure(a.id))
-                .map(str::to_owned);
-            let bad = missing.contains(&a.id) || failure.is_some();
-            let mut text = RichText::new(&a.name);
-            if bad {
-                text = text.color(ui.visuals().warn_fg_color);
-            }
-            let r = ui.label(text);
-            let mut tip = a.path.clone();
-            if let Some([w, h]) = a.pixel_size {
-                let _ = write!(tip, "\n{w} × {h} px");
-            }
-            if let Some(d) = a.duration {
-                let _ = write!(tip, ", {:.2} s", d.as_secs_f64());
-            }
-            if let Some(r) = a.frame_rate {
-                let _ = write!(tip, ", {r}");
-            }
-            if let Some(e) = failure {
-                let _ = write!(tip, "\nCannot play: {e}");
-            } else if missing.contains(&a.id) {
-                tip.push_str("\nMissing: the file could not be loaded");
-            }
-            r.on_hover_text(tip);
-        }
+        crate::project_panel::show(ui, self.state, &problems);
     }
 }
 

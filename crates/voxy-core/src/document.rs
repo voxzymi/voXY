@@ -172,9 +172,10 @@ pub enum ValidationError {
 }
 
 impl Document {
-    /// A new document with one empty root composition.
-    pub fn new(name: impl Into<String>, settings: CompSettings) -> Self {
-        let mut doc = Document {
+    /// A project with no compositions, media or folders: what a new project
+    /// starts as. Nothing creates a composition behind the user's back.
+    pub fn empty(name: impl Into<String>) -> Self {
+        Document {
             meta: ProjectMeta {
                 name: name.into(),
                 working_space: WorkingSpace::default(),
@@ -186,7 +187,14 @@ impl Document {
             main_comp: None,
             foreign: ForeignData::default(),
             next_id: 1,
-        };
+        }
+    }
+
+    /// An empty project plus one composition, which becomes the main one.
+    /// Scaffolding for tests and fixtures; the application starts from
+    /// [`Document::empty`].
+    pub fn with_comp(name: impl Into<String>, settings: CompSettings) -> Self {
+        let mut doc = Document::empty(name);
         let id = doc.add_comp(settings);
         doc.main_comp = Some(id);
         doc
@@ -574,7 +582,7 @@ mod tests {
 
     #[test]
     fn new_document_is_valid() {
-        let doc = Document::new("Test", CompSettings::default());
+        let doc = Document::with_comp("Test", CompSettings::default());
         doc.validate().unwrap();
         let main = doc.main().unwrap();
         assert_eq!(main.width, 1920);
@@ -586,7 +594,7 @@ mod tests {
 
     #[test]
     fn clones_share_until_written() {
-        let mut a = Document::new("Test", CompSettings::default());
+        let mut a = Document::with_comp("Test", CompSettings::default());
         let b = a.clone();
         assert!(Arc::ptr_eq(&a.comps, &b.comps));
         let main = a.main_comp.unwrap();

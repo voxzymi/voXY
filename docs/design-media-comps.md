@@ -1,5 +1,11 @@
 # Design note: media pool, compositions, precomps, reveal, drag to timeline
 
+> **Naming:** the "media panel" and "media pool" described below are the
+> **Project panel** and the project, and it lists compositions and folders as
+> well as footage. See [`design-project-panel.md`](design-project-panel.md).
+> A project with zero compositions is the normal starting state; the "Comp 1"
+> default no longer exists.
+
 **Status: approved.** The owner's decisions are recorded in §13. Milestone A
 (data model and commands in `voxy-core`) is implemented; see "Implementation
 notes (Milestone A)" at the end. Deferred work is tracked in

@@ -21,7 +21,7 @@ const IN_TANGENT: DVec3 = DVec3::new(300.0, -100.0, 0.0);
 /// A solid whose position animates over 2 s along a strongly curved,
 /// unevenly parameterized arc.
 fn animated_doc() -> (Document, PropId) {
-    let mut doc = Document::new("Motion", CompSettings::default());
+    let mut doc = Document::with_comp("Motion", CompSettings::default());
     let comp = doc.main_comp.unwrap();
     AddSolidLayer {
         comp,

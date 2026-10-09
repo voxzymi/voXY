@@ -212,7 +212,7 @@ mod tests {
     use crate::{LinearRgba, Value};
 
     fn sample() -> Document {
-        let mut doc = Document::new("Sample", CompSettings::default());
+        let mut doc = Document::with_comp("Sample", CompSettings::default());
         let comp = doc.main_comp.unwrap();
         AddSolidLayer {
             comp,

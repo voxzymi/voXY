@@ -2,28 +2,19 @@
 
 use std::path::PathBuf;
 
-use egui::{Key, KeyboardShortcut, Modifiers, RichText, Ui};
+use egui::{RichText, Ui};
 use egui_dock::{DockArea, DockState};
+use voxy_core::WorkingSpace;
 use voxy_core::command::SetWorkingSpace;
-use voxy_core::{Time, WorkingSpace};
 
+use crate::actions::Action;
+use crate::menu::{action_item, action_item_labelled};
 use crate::panels::{Panels, Tab, default_layout, working_space_label};
-use crate::state::EditorState;
+use crate::state::{AppRequest, EditorState};
 use crate::viewport::ViewportRenderer;
 
 /// Product name, exactly as it must appear to users.
 pub const PRODUCT_NAME: &str = "voXY";
-
-const UNDO: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Z);
-const REDO: KeyboardShortcut =
-    KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::Z);
-const REDO_ALT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Y);
-const NEW: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::N);
-const OPEN: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::O);
-const SAVE: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::S);
-const SAVE_AS: KeyboardShortcut =
-    KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::S);
-const QUIT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Q);
 
 /// Actions that discard the current document and therefore ask first if it
 /// has unsaved changes.
@@ -62,6 +53,13 @@ impl VoxyApp {
             tracing::error!("eframe did not provide a wgpu render state; the viewport is disabled");
         }
         let mut state = EditorState::new(EditorState::untitled());
+        for c in state.keymap.conflicts() {
+            tracing::warn!(
+                "shortcut {:?} is bound to more than one action: {:?}",
+                c.shortcut,
+                c.actions
+            );
+        }
         if let Some(path) = open {
             state.open_path(&path);
         }
@@ -96,113 +94,65 @@ impl VoxyApp {
         }
     }
 
+    /// Runs the actions whose shortcuts were pressed this frame. An action
+    /// that cannot run says why in the status bar and does nothing.
     fn shortcuts(&mut self, ctx: &egui::Context) {
-        // Text fields and drag values keep their own editing shortcuts.
+        // Text fields keep their own editing shortcuts.
         let typing = ctx.egui_wants_keyboard_input();
-        let consume = |s: &KeyboardShortcut| ctx.input_mut(|i| i.consume_shortcut(s));
-        // More specific shortcuts first: Ctrl+Shift+Z before Ctrl+Z.
-        if consume(&SAVE_AS) {
-            self.state.save_as_dialog();
-        } else if consume(&SAVE) {
-            self.state.save();
+        let project_focused = self.state.project.focused;
+        let fired = ctx.input_mut(|i| self.state.keymap.dispatch(i, project_focused, typing));
+        for action in fired {
+            if let Err(why) = self.state.availability(action) {
+                self.state.info(why);
+            } else {
+                self.run(action);
+            }
         }
-        if consume(&NEW) {
-            self.request(Discarding::New);
+    }
+
+    /// Runs `action`, passing the requests that need confirmation to the
+    /// unsaved-changes flow.
+    fn run(&mut self, action: Action) {
+        if let Some(request) = self.state.perform(action) {
+            self.handle(request);
         }
-        if consume(&OPEN) {
-            self.request(Discarding::Open);
-        }
-        if consume(&QUIT) {
-            self.request(Discarding::Quit);
-        }
-        if typing {
-            return;
-        }
-        if consume(&REDO) || consume(&REDO_ALT) {
-            self.state.history.redo();
-        } else if consume(&UNDO) {
-            self.state.history.undo();
-        }
-        if ctx.input(|i| i.key_pressed(Key::Delete) || i.key_pressed(Key::Backspace)) {
-            self.state.delete_selection();
-        }
-        if ctx.input(|i| i.key_pressed(Key::Escape)) {
-            self.state.selection = None;
-        }
-        if ctx.input(|i| i.key_pressed(Key::Space)) {
-            self.state.toggle_playback();
-        }
-        if ctx.input(|i| i.key_pressed(Key::Home)) {
-            self.state.time = Time::ZERO;
-        }
-        // Count every press (and auto-repeat) this frame, not just whether a
-        // key went down, so fast stepping never drops frames.
-        let step: i64 = ctx.input(|i| {
-            i.events
-                .iter()
-                .map(|e| match e {
-                    egui::Event::Key {
-                        key: Key::ArrowRight,
-                        pressed: true,
-                        modifiers,
-                        ..
-                    } if modifiers.is_none() => 1,
-                    egui::Event::Key {
-                        key: Key::ArrowLeft,
-                        pressed: true,
-                        modifiers,
-                        ..
-                    } if modifiers.is_none() => -1,
-                    _ => 0,
-                })
-                .sum()
+    }
+
+    fn handle(&mut self, request: AppRequest) {
+        self.request(match request {
+            AppRequest::NewProject => Discarding::New,
+            AppRequest::Open => Discarding::Open,
+            AppRequest::Quit => Discarding::Quit,
         });
-        if step != 0
-            && let Some(comp) = self.state.comp()
-        {
-            let rate = comp.frame_rate;
-            let last = (rate.time_to_frame(comp.duration) - 1).max(0);
-            let frame = (rate.time_to_frame(self.state.time) + step).clamp(0, last);
-            self.state.time = rate.frame_to_time(frame);
+    }
+
+    fn item(&mut self, ui: &mut Ui, action: Action) {
+        if let Some(request) = action_item(ui, &mut self.state, action) {
+            self.handle(request);
+        }
+    }
+
+    fn item_labelled(&mut self, ui: &mut Ui, action: Action, label: &str) {
+        if let Some(request) = action_item_labelled(ui, &mut self.state, action, label) {
+            self.handle(request);
         }
     }
 
     fn menu_bar(&mut self, ui: &mut Ui) {
-        let ctx = ui.ctx().clone();
         egui::MenuBar::new().ui(ui, |ui| {
             ui.menu_button("File", |ui| {
-                if ui
-                    .add(egui::Button::new("New Project").shortcut_text(ctx.format_shortcut(&NEW)))
-                    .clicked()
-                {
-                    self.request(Discarding::New);
-                }
-                if ui
-                    .add(egui::Button::new("Open…").shortcut_text(ctx.format_shortcut(&OPEN)))
-                    .clicked()
-                {
-                    self.request(Discarding::Open);
-                }
+                ui.menu_button("New", |ui| {
+                    self.item_labelled(ui, Action::FileNewProject, "Project");
+                    self.item(ui, Action::FileNewComposition);
+                    self.item(ui, Action::ProjectNewFolder);
+                });
+                self.item(ui, Action::FileOpen);
+                self.item(ui, Action::FileImport);
                 ui.separator();
-                if ui
-                    .add(egui::Button::new("Save").shortcut_text(ctx.format_shortcut(&SAVE)))
-                    .clicked()
-                {
-                    self.state.save();
-                }
-                if ui
-                    .add(egui::Button::new("Save As…").shortcut_text(ctx.format_shortcut(&SAVE_AS)))
-                    .clicked()
-                {
-                    self.state.save_as_dialog();
-                }
+                self.item(ui, Action::FileSave);
+                self.item(ui, Action::FileSaveAs);
                 ui.separator();
-                if ui
-                    .add(egui::Button::new("Quit").shortcut_text(ctx.format_shortcut(&QUIT)))
-                    .clicked()
-                {
-                    self.request(Discarding::Quit);
-                }
+                self.item(ui, Action::FileQuit);
             });
             ui.menu_button("Edit", |ui| {
                 let undo = self
@@ -210,52 +160,27 @@ impl VoxyApp {
                     .history
                     .undo_label()
                     .map_or_else(|| "Undo".to_owned(), |l| format!("Undo {l}"));
-                if ui
-                    .add_enabled(
-                        self.state.history.can_undo(),
-                        egui::Button::new(undo).shortcut_text(ctx.format_shortcut(&UNDO)),
-                    )
-                    .clicked()
-                {
-                    self.state.history.undo();
-                }
+                self.item_labelled(ui, Action::EditUndo, &undo);
                 let redo = self
                     .state
                     .history
                     .redo_label()
                     .map_or_else(|| "Redo".to_owned(), |l| format!("Redo {l}"));
-                if ui
-                    .add_enabled(
-                        self.state.history.can_redo(),
-                        egui::Button::new(redo).shortcut_text(ctx.format_shortcut(&REDO)),
-                    )
-                    .clicked()
-                {
-                    self.state.history.redo();
-                }
+                self.item_labelled(ui, Action::EditRedo, &redo);
             });
             ui.menu_button("Layer", |ui| {
-                if ui.button("New Solid").clicked() {
-                    self.state.add_solid();
-                }
-                if ui.button("Import Image…").clicked() {
-                    self.state.import_image_dialog();
-                }
-                if ui.button("Import Video…").clicked() {
-                    self.state.import_video_dialog();
-                }
+                self.item(ui, Action::LayerNewSolid);
+                self.item(ui, Action::LayerImportImage);
+                self.item(ui, Action::LayerImportVideo);
                 ui.separator();
-                if ui
-                    .add_enabled(
-                        self.state.selection.is_some(),
-                        egui::Button::new("Delete").shortcut_text("Del"),
-                    )
-                    .clicked()
-                {
-                    self.state.delete_selection();
-                }
+                self.item(ui, Action::LayerDelete);
+                ui.separator();
+                self.item(ui, Action::RevealSourceInProject);
+                self.item(ui, Action::RevealInFileManager);
             });
             ui.menu_button("Composition", |ui| {
+                crate::project_panel::reveal_in_composition_menu(ui, &mut self.state);
+                ui.separator();
                 ui.label(RichText::new("Working color space").weak());
                 let current = self.state.history.current().meta.working_space;
                 for space in [WorkingSpace::Linear, WorkingSpace::SrgbCompat] {
@@ -266,6 +191,21 @@ impl VoxyApp {
                     {
                         self.state.execute(SetWorkingSpace(space));
                     }
+                }
+            });
+            ui.menu_button("Window", |ui| {
+                for tab in Tab::ALL {
+                    if ui.button(tab.title()).clicked() {
+                        if let Some(path) = self.dock.find_tab(&tab) {
+                            let _ = self.dock.set_active_tab(path);
+                        }
+                        ui.close();
+                    }
+                }
+                ui.separator();
+                if ui.button("Reset Layout").clicked() {
+                    self.dock = default_layout();
+                    ui.close();
                 }
             });
             ui.menu_button("Help", |ui| {

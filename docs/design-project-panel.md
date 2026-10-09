@@ -1,7 +1,9 @@
 # Design addendum: Project panel, compositions in the pool, no default composition
 
-**Status: draft, waiting for the owner's approval. No code is written yet.**
-Q1 to Q4 are decided (§10). Items still marked **(proposed)** need your OK.
+**Status: approved.** The owner's decisions are in §10. Milestone B (the Project
+panel, folders, Reveal actions, action table) is implemented; see
+"Implementation notes (Milestone B)" at the end. Milestones C and P-B to P-D
+follow, in that order.
 
 This extends [`design-media-comps.md`](design-media-comps.md) (approved). All its
 rules stay: every state change is a `Command` run through `History`, `voxy-core`
@@ -89,7 +91,12 @@ deterministic.
   folder named "Pre-comps". The command finds a root folder with that exact
   name, or creates it, **inside the same command** (still one undo step).
   The folder is found by name, so if the user renames it, the next pre-compose
-  creates a new "Pre-comps". This needs no schema change. **(proposed)**
+  creates a new "Pre-comps". This needs no schema change.
+
+  > **Heads-up (decided):** the "Pre-comps" folder is matched by its exact name
+  > at the top level. If you rename or move it, the next pre-compose makes a
+  > new "Pre-comps" folder instead of reusing yours. Compositions already in
+  > your folder stay where they are.
 
 ## 3. No active composition
 
@@ -250,7 +257,9 @@ Widths are measured on the panel's own available rect, in egui points.
 - **Preference** "Show tips", default on. There is no preferences store today,
   so this adds a minimal `Preferences` struct in `voxy-ui` saved as TOML in the
   platform config dir, separate from project files. Missing or corrupt file =
-  defaults. The tip hides when off; the tiles are unaffected. **(proposed)**
+  defaults. The tip hides when off; the tiles are unaffected. The store lives
+  in the operating system's per-user config directory (never in a project
+  file) and a missing or corrupt file falls back to the defaults.
 - **Validation test (§9):** parse the file; every `{action:id}` resolves in the
   action table; no raw `{` or `}` left; length limit; unique `id`s; at least 30;
   no tip text is empty.
@@ -267,7 +276,7 @@ Widths are measured on the panel's own available rect, in egui points.
 - **Menus:** File > New > Composition and File > New > Composition From
   Footage work from any state (they are `Requires::Nothing`). Proposed
   shortcuts in the action table: New Composition `Ctrl/⌘+N`, New Project
-  `Ctrl/⌘+Alt+N`, because `Ctrl/⌘+N` is New Project today **(open, §10 Q5)**. New Composition From Footage has no default shortcut.
+  `Ctrl/⌘+Alt+N`, because `Ctrl/⌘+N` is New Project today (decided, Q5). New Composition From Footage has no default shortcut.
 
 ## 6. Commands added or changed
 
@@ -342,7 +351,7 @@ Each P milestone still ends with clippy and tests passing.
 - **Tips:** §4.5 validator.
 - **Persistence:** empty project, migrated `ui_state` v1 → v2.
 
-## 10. Decisions and open question
+## 10. Decisions
 
 | # | Question | Decision |
 |---|---|---|
@@ -350,9 +359,80 @@ Each P milestone still ends with clippy and tests passing.
 | Q2 | Tip selection | **Random per launch, never the same as last launch** (§4.5). |
 | Q3 | Tiles in the viewport | **No.** Message only (§4.4). |
 | Q4 | Ordering | **Fold P-A into Milestone B**; P-B to P-D follow the action table and settings dialog (§8). |
-| Q5 | **Open:** shortcuts | `Ctrl/⌘+N` is New Project today. Proposed: New Composition `Ctrl/⌘+N`, New Project `Ctrl/⌘+Alt+N`, as in After Effects. Is changing New Project's shortcut acceptable? |
+| Q5 | Shortcuts | **New Composition `Ctrl/⌘+N`, New Project `Ctrl/⌘+Alt+N`**, as in After Effects. Both are in the action table, so the shortcut editor can rebind them; a test checks that no default shortcut collides (§5). |
 
-Also **proposed, not yet confirmed** (will be treated as approved with this
-document): "Pre-comps" folder found by name (§2); `toml` as a new dependency
-and a minimal `Preferences` store (§4.5); renaming `Document::new` to
-`Document::with_comp` (§3.1).
+Also approved with notes: the "Pre-comps" folder is found by exact name (§2);
+`toml` as a new dependency and a small `Preferences` store, kept apart from
+the project file in the per-user config directory and tolerant of a missing
+or corrupt file (§4.5); `Document::new` renamed `Document::with_comp`, with
+`Document::empty` for the app, which never calls `with_comp` (§3.1).
+
+## Implementation notes (Milestone B)
+
+What landed, and where it refines the design above.
+
+- **Core (`voxy-core`).**
+  - `Document::empty(name)` and `Document::with_comp(name, settings)`
+    (the old `Document::new`). Only tests and fixtures call `with_comp`.
+  - `ImportAssets { assets, folder }` adds footage with no layer and no
+    composition; `CommandReport` gained `created_assets`.
+  - `PrecomposeLayers` files the new composition in the top-level
+    "Pre-comps" folder, creating it in the same command (one undo step).
+    Pre-composed compositions no longer inherit the parent's folder.
+- **Action table** (`voxy-ui/src/actions.rs`). Every menu item and shortcut is
+  an `Action` with a stable id, label, default shortcuts, a scope (global,
+  editor, Project panel), what it `requires` (nothing, a composition, a layer,
+  a Project panel selection) and aliases for older ids. `Keymap` holds the
+  bindings in effect (defaults plus overrides), reports collisions, and
+  dispatches the keys pressed in a frame, most specific first, so
+  `Ctrl+Alt+N` is never taken by `Ctrl+N`. Unavailable actions are disabled in
+  menus with a tooltip ("Create or open a composition first."); pressed by
+  shortcut they say the same in the status bar and do nothing.
+  Saved bindings and the shortcut editor come with Preferences (P-D); the
+  table already supports rebinding and loading old ids.
+- **Project panel** (`project_view.rs` for logic, `project_panel.rs` for
+  drawing). One tree of folders, compositions and footage with search, type
+  filter (All, Compositions, Footage, Folders, Missing), sort (Name, Type,
+  Size, Frame Rate, Duration, Used, Date Added; descending toggle), toggleable
+  columns (left out from the right when the panel is narrow), multi-select
+  (click, Ctrl/⌘, Shift), inline rename, duplicate (compositions), remove with
+  a confirmation when layers use the items or a folder has contents, drag
+  into folders, import (button, menu, drag from the operating system), a
+  footer with counts and "Create New Composition", and context menus
+  (items, and empty space: New Composition, New Folder, Import…, Select All).
+  Missing files are checked at most every two seconds and on every document
+  change; the badge, the Missing filter and Relink… use that result.
+- **New items.** New Composition (button, footer, `Ctrl/⌘+N`, menu) creates a
+  composition from the project defaults named "Comp 1", "Comp 2"…, opens it,
+  selects it in the panel, scrolls to it and starts inline rename. It goes in
+  the selected folder. The Composition Settings dialog (Milestone C) will
+  open first.
+- **Reveal** (`reveal.rs`). `reveal.source_in_project`, `reveal.in_composition`
+  and `reveal.in_file_manager`, with the target rules of
+  `design-media-comps.md` §6 as pure functions and the per-OS launch plans
+  tested on every host. They change view state only, never `History`.
+  Until composition tabs land the "open composition" is view state in
+  `EditorState` (falls back to `main_comp`), and a Reveal selects the first
+  matching layer (the editor has one layer selection until Milestone E).
+  The playhead moves to the layer's in-point when it is outside the layer, and
+  the timeline scrolls to the layer.
+- **Rename.** The panel, tab, Window menu, action ids (`project_panel.*`),
+  tooltips and status strings say "Project". `compat.rs` maps the old panel
+  names ("Media", `media_panel`…) and `ui_state` v1 `media_panel` to the new
+  names; action aliases cover `media_panel.*`, `media.*` and
+  `reveal.source_in_media`.
+- **`ui_state` version 2** (the format version stays 0.4.0): the panel is
+  saved as `project_panel` with `sort`, `descending`, `filter`, `search`,
+  `columns` and `expanded`. Loading reads version 1 (`media_panel`) and
+  version 2, drops invalid fields one by one, and never fails.
+- **A new project is empty already in this milestone.** `EditorState::untitled()`
+  uses `Document::empty`, with a test that fails if it creates a composition,
+  so the New Composition button has something to do. The full audit of "no
+  active composition" (every menu and shortcut exercised with none, export,
+  autosave) is still P-B.
+- **Deferred.**
+  - Thumbnails in the Project panel's info header: it shows a large icon and
+    the settings summary until the preview renderer can render a composition
+    other than the open one. (Tracked in [`deferred.md`](deferred.md).)
+  - Saving the dock layout and shortcut overrides (Preferences, P-D).
+  - Dragging items onto the timeline or viewport (Milestone D).

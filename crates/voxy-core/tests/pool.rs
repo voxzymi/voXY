@@ -5,16 +5,16 @@
 
 use voxy_core::command::{
     AddImageLayer, AddSolidLayer, AddSourceLayer, AddVideoLayer, Anchor, CreateComposition,
-    CreateFolder, DuplicateComposition, MoveToFolder, PrecomposeLayers, PrecomposeMode,
-    RemoveItems, RemoveMode, RenameComposition, RenameFolder, RenameMedia, ReplaceLayerSource,
-    ReplaceMedia, ResizeMode, SetAnimated, SetCompositionSettings, SetLayerTiming,
-    SetPrecompTiming, SetProperty, SetWorkArea, UnprecomposeLayer, nearest_frame_time, off_grid,
-    validate_name,
+    CreateFolder, DuplicateComposition, ImportAssets, MoveToFolder, PRECOMPS_FOLDER,
+    PrecomposeLayers, PrecomposeMode, RemoveItems, RemoveMode, RenameComposition, RenameFolder,
+    RenameMedia, ReplaceLayerSource, ReplaceMedia, ResizeMode, SetAnimated, SetCompositionSettings,
+    SetLayerTiming, SetPrecompTiming, SetProperty, SetWorkArea, UnprecomposeLayer,
+    nearest_frame_time, off_grid, validate_name,
 };
 use voxy_core::glam::DVec2;
 use voxy_core::{
-    AssetId, CommandError, CompId, CompSettings, Document, FolderId, FrameRate, History, Layer,
-    LayerId, LayerKind, PoolItem, SourceRef, Time, Value, WorkArea, persist,
+    Asset, AssetId, AssetKind, CommandError, CompId, CompSettings, Document, FolderId, FrameRate,
+    History, Layer, LayerId, LayerKind, PoolItem, SourceRef, Time, Value, WorkArea, persist,
 };
 
 fn settings(name: &str) -> CompSettings {
@@ -27,7 +27,7 @@ fn settings(name: &str) -> CompSettings {
 }
 
 fn history() -> History {
-    History::new(Document::new("Pool", settings("Main")))
+    History::new(Document::with_comp("Pool", settings("Main")))
 }
 
 fn main_id(h: &History) -> CompId {
@@ -1352,5 +1352,144 @@ fn new_projects_round_trip_with_ui_state() {
     assert_eq!(
         persist::to_json_with_ui(&doc, Some(&back.unwrap())).unwrap(),
         json
+    );
+}
+
+// ------------------------------------------- Project panel groundwork (B)
+
+#[test]
+fn an_empty_document_has_no_compositions() {
+    let doc = Document::empty("Fresh");
+    assert!(doc.comps.is_empty() && doc.assets.iter().next().is_none() && doc.folders.is_empty());
+    assert_eq!(doc.main_comp, None);
+    doc.validate().unwrap();
+    let back = persist::from_json(&persist::to_json(&doc).unwrap()).unwrap();
+    assert_eq!(back, doc, "round-trips with zero compositions");
+}
+
+#[test]
+fn import_adds_media_only_and_one_undo_removes_it() {
+    let mut h = History::new(Document::empty("Fresh"));
+    let start = h.current().clone();
+    let r = h
+        .execute_reported(ImportAssets {
+            assets: vec![
+                Asset::new(AssetKind::Image, "a.png", "a.png"),
+                Asset::new(AssetKind::Video, "b.mp4", "b.mp4"),
+            ],
+            folder: None,
+        })
+        .unwrap();
+    assert_eq!(r.created_assets.len(), 2);
+    assert!(
+        h.current().comps.is_empty(),
+        "importing creates no composition"
+    );
+    assert_eq!(h.current().main_comp, None);
+    assert_eq!(h.current().assets.iter().count(), 2);
+    h.undo();
+    assert_eq!(h.current(), &start);
+}
+
+#[test]
+fn import_into_a_folder_and_rejects_bad_input() {
+    let mut h = History::new(Document::empty("Fresh"));
+    let f = h
+        .execute_reported(CreateFolder {
+            name: "Clips".into(),
+            parent: None,
+        })
+        .unwrap()
+        .created_folders[0];
+    let r = h
+        .execute_reported(ImportAssets {
+            assets: vec![Asset::new(AssetKind::Image, "a.png", "a.png")],
+            folder: Some(f),
+        })
+        .unwrap();
+    assert_eq!(
+        h.current().assets.get(r.created_assets[0]).unwrap().folder,
+        Some(f)
+    );
+    for bad in [
+        ImportAssets {
+            assets: vec![],
+            folder: None,
+        },
+        ImportAssets {
+            assets: vec![Asset::new(AssetKind::Image, " ", "a.png")],
+            folder: None,
+        },
+        ImportAssets {
+            assets: vec![Asset::new(AssetKind::Image, "a", "")],
+            folder: None,
+        },
+        ImportAssets {
+            assets: vec![Asset::new(AssetKind::Image, "a", "a.png")],
+            folder: Some(FolderId::from(9999)),
+        },
+    ] {
+        let before = h.current().clone();
+        assert!(h.execute(bad).is_err());
+        assert_eq!(h.current(), &before, "a failed import changes nothing");
+    }
+}
+
+#[test]
+fn deleting_the_last_composition_creates_none() {
+    let mut h = history();
+    let main = main_id(&h);
+    h.execute(RemoveItems {
+        items: vec![PoolItem::Comp(main)],
+        mode: RemoveMode::PlaceholderLayers,
+    })
+    .unwrap();
+    assert!(h.current().comps.is_empty());
+    assert_eq!(h.current().main_comp, None);
+}
+
+#[test]
+fn precompose_files_the_new_composition_in_one_precomps_folder() {
+    let mut h = history();
+    let main = main_id(&h);
+    let a = add_solid(&mut h, main);
+    let b = add_solid(&mut h, main);
+    let start = h.current().clone();
+    let pre = |layer: LayerId, name: &str| PrecomposeLayers {
+        comp: main,
+        layers: vec![layer],
+        mode: PrecomposeMode::MoveAttributes,
+        name: name.into(),
+        time: Time::ZERO,
+    };
+    let r = h.execute_reported(pre(a, "One")).unwrap();
+    let folder = r.created_folders[0];
+    let f = h.current().folder(folder).unwrap();
+    assert_eq!((f.name.as_str(), f.parent), (PRECOMPS_FOLDER, None));
+    assert_eq!(comp(&h, r.created_comps[0]).folder, Some(folder));
+
+    let r2 = h.execute_reported(pre(b, "Two")).unwrap();
+    assert!(r2.created_folders.is_empty(), "the folder is reused");
+    assert_eq!(comp(&h, r2.created_comps[0]).folder, Some(folder));
+
+    // Renaming the folder means the next pre-compose makes a new one.
+    h.execute(RenameFolder {
+        folder,
+        name: "Mine".into(),
+    })
+    .unwrap();
+    let c = add_solid(&mut h, main);
+    let r3 = h.execute_reported(pre(c, "Three")).unwrap();
+    assert_eq!(r3.created_folders.len(), 1);
+    assert_ne!(r3.created_folders[0], folder);
+
+    // The folder is created inside the command: one undo step each.
+    for _ in 0..5 {
+        h.undo();
+    }
+    assert_eq!(
+        h.current(),
+        &start,
+        "five steps: two pre-composes, rename, solid, pre-compose"
     );
 }

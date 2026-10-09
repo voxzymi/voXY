@@ -74,7 +74,7 @@ fn set(doc: &mut Document, prop: voxy_core::PropId, value: Value) {
 /// A small scene exercising transforms, parenting, opacity and an image with
 /// partial alpha.
 fn scene(image_path: &Path, space: WorkingSpace) -> Document {
-    let mut doc = Document::new(
+    let mut doc = Document::with_comp(
         "Golden",
         CompSettings {
             width: 160,
@@ -310,7 +310,7 @@ fn opaque_solid_is_exact() {
     let Some(gpu) = gpu() else { return };
     let mut compositor = Compositor::new(&gpu.device);
     for space in [WorkingSpace::Linear, WorkingSpace::SrgbCompat] {
-        let mut doc = Document::new(
+        let mut doc = Document::with_comp(
             "Solid",
             CompSettings {
                 width: 8,
@@ -338,7 +338,7 @@ fn opaque_solid_is_exact() {
 #[test]
 fn missing_images_are_reported_not_fatal() {
     let Some(gpu) = gpu() else { return };
-    let mut doc = Document::new(
+    let mut doc = Document::with_comp(
         "Missing",
         CompSettings {
             width: 8,
@@ -380,7 +380,7 @@ fn missing_images_are_reported_not_fatal() {
 #[test]
 fn preview_scale_renders_smaller_frame() {
     let Some(gpu) = gpu() else { return };
-    let doc = Document::new(
+    let doc = Document::with_comp(
         "Scale",
         CompSettings {
             width: 200,
@@ -410,7 +410,7 @@ fn preview_scale_renders_smaller_frame() {
 /// One layer showing the 16×8 ramp, scaled and rotated, as an image or a
 /// video layer.
 fn media_scene(video: bool, image_path: &Path) -> Document {
-    let mut doc = Document::new(
+    let mut doc = Document::with_comp(
         "Media",
         CompSettings {
             width: 96,

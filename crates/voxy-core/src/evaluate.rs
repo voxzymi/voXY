@@ -220,7 +220,7 @@ mod tests {
     use crate::value::Value;
 
     fn doc_with_two_solids() -> Document {
-        let mut doc = Document::new(
+        let mut doc = Document::with_comp(
             "Eval",
             CompSettings {
                 width: 200,
@@ -336,7 +336,7 @@ mod tests {
     #[test]
     fn video_layers_map_composition_time_to_source_time() {
         use crate::command::{AddVideoLayer, SetLayerTiming};
-        let mut doc = Document::new("Video", CompSettings::default());
+        let mut doc = Document::with_comp("Video", CompSettings::default());
         let comp = doc.main_comp.unwrap();
         AddVideoLayer {
             comp,

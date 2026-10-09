@@ -548,7 +548,7 @@ fn apply_pool(
 }
 
 fn small_doc() -> Document {
-    Document::new(
+    Document::with_comp(
         "Props",
         CompSettings {
             width: 320,

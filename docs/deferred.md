@@ -14,3 +14,5 @@ an item leaves this list only when it ships or the owner removes it.
 | **Precomp rendering** | Milestone E. | `evaluate` already yields `EvaluatedContent::Precomp { comp, child_time, size }`; `RenderPlan::build` draws nothing for it until then. | Milestone E. |
 | **Footage blend / optical-flow resampling** | Later per-layer options. | Hold is the rule today (`design-media-comps.md` §8.2). | Unscheduled. |
 | **"Hold child frame rate when nested"** | Later per-composition option. | Continuous sampling is the rule today (§8.2). | Unscheduled. |
+| **Project panel thumbnails** (footage and compositions in the info header) | A preview renderer that can draw a composition other than the open one, cached by `(comp, revision, time)`. | The info header already reads the selected item and its settings; a painted icon stands in. | With composition tabs (Milestone E). |
+| **Saved shortcuts, dock layout and the shortcut editor** | `Preferences` (per-user config directory, tolerant of a missing or corrupt file). | `Keymap::apply_saved` resolves old action ids, `Keymap::conflicts` reports clashes, `compat::panel_name` maps old panel names. | Milestone P-D. |

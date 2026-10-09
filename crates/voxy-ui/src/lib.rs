@@ -1,10 +1,17 @@
 //! voXY application shell: an eframe (egui + wgpu) window with dockable
 //! panels (`egui_dock`), menus, shortcuts and a GPU viewport.
 
+mod actions;
 mod app;
+mod compat;
+mod dialogs;
 mod graph_editor;
 mod media;
+mod menu;
 mod panels;
+mod project_panel;
+mod project_view;
+mod reveal;
 mod state;
 mod theme;
 mod timeline;

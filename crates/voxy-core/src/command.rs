@@ -48,6 +48,7 @@ pub enum CommandError {
 /// UI can select or open them) and warnings to show.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CommandReport {
+    pub created_assets: Vec<crate::AssetId>,
     pub created_comps: Vec<CompId>,
     pub created_layers: Vec<LayerId>,
     pub created_folders: Vec<crate::FolderId>,

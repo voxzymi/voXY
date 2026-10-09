@@ -8,7 +8,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let path = std::env::args()
         .nth(1)
         .unwrap_or_else(|| "demo.voxy".into());
-    let mut doc = Document::new(
+    let mut doc = Document::with_comp(
         "Demo",
         CompSettings {
             background: LinearRgba::from_srgb8(18, 18, 28, 255),
