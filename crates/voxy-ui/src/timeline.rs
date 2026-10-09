@@ -21,7 +21,7 @@ use egui::{
 use voxy_core::command::{MoveKeyframes, RemoveKeyframes, SetLayerTiming, SetLayerVisible};
 use voxy_core::{FrameRate, Layer, LayerId, LayerKind, PropId, Property, Time, Value};
 
-use crate::panels::timecode;
+use crate::panels::timecode_at;
 use crate::state::EditorState;
 use crate::theme::ACCENT;
 
@@ -100,6 +100,9 @@ struct Cx {
     axis: Axis,
     rate: FrameRate,
     time: Time,
+    /// The composition's start timecode and drop-frame display.
+    start: Time,
+    drop: bool,
 }
 
 pub fn show(ui: &mut Ui, state: &mut EditorState) {
@@ -170,6 +173,8 @@ pub fn show(ui: &mut Ui, state: &mut EditorState) {
         },
         rate,
         time: state.time,
+        start: comp.start_offset,
+        drop: comp.drop_frame,
     };
 
     ruler(ui, state, comp.duration, cx);
@@ -240,7 +245,7 @@ fn ruler(ui: &mut Ui, state: &mut EditorState, duration: Time, cx: Cx) {
             lane_painter.text(
                 pos2(x + 3.0, rect.top() + 2.0),
                 Align2::LEFT_TOP,
-                timecode(t, cx.rate),
+                timecode_at(t, cx.rate, cx.start, cx.drop),
                 FontId::proportional(10.0),
                 v.weak_text_color(),
             );
@@ -249,7 +254,7 @@ fn ruler(ui: &mut Ui, state: &mut EditorState, duration: Time, cx: Cx) {
     painter.text(
         pos2(rect.left() + 8.0, rect.center().y),
         Align2::LEFT_CENTER,
-        timecode(state.time, cx.rate),
+        timecode_at(state.time, cx.rate, cx.start, cx.drop),
         FontId::monospace(12.0),
         v.text_color(),
     );

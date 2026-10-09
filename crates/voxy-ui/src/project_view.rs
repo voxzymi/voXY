@@ -1070,7 +1070,7 @@ mod tests {
         let r = rows(&f, &ViewSettings::default());
         let title = r.iter().find(|r| r.name == "title card").unwrap();
         assert_eq!(settings_summary(title), "1280 x 1080, 24 fps");
-        assert_eq!(duration_text(title.duration, title.rate), "00:00:10:00");
+        assert_eq!(duration_text(title.duration, title.rate), "0:00:10:00");
         assert_eq!(duration_text(None, None), "—");
         assert_eq!(size_text(None), "—");
     }

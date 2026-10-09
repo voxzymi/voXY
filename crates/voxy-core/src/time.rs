@@ -157,6 +157,65 @@ impl FrameRate {
         n.div_euclid(d) as i64
     }
 
+    /// The nearest sensible rate to a typed decimal, or `None` if `x` is not a
+    /// finite positive number in range.
+    ///
+    /// - Within 0.0006 of an NTSC rate (23.976, 29.97, 59.94, 119.88) gives
+    ///   the exact rational (24000/1001 and so on).
+    /// - Within 0.0001 of a whole number gives that integer.
+    /// - Anything else gives the closest fraction with a denominator up to
+    ///   1001 (continued fractions), so 12.5 is 25/2 and 7.123 is 7123/1000.
+    pub fn from_decimal(x: f64) -> Option<FrameRate> {
+        if !x.is_finite() || x <= 0.0 || x >= 100_000.0 {
+            return None;
+        }
+        for (n, d) in [
+            (24_000, 1001),
+            (30_000, 1001),
+            (60_000, 1001),
+            (120_000, 1001),
+        ] {
+            if (x - f64::from(n) / f64::from(d)).abs() < 0.0006 {
+                return FrameRate::new(n, d);
+            }
+        }
+        if (x - x.round()).abs() < 1e-4 && x.round() >= 1.0 {
+            return FrameRate::new(x.round() as u32, 1);
+        }
+        // Continued fraction convergents, keeping the last with den <= 1001.
+        let (mut p0, mut q0, mut p1, mut q1) = (0u64, 1u64, 1u64, 0u64);
+        let mut r = x;
+        let mut best = None;
+        for _ in 0..32 {
+            let a = r.floor();
+            let a_u = a as u64;
+            let (p2, q2) = (a_u * p1 + p0, a_u * q1 + q0);
+            if q2 > 1001 || p2 > u64::from(u32::MAX) {
+                break;
+            }
+            (p0, q0, p1, q1) = (p1, q1, p2, q2);
+            best = Some((p1, q1));
+            let frac = r - a;
+            if frac < 1e-9 || (x - p1 as f64 / q1 as f64).abs() < 1e-7 {
+                break;
+            }
+            r = 1.0 / frac;
+        }
+        let (p, q) = best?;
+        FrameRate::new(u32::try_from(p).ok()?, u32::try_from(q).ok()?)
+    }
+
+    /// Drop-frame timecode exists only for 29.97 and 59.94 fps.
+    pub fn supports_drop_frame(self) -> bool {
+        self == FrameRate::FPS_29_97 || self == FrameRate::FPS_59_94
+    }
+
+    /// The timecode base: the rate rounded to a whole number of frames per
+    /// second (24 for 23.976, 30 for 29.97, 60 for 59.94).
+    pub fn timecode_base(self) -> u32 {
+        (self.as_f64().round() as u32).max(1)
+    }
+
     /// Duration of one frame if it is a whole number of flicks.
     pub fn exact_frame_duration(self) -> Option<Time> {
         let n = FLICKS_PER_SECOND * i64::from(self.den);

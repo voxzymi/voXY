@@ -31,12 +31,13 @@ pub mod persist;
 mod pool;
 pub mod property;
 mod time;
+pub mod timecode;
 mod value;
 
 pub use asset::{Asset, AssetKind, AssetTable, AudioInfo, ContentHash};
 pub use color::{LinearRgba, WorkingSpace, linear_to_srgb, srgb_to_linear};
 pub use command::{Command, CommandError, CommandReport, MergeKey};
-pub use comp::{Composition, PixelAspect, WorkArea};
+pub use comp::{Composition, PixelAspect, PreviewResolution, WorkArea};
 pub use document::{
     CompSettings, Document, ProjectMeta, ProjectSettings, PropertyOwner, ValidationError,
 };

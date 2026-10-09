@@ -53,6 +53,13 @@ impl VoxyApp {
             tracing::error!("eframe did not provide a wgpu render state; the viewport is disabled");
         }
         let mut state = EditorState::new(EditorState::untitled());
+        state.prefs_path = crate::prefs::default_path();
+        if let Some(path) = &state.prefs_path {
+            state.prefs = crate::prefs::Preferences::load_from(path);
+        }
+        state.gpu_max_texture = viewport
+            .as_ref()
+            .map(ViewportRenderer::max_texture_dimension);
         for c in state.keymap.conflicts() {
             tracing::warn!(
                 "shortcut {:?} is bound to more than one action: {:?}",
@@ -179,6 +186,8 @@ impl VoxyApp {
                 self.item(ui, Action::RevealInFileManager);
             });
             ui.menu_button("Composition", |ui| {
+                self.item(ui, Action::CompositionSettings);
+                ui.separator();
                 crate::project_panel::reveal_in_composition_menu(ui, &mut self.state);
                 ui.separator();
                 ui.label(RichText::new("Working color space").weak());
@@ -280,6 +289,7 @@ impl VoxyApp {
     }
 
     fn dialogs(&mut self, ctx: &egui::Context) {
+        crate::comp_dialog::show(ctx, &mut self.state);
         if let Some(action) = self.pending {
             let name = self.state.display_name();
             let mut choice = None;
@@ -340,7 +350,7 @@ impl eframe::App for VoxyApp {
             self.pending = Some(Discarding::Quit);
         }
 
-        if self.pending.is_none() && !self.show_about {
+        if self.pending.is_none() && !self.show_about && self.state.comp_dialog.is_none() {
             self.shortcuts(&ctx);
         }
 

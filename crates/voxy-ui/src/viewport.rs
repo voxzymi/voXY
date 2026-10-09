@@ -40,6 +40,18 @@ struct FrameKey {
     video: Vec<(AssetId, Time, usize)>,
 }
 
+/// The scale the viewport renders at: fitting `max_px`, never above full
+/// size, and never above the composition's preview resolution. Exports do not
+/// use this; they render with [`RenderSettings::default`] (full size).
+pub(crate) fn preview_scale(
+    comp: (u32, u32),
+    max_px: (f32, f32),
+    res: voxy_core::PreviewResolution,
+) -> f64 {
+    let fit = f64::from((max_px.0 / comp.0 as f32).min(max_px.1 / comp.1 as f32));
+    fit.clamp(0.01, 1.0).min(res.scale())
+}
+
 struct Target {
     size: (u32, u32),
     view: wgpu::TextureView,
@@ -79,6 +91,11 @@ impl ViewportRenderer {
         }
     }
 
+    /// The GPU's largest texture side in pixels.
+    pub fn max_texture_dimension(&self) -> u32 {
+        self.render_state.device.limits().max_texture_dimension_2d
+    }
+
     /// Renders `shot.comp` at `shot.time`, sized to fit `max_px` physical
     /// pixels (never above full resolution), and returns the texture to show.
     /// `playing` makes video sources prefetch ahead instead of scrubbing.
@@ -96,9 +113,12 @@ impl ViewportRenderer {
             time,
         } = shot;
         let comp = doc.comp(eval_comp)?;
-        let fit = f64::from((max_px.x / comp.width as f32).min(max_px.y / comp.height as f32));
         let settings = RenderSettings {
-            scale: fit.clamp(0.01, 1.0),
+            scale: preview_scale(
+                (comp.width, comp.height),
+                (max_px.x, max_px.y),
+                comp.preview_resolution,
+            ),
         };
         let size = settings.output_size(comp.width, comp.height);
         let eval = voxy_core::evaluate(doc, eval_comp, time)?;
@@ -176,5 +196,42 @@ impl ViewportRenderer {
             id,
             _texture: texture,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use voxy_core::PreviewResolution as P;
+
+    #[test]
+    fn preview_resolution_lowers_the_viewport_scale() {
+        let comp = (1920, 1080);
+        let big = (4000.0, 4000.0);
+        assert_eq!(preview_scale(comp, big, P::Full), 1.0);
+        assert_eq!(preview_scale(comp, big, P::Half), 0.5);
+        assert_eq!(preview_scale(comp, big, P::Third), 1.0 / 3.0);
+        assert_eq!(preview_scale(comp, big, P::Custom(8)), 0.125);
+        // A small panel already renders smaller than the setting asks for.
+        assert_eq!(preview_scale(comp, (480.0, 270.0), P::Half), 0.25);
+        // Never below the floor, never above full size.
+        assert_eq!(preview_scale(comp, (1.0, 1.0), P::Full), 0.01);
+    }
+
+    #[test]
+    fn preview_renders_get_a_different_key_but_export_does_not_depend_on_it() {
+        let size = |res| {
+            let s = RenderSettings {
+                scale: preview_scale((1920, 1080), (2000.0, 2000.0), res),
+            };
+            s.output_size(1920, 1080)
+        };
+        // The preview key holds the output size, so changing the preview
+        // resolution changes the key and forces a re-render.
+        assert_ne!(size(P::Full), size(P::Half));
+        assert_eq!(size(P::Half), (960, 540));
+        // Exports use the default settings, whatever the preview says.
+        let export = RenderSettings::default();
+        assert_eq!(export.output_size(1920, 1080), (1920, 1080));
     }
 }

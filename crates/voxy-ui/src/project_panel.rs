@@ -69,7 +69,7 @@ fn toolbar(ui: &mut Ui, state: &mut EditorState) {
                 .hint_text("Search")
                 .desired_width(w),
         );
-        if !search.is_empty() && ui.small_button("✕").on_hover_text("Clear search").clicked() {
+        if !search.is_empty() && ui.small_button("×").on_hover_text("Clear search").clicked() {
             search.clear();
         }
     });
@@ -81,7 +81,7 @@ fn toolbar(ui: &mut Ui, state: &mut EditorState) {
             "Create a new composition",
         );
         if ui.button("New Composition").on_hover_text(hint).clicked() {
-            state.new_composition(true);
+            state.perform(Action::FileNewComposition);
         }
         let hint = tip(state, ui, Action::ProjectNewFolder, "Create a new folder");
         if ui.button("New Folder").on_hover_text(hint).clicked() {
@@ -617,6 +617,12 @@ fn item_menu(ui: &mut Ui, state: &mut EditorState, row: &Row) {
         state.open_comp(c);
         ui.close();
     }
+    if let PoolItem::Comp(c) = row.item
+        && ui.button("Composition Settings…").clicked()
+    {
+        state.open_comp_settings(c);
+        ui.close();
+    }
     for a in [
         Action::ProjectRename,
         Action::ProjectDuplicate,
@@ -706,7 +712,7 @@ fn footer(ui: &mut Ui, state: &mut EditorState, doc: &Document) {
             .on_hover_text(hint)
             .clicked()
         {
-            state.new_composition(true);
+            state.perform(Action::FileNewComposition);
         }
     });
 }

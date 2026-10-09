@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::asset::{Asset, AssetTable};
 use crate::color::{LinearRgba, WorkingSpace};
-use crate::comp::{Composition, PixelAspect};
+use crate::comp::{Composition, PixelAspect, PreviewResolution};
 use crate::id::{AssetId, CompId, FolderId, LayerId, PropId};
 use crate::layer::{ForeignData, Layer, LayerKind};
 use crate::pool::Folder;
@@ -61,6 +61,15 @@ pub struct CompSettings {
     pub frame_rate: FrameRate,
     pub duration: Time,
     pub background: LinearRgba,
+    /// Timecode of frame 0 (format 0.5.0).
+    #[serde(default)]
+    pub start_offset: Time,
+    /// Drop-frame timecode display (format 0.5.0).
+    #[serde(default)]
+    pub drop_frame: bool,
+    /// Viewport render scale (format 0.5.0).
+    #[serde(default)]
+    pub preview_resolution: PreviewResolution,
 }
 
 impl Default for CompSettings {
@@ -73,6 +82,9 @@ impl Default for CompSettings {
             frame_rate: FrameRate::FPS_30,
             duration: Time::from_secs(10),
             background: LinearRgba::BLACK,
+            start_offset: Time::ZERO,
+            drop_frame: false,
+            preview_resolution: PreviewResolution::Full,
         }
     }
 }
@@ -92,6 +104,9 @@ impl CompSettings {
                 .value_at(Time::ZERO)
                 .as_color()
                 .unwrap_or(LinearRgba::BLACK),
+            start_offset: comp.start_offset,
+            drop_frame: comp.drop_frame,
+            preview_resolution: comp.preview_resolution,
         }
     }
 }
@@ -236,6 +251,9 @@ impl Document {
             work_area: None,
             background,
             folder: None,
+            start_offset: s.start_offset,
+            drop_frame: s.drop_frame,
+            preview_resolution: s.preview_resolution,
             layers: Vec::new(),
             foreign: ForeignData::default(),
         };

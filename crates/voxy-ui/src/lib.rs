@@ -3,12 +3,15 @@
 
 mod actions;
 mod app;
+mod comp_dialog;
+mod comp_draft;
 mod compat;
 mod dialogs;
 mod graph_editor;
 mod media;
 mod menu;
 mod panels;
+mod prefs;
 mod project_panel;
 mod project_view;
 mod reveal;

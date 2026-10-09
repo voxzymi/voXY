@@ -66,6 +66,7 @@ pub enum Action {
     FileSaveAs,
     FileImport,
     FileQuit,
+    CompositionSettings,
     EditUndo,
     EditRedo,
     SelectionClear,
@@ -157,6 +158,7 @@ impl Action {
         Action::FileSaveAs,
         Action::FileImport,
         Action::FileQuit,
+        Action::CompositionSettings,
         Action::EditUndo,
         Action::EditRedo,
         Action::SelectionClear,
@@ -257,6 +259,16 @@ impl Action {
                     Nothing,
                     Global,
                     const { &[cmd(Key::Q)] },
+                )
+            },
+            Action::CompositionSettings => ActionDef {
+                fires_while_typing: true,
+                ..def(
+                    "composition.settings",
+                    "Composition Settings…",
+                    Composition,
+                    Global,
+                    const { &[cmd(Key::K)] },
                 )
             },
             Action::EditUndo => def(

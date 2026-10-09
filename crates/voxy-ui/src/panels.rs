@@ -118,7 +118,7 @@ impl Panels<'_> {
         };
         let avail = ui.available_size();
         let ppp = ui.ctx().pixels_per_point();
-        let doc = self.state.history.current().clone();
+        let (doc, revision) = self.state.view_document();
         let Some(comp_id) = self.state.comp_id() else {
             ui.centered_and_justified(|ui| ui.label("No composition is open."));
             return;
@@ -126,7 +126,7 @@ impl Panels<'_> {
         let shot = crate::viewport::Shot {
             doc: &doc,
             comp: comp_id,
-            revision: self.state.history.revision(),
+            revision,
             time: self.state.time,
         };
         let frame = viewport.frame(
@@ -284,7 +284,7 @@ impl Panels<'_> {
             if ui.add(slider).changed() {
                 self.state.time = rate.frame_to_time(frame);
             }
-            ui.weak(timecode(self.state.time, rate));
+            ui.weak(comp_timecode(comp, self.state.time));
             ui.weak("· Space plays · Left/Right step one frame · Home to start");
         });
     }
@@ -473,18 +473,21 @@ fn edit_value(ui: &mut Ui, p: &Property, value: &Value) -> Option<Value> {
     }
 }
 
-/// `HH:MM:SS:FF` (frames counted at the nominal integer rate).
+/// `H:MM:SS:FF` of `time`, shifted by the composition's start timecode and
+/// in drop-frame (`;`) when the composition uses it. Layers and keyframes
+/// are not affected: only this display.
+pub(crate) fn comp_timecode(comp: &voxy_core::Composition, time: Time) -> String {
+    timecode_at(time, comp.frame_rate, comp.start_offset, comp.drop_frame)
+}
+
+pub(crate) fn timecode_at(time: Time, rate: FrameRate, start: Time, drop: bool) -> String {
+    let frames = rate.time_to_frame(time).max(0) + rate.time_to_frame(start);
+    voxy_core::timecode::format_frames(frames, rate, drop)
+}
+
+/// Non-drop timecode of a bare duration at `rate`.
 pub(crate) fn timecode(time: Time, rate: FrameRate) -> String {
-    let frame = rate.time_to_frame(time).max(0);
-    let fps = (rate.as_f64().round() as i64).max(1);
-    let (secs, ff) = (frame / fps, frame % fps);
-    format!(
-        "{:02}:{:02}:{:02}:{:02}",
-        secs / 3600,
-        (secs / 60) % 60,
-        secs % 60,
-        ff
-    )
+    timecode_at(time, rate, Time::ZERO, false)
 }
 
 /// A keyframe diamond: filled when a key sits at the current time, hollow

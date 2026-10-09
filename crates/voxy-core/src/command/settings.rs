@@ -6,7 +6,7 @@ use std::sync::Arc;
 use glam::DVec2;
 
 use super::{Command, CommandError, CommandReport, MergeKey, comp_mut};
-use crate::comp::{Composition, WorkArea};
+use crate::comp::{Composition, PreviewResolution, WorkArea};
 use crate::document::{CompSettings, Document, ProjectSettings};
 use crate::id::CompId;
 use crate::layer::Layer;
@@ -21,6 +21,8 @@ pub const MIN_COMP_SIZE: u32 = 16;
 pub const MAX_COMP_SIZE: u32 = 16_384;
 /// Highest frame rate a composition may have.
 pub const MAX_FRAME_RATE: f64 = 240.0;
+/// Largest distance of a start timecode from zero.
+pub const MAX_START_OFFSET: Time = Time::from_secs(24 * 60 * 60);
 /// Longest composition.
 pub const MAX_COMP_DURATION: Time = Time::from_secs(3 * 60 * 60);
 
@@ -46,6 +48,20 @@ pub fn validate_comp_settings(s: &CompSettings) -> Result<(), CommandError> {
     let pa = s.pixel_aspect;
     if pa.num == 0 || pa.den == 0 || !(0.25..=4.0).contains(&pa.as_f64()) {
         return invalid("pixel aspect ratio must be between 0.25 and 4".into());
+    }
+    if s.drop_frame && !s.frame_rate.supports_drop_frame() {
+        return invalid("drop-frame timecode needs 29.97 or 59.94 fps".into());
+    }
+    if let PreviewResolution::Custom(n) = s.preview_resolution
+        && !(2..=PreviewResolution::MAX_CUSTOM).contains(&n)
+    {
+        return invalid(format!(
+            "custom preview resolution must divide by 2 to {}",
+            PreviewResolution::MAX_CUSTOM
+        ));
+    }
+    if s.start_offset.flicks().abs() > MAX_START_OFFSET.flicks() {
+        return invalid("the start timecode must be within 24 hours of zero".into());
     }
     if !s.background.is_finite() {
         return invalid("background color must be finite".into());
@@ -179,6 +195,9 @@ impl Command for SetCompositionSettings {
         c.height = s.height;
         c.pixel_aspect = s.pixel_aspect;
         c.duration = s.duration;
+        c.start_offset = s.start_offset;
+        c.drop_frame = s.drop_frame;
+        c.preview_resolution = s.preview_resolution;
         if !c.background.is_animated() {
             c.background.set_static(Value::Color(s.background))?;
         }

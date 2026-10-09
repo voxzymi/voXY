@@ -1,6 +1,6 @@
 # The `.voxy` project format
 
-**Format version: 0.4.0** (media pool and compositions, Milestone A)
+**Format version: 0.5.0** (composition settings, Milestone C)
 
 A voXY project is a single UTF-8 JSON file with the extension `.voxy`. Media
 the project uses lives in a sibling folder named `<name>.assets/`:
@@ -49,6 +49,7 @@ MyProject.assets/
 | 0.2.0 | Adds keyframed properties. | None needed: every 0.1.0 file is valid 0.2.0 content. |
 | 0.3.0 | Adds video assets and layers, and the optional asset fields `duration` and `frame_rate`. | None needed: every 0.2.0 file is valid 0.3.0 content. |
 | 0.4.0 | Media pool and compositions: folders, the optional `main_comp` (replacing `root_comp`), project settings, composition pixel aspect and work area, `precomp` and `placeholder` layers, asset `content_hash`, `audio` and `folder`, and the `ui_state` envelope field. | `root_comp` is renamed `main_comp`. Everything else is new and optional: no folders, square pixels, no work area, default project settings. A 0.3.0 project opens as one main composition with its media at the top level. |
+| 0.5.0 | Composition Settings: optional composition fields `start_offset` (flicks), `drop_frame` and `preview_resolution` (`full`, `half`, `third`, `quarter`, `{"custom": n}`), and the same three in `meta.settings.new_comp`. `ui_state.comp_settings.tab`. | None needed: missing fields take their defaults (0, false, full). A 0.4.0 project opens unchanged. |
 
 Before writing, voXY validates the document and refuses to write an invalid
 one. Saving is atomic: the file is written to a temporary file in the same

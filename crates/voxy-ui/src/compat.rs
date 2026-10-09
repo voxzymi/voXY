@@ -7,6 +7,7 @@
 
 use serde_json::{Map, Value};
 
+use crate::comp_draft::Tab as DialogTab;
 use crate::project_view::{Column, SortKey, TypeFilter, ViewSettings};
 
 /// Version of the `ui_state` section this build writes. Version 1 stored
@@ -50,14 +51,28 @@ pub fn panel_name(saved: &str) -> Option<&'static str> {
 }
 
 /// The `ui_state` this build saves for the panel.
-pub fn to_ui_state(view: &ViewSettings) -> Value {
+pub fn to_ui_state(view: &ViewSettings, dialog_tab: DialogTab) -> Value {
     let mut map = Map::new();
     map.insert("version".into(), UI_STATE_VERSION.into());
     map.insert(
         "project_panel".into(),
         serde_json::to_value(view).unwrap_or(Value::Null),
     );
+    map.insert(
+        "comp_settings".into(),
+        serde_json::json!({ "tab": serde_json::to_value(dialog_tab).unwrap_or(Value::Null) }),
+    );
     Value::Object(map)
+}
+
+/// The Composition Settings tab last used, or the default if missing or
+/// unreadable.
+pub fn dialog_tab_from(state: &Value) -> DialogTab {
+    state
+        .get("comp_settings")
+        .and_then(|c| c.get("tab"))
+        .and_then(|t| serde_json::from_value(t.clone()).ok())
+        .unwrap_or_default()
 }
 
 /// Reads the panel's settings out of a saved `ui_state` (any version).
@@ -136,7 +151,8 @@ mod tests {
         let mut view = ViewSettings::default();
         view.expanded.insert(FolderId::from(3));
         view.sort = SortKey::Type;
-        let state = to_ui_state(&view);
+        let state = to_ui_state(&view, DialogTab::Advanced);
+        assert_eq!(dialog_tab_from(&state), DialogTab::Advanced);
         assert_eq!(state["version"], 2);
         assert!(state.get("media_panel").is_none());
         assert_eq!(from_ui_state(&state), view);
@@ -155,8 +171,21 @@ mod tests {
         assert_eq!(view.filter, TypeFilter::All, "new fields take defaults");
         assert_eq!(view.columns, ViewSettings::default().columns);
         // Saving it again writes only the new name.
-        let again = to_ui_state(&view);
+        let again = to_ui_state(&view, DialogTab::Basic);
         assert!(again.get("media_panel").is_none() && again.get("project_panel").is_some());
+    }
+
+    #[test]
+    fn the_dialog_tab_defaults_when_missing_or_bad() {
+        assert_eq!(dialog_tab_from(&json!({})), DialogTab::Basic);
+        assert_eq!(
+            dialog_tab_from(&json!({"comp_settings": {"tab": "3d"}})),
+            DialogTab::Basic
+        );
+        assert_eq!(
+            dialog_tab_from(&json!({"comp_settings": {"tab": "advanced"}})),
+            DialogTab::Advanced
+        );
     }
 
     #[test]

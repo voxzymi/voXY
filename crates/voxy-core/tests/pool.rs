@@ -1297,7 +1297,7 @@ fn format_0_3_0_projects_open_as_one_main_composition() {
     assert_eq!(doc.main().unwrap().work_area, None);
     assert_eq!(doc.meta.settings, voxy_core::ProjectSettings::default());
     let resaved = persist::to_json(&doc).unwrap();
-    assert!(resaved.contains("\"format_version\": \"0.4.0\""));
+    assert!(resaved.contains("\"format_version\": \"0.5.0\""));
     assert!(resaved.contains("\"main_comp\": 1") && !resaved.contains("root_comp"));
 }
 

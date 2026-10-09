@@ -19,7 +19,7 @@ pub const PACKAGE_EXTENSION: &str = "voxyz";
 /// Value of the envelope's `format` field.
 pub const FORMAT_ID: &str = "voxy-project";
 /// The format version this build writes, and the newest it reads.
-pub const FORMAT_VERSION: Version = Version::new(0, 4, 0);
+pub const FORMAT_VERSION: Version = Version::new(0, 5, 0);
 /// Version of the `ui_state` section this build writes. The section is
 /// opaque to this crate; see [`to_json_with_ui`].
 pub const UI_STATE_VERSION: u32 = 1;
@@ -134,6 +134,9 @@ pub fn from_json_with_ui(json: &str) -> Result<(Document, Option<serde_json::Val
     // - 0.3.0 → 0.4.0: `root_comp` becomes the optional `main_comp`; every
     //   other addition has a default (no folders, square pixels, no work
     //   area, default project settings).
+    // - 0.4.0 → 0.5.0: only adds the optional composition fields
+    //   `start_offset`, `drop_frame` and `preview_resolution` (and the same
+    //   in the project's new-composition defaults); no rewrite.
     let env: EnvelopeIn = serde_json::from_str(json)?;
     let mut project = env.project;
     if found_core < Version::new(0, 4, 0) {
@@ -267,7 +270,7 @@ mod tests {
     #[test]
     fn newer_versions_are_refused() {
         let current = format!("\"{FORMAT_VERSION}\"");
-        let json = to_json(&sample()).unwrap().replace(&current, "\"0.5.0\"");
+        let json = to_json(&sample()).unwrap().replace(&current, "\"0.6.0\"");
         assert!(matches!(from_json(&json), Err(LoadError::TooNew { .. })));
         let json = to_json(&sample()).unwrap().replace(&current, "\"banana\"");
         assert!(matches!(from_json(&json), Err(LoadError::BadVersion(_))));

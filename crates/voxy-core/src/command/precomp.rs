@@ -260,6 +260,7 @@ fn leave_attributes(
         frame_rate: rate,
         duration,
         background: doc.meta.settings.new_comp.background,
+        ..CompSettings::default()
     });
     let folder = precomps_folder(doc, report);
     comp_mut(doc, child)?.folder = Some(folder);

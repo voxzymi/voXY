@@ -11,7 +11,8 @@ use std::time::Instant;
 use voxy_core::command::{
     AddImageLayer, AddSolidLayer, AddVideoLayer, CreateComposition, CreateFolder,
     DuplicateComposition, ImportAssets, MoveToFolder, RemoveItems, RemoveLayers, RemoveMode,
-    RenameComposition, RenameFolder, RenameMedia, ReplaceMedia, SetAssetPath,
+    RenameComposition, RenameFolder, RenameMedia, ReplaceMedia, ResizeMode, SetAssetPath,
+    SetCompositionSettings,
 };
 use voxy_core::{
     Asset, AssetId, AssetKind, Command, CommandReport, CompId, CompSettings, Composition, Document,
@@ -19,7 +20,9 @@ use voxy_core::{
 };
 
 use crate::actions::{Action, ActionContext, Keymap};
+use crate::comp_draft::{Context as DraftContext, Draft, Mode, Stage, Tab as DialogTab};
 use crate::dialogs::{Dialogs, IMAGE_EXTENSIONS, NativeDialogs, VIDEO_EXTENSIONS};
+use crate::prefs::Preferences;
 use crate::project_view::{PendingRemove, ProjectState};
 use crate::reveal::{self, CompTarget};
 
@@ -40,6 +43,24 @@ pub enum AppRequest {
 }
 
 #[derive(Debug)]
+struct CreatedComp {
+    comp: CompId,
+    selection: std::collections::BTreeSet<PoolItem>,
+    active: Option<CompId>,
+}
+
+/// The document as it would be if the open dialog were confirmed.
+#[derive(Debug)]
+struct Preview {
+    doc: Arc<Document>,
+    key: (CompId, CompSettings, ResizeMode),
+    revision: u64,
+}
+
+/// Preview revisions have this bit set, so they never equal a real one.
+const PREVIEW_REVISION_BIT: u64 = 1 << 63;
+
+#[derive(Debug)]
 pub struct EditorState {
     pub history: History,
     pub project_path: Option<PathBuf>,
@@ -52,6 +73,19 @@ pub struct EditorState {
     pub project: ProjectState,
     pub keymap: Keymap,
     pub dialogs: Box<dyn Dialogs>,
+    /// The Composition Settings dialog, while it is open.
+    pub comp_dialog: Option<Draft>,
+    /// The last tab the dialog showed (saved in `ui_state`).
+    pub dialog_tab: DialogTab,
+    pub prefs: Preferences,
+    /// Where preferences are saved; `None` keeps them in memory (tests).
+    pub prefs_path: Option<PathBuf>,
+    /// The GPU's largest texture side, once the viewport knows it.
+    pub gpu_max_texture: Option<u32>,
+    preview: Option<Preview>,
+    preview_counter: u64,
+    /// What a just-created composition replaced, so undo can put it back.
+    last_create: Option<CreatedComp>,
     /// The composition being edited. View state until composition tabs land
     /// (Milestone E); falls back to the main composition when it is `None`
     /// or no longer exists.
@@ -72,6 +106,14 @@ impl EditorState {
             project: ProjectState::default(),
             keymap: Keymap::default(),
             dialogs: Box::new(NativeDialogs),
+            comp_dialog: None,
+            dialog_tab: DialogTab::Basic,
+            prefs: Preferences::default(),
+            prefs_path: None,
+            gpu_max_texture: None,
+            preview: None,
+            preview_counter: 0,
+            last_create: None,
             active: None,
         }
     }
@@ -226,6 +268,7 @@ impl EditorState {
                 self.reset_view();
                 if let Some(state) = ui_state {
                     self.project.view = crate::compat::from_ui_state(&state);
+                    self.dialog_tab = crate::compat::dialog_tab_from(&state);
                 }
                 self.project.forget_missing(self.history.current());
                 self.info(format!("Opened {}", path.display()));
@@ -266,7 +309,7 @@ impl EditorState {
     }
 
     fn save_to(&mut self, path: &Path) -> bool {
-        let ui_state = crate::compat::to_ui_state(&self.project.view);
+        let ui_state = crate::compat::to_ui_state(&self.project.view, self.dialog_tab);
         match persist::save_with_ui(self.history.current(), Some(&ui_state), path) {
             Ok(()) => {
                 self.history.mark_saved();
@@ -434,23 +477,200 @@ impl EditorState {
         self.project.show_items(&doc, rev, &items);
     }
 
-    /// Creates a composition from the project defaults, opens it, selects
-    /// it in the Project panel and, for the button, starts renaming it. The
-    /// Composition Settings dialog (Milestone C) will sit in front of this.
-    pub fn new_composition(&mut self, rename: bool) -> Option<CompId> {
-        let doc = self.history.current().clone();
+    /// Creates a composition (one undoable command), opens it and selects
+    /// it in the Project panel.
+    pub fn create_composition(
+        &mut self,
+        settings: CompSettings,
+        folder: Option<FolderId>,
+    ) -> Option<CompId> {
+        let before = (self.project.selection.items.clone(), self.comp_id());
+        let report = self.execute_reported(CreateComposition { settings, folder })?;
+        let id = *report.created_comps.first()?;
+        self.last_create = Some(CreatedComp {
+            comp: id,
+            selection: before.0,
+            active: before.1,
+        });
+        self.show_created(&report);
+        self.open_comp(id);
+        Some(id)
+    }
+
+    fn dialog_context(&self) -> DraftContext {
+        let doc = self.history.current();
+        DraftContext {
+            existing_names: doc
+                .comps
+                .values()
+                .map(|c| c.name.clone())
+                .chain(doc.assets.iter().map(|a| a.name.clone()))
+                .chain(doc.folders.values().map(|f| f.name.clone()))
+                .collect(),
+            max_texture: self.gpu_max_texture,
+        }
+    }
+
+    /// Opens the Composition Settings dialog for a new composition, from the
+    /// project's defaults ("Comp N" with the next unused number).
+    pub fn open_new_comp_dialog(&mut self) {
+        let doc = self.history.current();
         let mut settings: CompSettings = doc.meta.settings.new_comp.clone();
         settings.name = next_name(&settings.name, |n| doc.comps.values().any(|c| c.name == n));
         let folder = self.target_folder();
-        let report = self.execute_reported(CreateComposition { settings, folder })?;
-        let id = *report.created_comps.first()?;
-        self.show_created(&report);
-        self.open_comp(id);
-        if rename {
-            let doc = self.history.current().clone();
-            self.project.begin_rename(&doc, PoolItem::Comp(id));
+        let draft = Draft::new(
+            Mode::New { folder },
+            &settings,
+            &self.prefs.comp_dialog,
+            self.dialog_tab,
+            self.dialog_context(),
+        );
+        self.comp_dialog = Some(draft);
+        self.preview = None;
+    }
+
+    /// Opens the dialog to edit `comp`.
+    pub fn open_comp_settings(&mut self, comp: CompId) {
+        let Some(c) = self.history.current().comp(comp) else {
+            return;
+        };
+        let settings = CompSettings::of(c);
+        let draft = Draft::new(
+            Mode::Edit(comp),
+            &settings,
+            &self.prefs.comp_dialog,
+            self.dialog_tab,
+            self.dialog_context(),
+        );
+        self.comp_dialog = Some(draft);
+        self.preview = None;
+    }
+
+    /// Undo. When it removes the composition the last create made, the
+    /// Project panel selection and the open composition come back too.
+    pub fn undo(&mut self) -> bool {
+        let done = self.history.undo();
+        if let Some(c) = self
+            .last_create
+            .take_if(|c| !self.history.current().comps.contains_key(&c.comp))
+        {
+            self.project.selection.items = c.selection;
+            self.project.selection.anchor = self.project.selection.items.iter().next().copied();
+            self.active = c.active;
         }
-        Some(id)
+        done
+    }
+
+    /// Closes the dialog without changing the document.
+    pub fn cancel_comp_dialog(&mut self) {
+        if let Some(d) = self.comp_dialog.take() {
+            self.dialog_tab = d.tab;
+        }
+        self.preview = None;
+    }
+
+    /// OK. A new composition is created at once. An edit that needs a
+    /// decision (layers to resize, keyframes off the new grid) first shows
+    /// the prompt; otherwise it is applied. Either way the document gets one
+    /// command, so one undo step.
+    pub fn confirm_comp_dialog(&mut self) {
+        let Some(d) = self.comp_dialog.as_ref() else {
+            return;
+        };
+        let Ok(settings) = d.settings() else {
+            return;
+        };
+        match d.mode {
+            Mode::New { folder } => {
+                let memory = d.memory();
+                let tab = d.tab;
+                self.comp_dialog = None;
+                self.remember(memory, tab);
+                self.create_composition(settings, folder);
+            }
+            Mode::Edit(id) => {
+                let Some(comp) = self.history.current().comp(id).cloned() else {
+                    self.cancel_comp_dialog();
+                    return;
+                };
+                if d.stage == Stage::Editing && d.needs_confirm(&comp) {
+                    if let Some(d) = self.comp_dialog.as_mut() {
+                        d.stage = Stage::Confirm;
+                    }
+                    return;
+                }
+                let (resize, snap) = (d.resize_mode(), d.snap_keys);
+                let (memory, tab) = (d.memory(), d.tab);
+                self.comp_dialog = None;
+                self.preview = None;
+                self.remember(memory, tab);
+                self.execute_reported(SetCompositionSettings {
+                    comp: id,
+                    settings,
+                    resize,
+                    snap_to_frames: snap,
+                });
+            }
+        }
+    }
+
+    fn remember(&mut self, memory: crate::prefs::DialogMemory, tab: DialogTab) {
+        self.dialog_tab = tab;
+        if self.prefs.comp_dialog != memory {
+            self.prefs.comp_dialog = memory;
+            self.save_prefs();
+        }
+    }
+
+    pub fn save_prefs(&mut self) {
+        if let Some(path) = self.prefs_path.clone()
+            && let Err(e) = self.prefs.save_to(&path)
+        {
+            self.error(format!("Could not save preferences: {e}"));
+        }
+    }
+
+    /// Keeps the live preview in step with the dialog: the viewport shows
+    /// what OK would produce, without touching the document.
+    pub fn update_comp_preview(&mut self) {
+        let wanted = self.comp_dialog.as_ref().and_then(|d| {
+            let Mode::Edit(id) = d.mode else { return None };
+            (d.live_preview && d.stage == Stage::Editing).then_some(())?;
+            Some((id, d.settings().ok()?, d.resize_mode()))
+        });
+        let Some(key) = wanted else {
+            self.preview = None;
+            return;
+        };
+        if self.preview.as_ref().is_some_and(|p| p.key == key) {
+            return;
+        }
+        let mut doc = (**self.history.current()).clone();
+        let cmd = SetCompositionSettings {
+            comp: key.0,
+            settings: key.1.clone(),
+            resize: key.2,
+            snap_to_frames: false,
+        };
+        if cmd.apply(&mut doc).is_err() {
+            self.preview = None;
+            return;
+        }
+        self.preview_counter += 1;
+        self.preview = Some(Preview {
+            doc: Arc::new(doc),
+            key,
+            revision: PREVIEW_REVISION_BIT | self.preview_counter,
+        });
+    }
+
+    /// The document and revision the viewport draws: the live preview of an
+    /// open dialog, else the real document.
+    pub fn view_document(&self) -> (Arc<Document>, u64) {
+        match &self.preview {
+            Some(p) => (p.doc.clone(), p.revision),
+            None => (self.history.current().clone(), self.history.revision()),
+        }
     }
 
     /// Makes a folder in the selected folder (or the top level) and starts
@@ -824,8 +1044,11 @@ impl EditorState {
             Action::FileNewProject => return Some(AppRequest::NewProject),
             Action::FileOpen => return Some(AppRequest::Open),
             Action::FileQuit => return Some(AppRequest::Quit),
-            Action::FileNewComposition => {
-                self.new_composition(true);
+            Action::FileNewComposition => self.open_new_comp_dialog(),
+            Action::CompositionSettings => {
+                if let Some(id) = self.comp_id() {
+                    self.open_comp_settings(id);
+                }
             }
             Action::FileSave => {
                 self.save();
@@ -835,7 +1058,7 @@ impl EditorState {
             }
             Action::FileImport => self.import_dialog(),
             Action::EditUndo => {
-                self.history.undo();
+                self.undo();
             }
             Action::EditRedo => {
                 self.history.redo();
@@ -950,6 +1173,23 @@ fn portable_path(path: &Path, base: Option<&Path>) -> String {
 mod tests {
     use super::*;
     use crate::dialogs::NoDialogs;
+
+    impl EditorState {
+        /// A composition from the project defaults, as the dialog would make
+        /// with no edits.
+        fn new_composition(&mut self, rename: bool) -> Option<CompId> {
+            let doc = self.history.current().clone();
+            let mut settings = doc.meta.settings.new_comp.clone();
+            settings.name = next_name(&settings.name, |n| doc.comps.values().any(|c| c.name == n));
+            let folder = self.target_folder();
+            let id = self.create_composition(settings, folder)?;
+            if rename {
+                let doc = self.history.current().clone();
+                self.project.begin_rename(&doc, PoolItem::Comp(id));
+            }
+            Some(id)
+        }
+    }
 
     fn state() -> EditorState {
         let mut s = EditorState::new(EditorState::untitled());
@@ -1267,6 +1507,214 @@ mod tests {
             crate::project_view::SEARCH_CLEARED
         );
         assert_eq!(s.project.scroll_to, Some(PoolItem::Comp(inner)));
+    }
+
+    #[test]
+    fn dialog_ok_creates_one_undo_step_and_undo_restores_the_selection() {
+        let mut s = state();
+        let first = s.new_composition(false).unwrap();
+        s.project.selection.set_one(PoolItem::Comp(first));
+        s.open_new_comp_dialog();
+        let d = s.comp_dialog.as_mut().unwrap();
+        assert_eq!(d.name, "Comp 2", "next unused number");
+        d.name = "Reel".into();
+        d.set_width(1080);
+        d.set_height(1920);
+        let before = s.history.current().clone();
+        s.confirm_comp_dialog();
+        assert!(s.comp_dialog.is_none());
+        let id = s.comp_id().unwrap();
+        let c = s.history.current().comp(id).unwrap();
+        assert_eq!((c.name.as_str(), c.width, c.height), ("Reel", 1080, 1920));
+        assert!(
+            s.project.selection.items.contains(&PoolItem::Comp(id)),
+            "selected in the panel"
+        );
+        assert!(s.project.rename.is_none(), "the name was already chosen");
+        assert!(s.undo());
+        assert_eq!(s.history.current(), &before, "one undo");
+        assert_eq!(s.comp_id(), Some(first));
+        assert_eq!(
+            s.project.selection.items,
+            [PoolItem::Comp(first)].into(),
+            "the earlier selection is back"
+        );
+    }
+
+    #[test]
+    fn cancel_changes_nothing() {
+        let mut s = state();
+        s.new_composition(false).unwrap();
+        let before = s.history.current().clone();
+        let rev = s.history.revision();
+        s.open_new_comp_dialog();
+        s.comp_dialog.as_mut().unwrap().name = "Nope".into();
+        s.cancel_comp_dialog();
+        assert!(s.comp_dialog.is_none());
+        assert_eq!(s.history.current(), &before);
+        assert_eq!(s.history.revision(), rev);
+        let id = s.comp_id().unwrap();
+        s.open_comp_settings(id);
+        s.comp_dialog.as_mut().unwrap().set_width(640);
+        s.update_comp_preview();
+        s.cancel_comp_dialog();
+        assert_eq!(s.history.current(), &before, "Preview reverts on Cancel");
+        assert_eq!(
+            s.view_document().1,
+            rev,
+            "the viewport is back on the real document"
+        );
+    }
+
+    #[test]
+    fn dialog_validation_blocks_ok() {
+        let mut s = state();
+        s.open_new_comp_dialog();
+        s.comp_dialog.as_mut().unwrap().name = "  ".into();
+        s.confirm_comp_dialog();
+        assert!(s.comp_dialog.is_some(), "still open");
+        assert!(s.history.current().comps.is_empty());
+    }
+
+    #[test]
+    fn preview_shows_the_edit_without_touching_history() {
+        let mut s = state();
+        let id = s.new_composition(false).unwrap();
+        s.add_solid();
+        let rev = s.history.revision();
+        let before = s.history.current().clone();
+        s.open_comp_settings(id);
+        let d = s.comp_dialog.as_mut().unwrap();
+        d.set_width(1280);
+        d.set_height(720);
+        d.keep_layers = false;
+        s.update_comp_preview();
+        let (doc, prev_rev) = s.view_document();
+        assert_eq!(
+            doc.comp(id).unwrap().width,
+            1280,
+            "the viewport sees the edit"
+        );
+        assert_ne!(prev_rev, rev);
+        assert!(prev_rev & (1 << 63) != 0, "never equals a real revision");
+        assert_eq!(s.history.current(), &before, "the document is untouched");
+        // Same draft: same revision. A new edit: a new revision.
+        s.update_comp_preview();
+        assert_eq!(s.view_document().1, prev_rev);
+        s.comp_dialog.as_mut().unwrap().set_width(1000);
+        s.update_comp_preview();
+        assert_ne!(s.view_document().1, prev_rev);
+        // Turning Preview off goes back to the document.
+        s.comp_dialog.as_mut().unwrap().live_preview = false;
+        s.update_comp_preview();
+        assert_eq!(s.view_document().1, rev);
+    }
+
+    #[test]
+    fn edit_ok_after_preview_is_one_undo_step_and_scales_layers() {
+        use voxy_core::LayerKind;
+        let mut s = state();
+        let id = s.new_composition(false).unwrap();
+        s.add_solid();
+        let before = s.history.current().clone();
+        s.open_comp_settings(id);
+        let d = s.comp_dialog.as_mut().unwrap();
+        d.set_width(960);
+        d.set_height(540);
+        d.keep_layers = false;
+        s.update_comp_preview();
+        s.confirm_comp_dialog();
+        let d = s
+            .comp_dialog
+            .as_ref()
+            .expect("a resize with layers asks first");
+        assert_eq!(d.stage, Stage::Confirm);
+        s.confirm_comp_dialog();
+        assert!(s.comp_dialog.is_none());
+        let c = s.history.current().comp(id).unwrap();
+        assert_eq!((c.width, c.height), (960, 540));
+        assert!(matches!(c.layers[0].kind, LayerKind::Solid { .. }));
+        assert!(s.history.undo());
+        assert_eq!(
+            s.history.current(),
+            &before,
+            "preview plus OK is one undo step"
+        );
+    }
+
+    #[test]
+    fn edit_without_layers_or_keyframes_applies_without_asking() {
+        let mut s = state();
+        let id = s.new_composition(false).unwrap();
+        s.open_comp_settings(id);
+        s.comp_dialog.as_mut().unwrap().set_width(800);
+        s.confirm_comp_dialog();
+        assert!(s.comp_dialog.is_none());
+        assert_eq!(s.history.current().comp(id).unwrap().width, 800);
+    }
+
+    #[test]
+    fn frame_rate_change_keeps_keyframes_in_real_time_and_can_snap() {
+        use voxy_core::FrameRate;
+        let mut s = state();
+        let id = s.new_composition(false).unwrap();
+        s.add_solid();
+        let layer = s.selection.unwrap();
+        let prop = s
+            .history
+            .current()
+            .find_layer(layer)
+            .unwrap()
+            .1
+            .transform
+            .opacity
+            .id;
+        s.history.begin("key");
+        s.execute(voxy_core::command::SetAnimated {
+            prop,
+            time: Time::ZERO,
+            animated: true,
+        });
+        s.execute(voxy_core::command::AddKeyframe {
+            prop,
+            time: Time::from_millis(500),
+        });
+        s.history.commit();
+        let times = |s: &EditorState| -> Vec<Time> {
+            s.history
+                .current()
+                .property(prop)
+                .unwrap()
+                .track()
+                .unwrap()
+                .keys()
+                .iter()
+                .map(|k| k.time)
+                .collect()
+        };
+        let before = times(&s);
+        s.open_comp_settings(id);
+        s.comp_dialog.as_mut().unwrap().set_fps_text("29.97".into());
+        s.confirm_comp_dialog();
+        let d = s
+            .comp_dialog
+            .as_ref()
+            .expect("off-grid keyframes ask first");
+        assert_eq!(d.stage, Stage::Confirm);
+        s.confirm_comp_dialog();
+        assert_eq!(
+            s.history.current().comp(id).unwrap().frame_rate,
+            FrameRate::FPS_29_97
+        );
+        assert_eq!(times(&s), before, "keyframes did not move in real time");
+        s.history.undo();
+        s.open_comp_settings(id);
+        let d = s.comp_dialog.as_mut().unwrap();
+        d.set_fps_text("29.97".into());
+        d.snap_keys = true;
+        s.confirm_comp_dialog();
+        s.confirm_comp_dialog();
+        assert_ne!(times(&s), before, "snapped to the nearest frame");
     }
 
     #[test]
