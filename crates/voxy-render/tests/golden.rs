@@ -555,3 +555,160 @@ fn video_frames_upload_once_and_reuse_textures() {
             .all(|p| *p == [30, 30, 30, 255])
     );
 }
+
+// ───────────────────── parametric easings (Milestone H) ─────────────────────
+
+/// Comp size of one easing frame; five frames are stacked into one reference.
+const EASE_W: u32 = 160;
+const EASE_H: u32 = 24;
+/// Normalized segment times that are sampled: away from every jump instant
+/// of the default parameters, so GPU rounding can never straddle a jump.
+const EASE_SAMPLES: [f64; 5] = [0.12, 0.31, 0.47, 0.68, 0.9];
+
+/// One small square that slides 100 px to the right and turns 90° over 1 s,
+/// both properties using `interp`.
+fn easing_scene(interp: voxy_core::Interp) -> Document {
+    use voxy_core::command::{AddKeyframe, SetInterpolation};
+
+    let mut doc = Document::with_comp(
+        "Easing",
+        CompSettings {
+            width: EASE_W,
+            height: EASE_H,
+            background: LinearRgba::from_srgb8(20, 30, 60, 255),
+            ..CompSettings::default()
+        },
+    );
+    let comp = doc.main_comp.unwrap();
+    AddSolidLayer {
+        comp,
+        name: None,
+        color: LinearRgba::from_srgb8(240, 190, 80, 255),
+        index: 0,
+    }
+    .apply(&mut doc)
+    .unwrap();
+    let layer = doc.main().unwrap().layers[0].clone();
+    let LayerKind::Solid { size, .. } = &layer.kind else {
+        unreachable!()
+    };
+    set(&mut doc, size.id, Value::Vec2(DVec2::new(10.0, 10.0)));
+    set(
+        &mut doc,
+        layer.transform.anchor.id,
+        Value::Vec2(DVec2::new(5.0, 5.0)),
+    );
+    let (t0, t1) = (Time::ZERO, Time::from_secs(1));
+    let animate = |doc: &mut Document, prop, from: Value, to: Value| {
+        SetProperty {
+            prop,
+            time: t0,
+            value: from,
+        }
+        .apply(doc)
+        .unwrap();
+        AddKeyframe { prop, time: t0 }.apply(doc).unwrap();
+        SetProperty {
+            prop,
+            time: t1,
+            value: to,
+        }
+        .apply(doc)
+        .unwrap();
+        SetInterpolation {
+            prop,
+            times: vec![t0],
+            interp,
+        }
+        .apply(doc)
+        .unwrap();
+    };
+    animate(
+        &mut doc,
+        layer.transform.position.id,
+        Value::Vec2(DVec2::new(10.0, 12.0)),
+        Value::Vec2(DVec2::new(110.0, 12.0)),
+    );
+    animate(
+        &mut doc,
+        layer.transform.rotation.id,
+        Value::Scalar(0.0),
+        Value::Scalar(90.0),
+    );
+    doc.validate().unwrap();
+    doc
+}
+
+/// The five sample frames of `doc`, stacked top to bottom.
+fn easing_strip(gpu: &GpuContext, compositor: &mut Compositor, doc: &Document) -> RgbaImage {
+    let comp = doc.main_comp.unwrap();
+    let mut pixels = Vec::new();
+    for u in EASE_SAMPLES {
+        let (frame, report) = render_frame(
+            compositor,
+            &gpu.device,
+            &gpu.queue,
+            doc,
+            &NoVideo,
+            &FrameRequest::export(comp, Time::from_secs_f64(u)),
+        )
+        .expect("root comp exists")
+        .expect("readback");
+        assert!(report.missing_assets.is_empty(), "{report:?}");
+        pixels.extend_from_slice(&frame.pixels);
+    }
+    RgbaImage {
+        width: EASE_W,
+        height: EASE_H * EASE_SAMPLES.len() as u32,
+        pixels,
+    }
+}
+
+#[test]
+fn parametric_easings_render_as_pinned() {
+    use voxy_core::{
+        BounceParams, Interp, JumpMode, OscillationParams, SpringParams, SteppedRampParams,
+        StepsParams,
+    };
+
+    let Some(gpu) = gpu() else { return };
+    let cases = [
+        ("easing_spring", Interp::Spring(SpringParams::default())),
+        ("easing_bounce", Interp::Bounce(BounceParams::default())),
+        (
+            "easing_oscillation",
+            Interp::Oscillation(OscillationParams::default()),
+        ),
+        ("easing_steps", Interp::Steps(StepsParams::default())),
+        (
+            "easing_steps_none",
+            Interp::Steps(StepsParams {
+                jump: JumpMode::None,
+                ..StepsParams::default()
+            }),
+        ),
+        (
+            "easing_stepped_ramp",
+            Interp::SteppedRamp(SteppedRampParams::default()),
+        ),
+    ];
+    let mut compositor = Compositor::new(&gpu.device);
+    let mut strips = Vec::new();
+    for (name, interp) in cases {
+        let doc = easing_scene(interp);
+        let strip = easing_strip(&gpu, &mut compositor, &doc);
+        // The same frames again, and from a fresh compositor, are identical.
+        let again = easing_strip(&gpu, &mut compositor, &doc);
+        let fresh = easing_strip(&gpu, &mut Compositor::new(&gpu.device), &doc);
+        assert!(strip.pixels == again.pixels, "{name}: same compositor");
+        assert!(strip.pixels == fresh.pixels, "{name}: fresh compositor");
+        compare(name, &strip);
+        strips.push((name, strip));
+    }
+    // Every easing produces its own picture.
+    for (i, (a, sa)) in strips.iter().enumerate() {
+        for (b, sb) in &strips[i + 1..] {
+            assert!(sa.pixels != sb.pixels, "{a} and {b} render identically");
+        }
+    }
+}
