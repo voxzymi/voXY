@@ -6,7 +6,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use voxy_core::command::{
     AddImageLayer, AddSolidLayer, AddVideoLayer, CreateComposition, CreateFolder,
@@ -25,6 +25,7 @@ use crate::comp_draft::{Context as DraftContext, Draft, Mode, Stage, Tab as Dial
 use crate::dialogs::{Dialogs, IMAGE_EXTENSIONS, NativeDialogs, VIDEO_EXTENSIONS};
 use crate::prefs::Preferences;
 use crate::project_view::{PendingRemove, ProjectState};
+use crate::recovery::{self, Offer, Session};
 use crate::reveal::{self, CompTarget};
 
 /// A message for the status bar.
@@ -82,6 +83,12 @@ pub struct EditorState {
     /// The easing last copied with "Copy Easing" (or the graph editor's Copy
     /// button). Lives for the session.
     pub ease_clipboard: Option<SegmentEase>,
+    /// Autosave bookkeeping; `None` until [`EditorState::enable_recovery`]
+    /// (tests and tools that never autosave leave it off).
+    recovery: Option<Autosaver>,
+    /// An autosave found for the project that was just opened (or left by a
+    /// crashed session), waiting for the user to recover or discard it.
+    pub pending_recovery: Option<Offer>,
     /// Text for the shell to put on the system clipboard (the copied
     /// easing as JSON), so it can be pasted elsewhere, e.g. into a bug
     /// report. Taken by the app each frame.
@@ -118,6 +125,8 @@ impl EditorState {
             dialog_tab: DialogTab::Basic,
             prefs: Preferences::default(),
             ease_clipboard: None,
+            recovery: None,
+            pending_recovery: None,
             outgoing_clipboard: None,
             prefs_path: None,
             gpu_max_texture: None,
@@ -264,6 +273,9 @@ impl EditorState {
     }
 
     pub fn new_document(&mut self) {
+        // The caller has already asked about unsaved changes: whatever was
+        // autosaved for the old project is no longer wanted.
+        self.discard_autosave();
         self.history.reset(Self::untitled());
         self.project_path = None;
         self.reset_view();
@@ -273,9 +285,13 @@ impl EditorState {
     pub fn open_path(&mut self, path: &Path) {
         match persist::load_with_ui(path) {
             Ok((doc, ui_state)) => {
+                self.discard_autosave();
                 self.history.reset(doc);
                 self.project_path = Some(path.to_path_buf());
                 self.reset_view();
+                // A newer autosave next to it means the last session ended
+                // without saving; the user decides (see `recover`).
+                self.pending_recovery = recovery::offer_for_project(path);
                 if let Some(state) = ui_state {
                     self.project.view = crate::compat::from_ui_state(&state);
                     self.dialog_tab = crate::compat::dialog_tab_from(&state);
@@ -322,8 +338,12 @@ impl EditorState {
         let ui_state = crate::compat::to_ui_state(&self.project.view, self.dialog_tab);
         match persist::save_with_ui(self.history.current(), Some(&ui_state), path) {
             Ok(()) => {
+                // What was autosaved (under the old or the new name) is now
+                // in the saved file.
+                self.discard_autosave();
                 self.history.mark_saved();
                 self.project_path = Some(path.to_path_buf());
+                self.discard_autosave();
                 self.project.missing.invalidate();
                 self.info(format!("Saved {}", path.display()));
                 true
@@ -1189,7 +1209,167 @@ impl EditorState {
     }
 }
 
+/// What autosave remembers between frames.
+#[derive(Debug)]
+struct Autosaver {
+    session: Session,
+    /// The revision last written to an autosave file.
+    saved_revision: Option<u64>,
+    /// When the current stretch of unsaved edits was first noticed.
+    dirty_since: Option<Instant>,
+    /// A dead session's autosave that this one has recovered and may delete
+    /// once its own autosave holds the same edits.
+    superseded: Option<Offer>,
+}
+
 impl EditorState {
+    /// Turns autosave and recovery on, keeping untitled projects' recovery
+    /// files in `dir`.
+    pub fn enable_recovery(&mut self, dir: PathBuf) {
+        self.recovery = Some(Autosaver {
+            session: Session::new(dir),
+            saved_revision: None,
+            dirty_since: None,
+            superseded: None,
+        });
+    }
+
+    /// At launch with no project to open: offers the newest unsaved project
+    /// a crashed session left behind.
+    pub fn offer_orphaned_recovery(&mut self) {
+        if let Some(rec) = &self.recovery
+            && self.pending_recovery.is_none()
+        {
+            self.pending_recovery = recovery::orphans(rec.session.dir()).into_iter().next();
+        }
+    }
+
+    /// Writes an autosave if the project has been modified for the autosave
+    /// interval and nothing is mid-edit. Call once per frame; `busy` is true
+    /// while a drag or text entry is in progress or a dialog is open.
+    pub fn autosave_tick(&mut self, now: Instant, busy: bool) {
+        let secs = self.prefs.autosave_seconds;
+        let rev = self.history.revision();
+        let dirty = self.history.is_dirty();
+        let waiting = self.pending_recovery.is_some();
+        let Some(rec) = self.recovery.as_mut() else {
+            return;
+        };
+        if !dirty {
+            // Back at the saved state (saved, or everything undone): an
+            // autosave of the edits in between must not be offered later.
+            rec.dirty_since = None;
+            if rec.saved_revision.take().is_some() {
+                self.discard_autosave();
+            }
+            return;
+        }
+        // While an offer is waiting its file may be the only copy of the
+        // user's work, and a titled project's autosave is the same file:
+        // never write over it before they decide.
+        if secs == 0 || waiting || rec.saved_revision == Some(rev) {
+            return;
+        }
+        let since = *rec.dirty_since.get_or_insert(now);
+        if busy || now.duration_since(since) < Duration::from_secs(u64::from(secs)) {
+            return;
+        }
+        let target = match &self.project_path {
+            Some(project) => Ok(recovery::autosave_path(project)),
+            None => rec.session.untitled_path(),
+        };
+        let ui_state = crate::compat::to_ui_state(&self.project.view, self.dialog_tab);
+        let written = target.map_err(|e| e.to_string()).and_then(|path| {
+            persist::save_with_ui(self.history.current(), Some(&ui_state), &path)
+                .map(|()| path)
+                .map_err(|e| e.to_string())
+        });
+        match written {
+            Ok(_) => {
+                rec.saved_revision = Some(rev);
+                rec.dirty_since = None;
+                if let Some(old) = rec.superseded.take() {
+                    recovery::discard(&old);
+                }
+            }
+            Err(e) => {
+                tracing::warn!("autosave failed: {e}");
+                rec.dirty_since = Some(now); // try again after another interval
+            }
+        }
+    }
+
+    /// Deletes the autosave of the current project (saved: next to it;
+    /// untitled: this session's). Used when the project is saved, replaced
+    /// or deliberately discarded.
+    pub fn discard_autosave(&mut self) {
+        if let Some(project) = &self.project_path {
+            let _ = std::fs::remove_file(recovery::autosave_path(project));
+        }
+        if let Some(rec) = self.recovery.as_mut() {
+            rec.session.forget_untitled();
+            rec.saved_revision = None;
+            rec.dirty_since = None;
+        }
+    }
+
+    /// Loads the offered autosave in place of what is open. The recovered
+    /// project counts as unsaved; the file stays until it is saved or
+    /// discarded, being the only copy of those edits.
+    pub fn recover(&mut self) {
+        let Some(offer) = self.pending_recovery.take() else {
+            return;
+        };
+        match persist::load_with_ui(&offer.autosave) {
+            Ok((doc, ui_state)) => {
+                self.history.reset_unsaved(doc);
+                self.project_path.clone_from(&offer.project);
+                self.reset_view();
+                if let Some(state) = ui_state {
+                    self.project.view = crate::compat::from_ui_state(&state);
+                    self.dialog_tab = crate::compat::dialog_tab_from(&state);
+                }
+                self.project.forget_missing(self.history.current());
+                if offer.project.is_none()
+                    && let Some(rec) = self.recovery.as_mut()
+                {
+                    // Untitled: this session autosaves under its own name; the
+                    // dead session's file goes once ours has the same edits.
+                    rec.superseded = Some(offer.clone());
+                }
+                self.info("Recovered unsaved changes. Save the project to keep them.");
+            }
+            Err(e) => {
+                // Keep the file: a loader bug must not cost the user their work.
+                self.error(format!(
+                    "Could not recover {}: {e}. The file was left in place.",
+                    offer.autosave.display()
+                ));
+            }
+        }
+    }
+
+    /// Throws the offered autosave away.
+    pub fn discard_recovery(&mut self) {
+        if let Some(offer) = self.pending_recovery.take() {
+            recovery::discard(&offer);
+        }
+    }
+
+    /// A clean exit: nothing of this session should be offered next time. Does
+    /// nothing while the project has unsaved changes the user has not
+    /// explicitly given up (`confirmed`), so a close that was not confirmed
+    /// is treated like a crash and recoverable.
+    pub fn finish_session(&mut self, confirmed: bool) {
+        if self.history.is_dirty() && !confirmed {
+            return;
+        }
+        self.discard_autosave();
+        if let Some(rec) = self.recovery.as_mut() {
+            rec.session.finish();
+        }
+    }
+
     /// Applies `kind` with default parameters to every selected segment.
     fn apply_kind(&mut self, kind: InterpKind) {
         let targets = self.selected_segments();
@@ -1465,6 +1645,236 @@ mod tests {
             assert_eq!(Action::from_id(a.id()), Some(a));
             assert!(a.def().defaults.is_empty(), "rebindable, not bound");
         }
+    }
+
+    // ───────────────────────── autosave and recovery ─────────────────────────
+
+    /// A state with recovery on (folder under `dir`), a 10 s interval and one
+    /// composition. `saved` also gives it a project file `P.voxy` in `dir`.
+    fn recovering(dir: &Path, saved: bool) -> EditorState {
+        let mut s = state();
+        s.enable_recovery(dir.join("recovery"));
+        s.prefs.autosave_seconds = 10;
+        s.new_composition(false).unwrap();
+        if saved {
+            let path = dir.join("P.voxy");
+            persist::save(s.history.current(), &path).unwrap();
+            s.open_path(&path);
+        }
+        s
+    }
+
+    fn edit_something(s: &mut EditorState) {
+        let comp = s.comp_id().unwrap();
+        s.execute(voxy_core::command::AddSolidLayer {
+            comp,
+            name: None,
+            color: LinearRgba::WHITE,
+            index: 0,
+        });
+    }
+
+    #[test]
+    fn autosave_waits_for_the_interval_then_writes_beside_the_project() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = recovering(dir.path(), true);
+        let auto = recovery::autosave_path(&dir.path().join("P.voxy"));
+        let t0 = Instant::now();
+        let secs = Duration::from_secs;
+
+        // Clean project: nothing to autosave, however long we wait.
+        s.autosave_tick(t0 + secs(100), false);
+        assert!(!auto.exists());
+
+        edit_something(&mut s);
+        s.autosave_tick(t0, false); // first noticed
+        s.autosave_tick(t0 + secs(9), false);
+        assert!(!auto.exists(), "not before the interval");
+        s.autosave_tick(t0 + secs(10), true);
+        assert!(
+            !auto.exists(),
+            "not while something is being dragged or typed"
+        );
+        s.autosave_tick(t0 + secs(11), false);
+        assert!(auto.exists());
+        let (saved, _) = persist::load_with_ui(&auto).unwrap();
+        assert_eq!(&saved, &**s.history.current(), "it is the open document");
+
+        // The project file itself is untouched; the same state is not rewritten.
+        let project = std::fs::read_to_string(dir.path().join("P.voxy")).unwrap();
+        assert!(!project.contains("Solid"), "{project}");
+        let first = std::fs::metadata(&auto).unwrap().modified().unwrap();
+        s.autosave_tick(t0 + secs(200), false);
+        assert_eq!(std::fs::metadata(&auto).unwrap().modified().unwrap(), first);
+
+        // A later edit starts a new interval.
+        edit_something(&mut s);
+        s.autosave_tick(t0 + secs(300), false);
+        s.autosave_tick(t0 + secs(309), false);
+        assert_eq!(std::fs::metadata(&auto).unwrap().modified().unwrap(), first);
+        s.autosave_tick(t0 + secs(310), false);
+        let (saved, _) = persist::load_with_ui(&auto).unwrap();
+        assert_eq!(&saved, &**s.history.current());
+    }
+
+    #[test]
+    fn autosave_off_means_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = recovering(dir.path(), true);
+        s.prefs.autosave_seconds = 0;
+        edit_something(&mut s);
+        let t0 = Instant::now();
+        s.autosave_tick(t0, false);
+        s.autosave_tick(t0 + Duration::from_secs(10_000), false);
+        assert!(!recovery::autosave_path(&dir.path().join("P.voxy")).exists());
+    }
+
+    #[test]
+    fn saving_or_undoing_back_to_clean_deletes_the_autosave() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = recovering(dir.path(), true);
+        let auto = recovery::autosave_path(&dir.path().join("P.voxy"));
+        let t0 = Instant::now();
+        let make = |s: &mut EditorState, at: u64| {
+            edit_something(s);
+            s.autosave_tick(t0 + Duration::from_secs(at), false);
+            s.autosave_tick(t0 + Duration::from_secs(at + 10), false);
+        };
+        make(&mut s, 0);
+        assert!(auto.exists());
+        // Everything undone: the document equals the saved file again, so an
+        // autosave of the edits in between must not be offered after a crash.
+        assert!(s.history.undo());
+        s.autosave_tick(t0 + Duration::from_secs(50), false);
+        assert!(!auto.exists());
+        // Saving removes it too.
+        s.history.redo();
+        make(&mut s, 100);
+        assert!(auto.exists());
+        assert!(s.save());
+        assert!(!auto.exists());
+    }
+
+    #[test]
+    fn untitled_projects_autosave_in_the_recovery_folder_and_clean_up_on_exit() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = recovering(dir.path(), false);
+        let rec = dir.path().join("recovery");
+        edit_something(&mut s);
+        let t0 = Instant::now();
+        s.autosave_tick(t0, false);
+        s.autosave_tick(t0 + Duration::from_secs(10), false);
+        let files: Vec<_> = std::fs::read_dir(&rec).unwrap().flatten().collect();
+        assert_eq!(files.len(), 2, "autosave and its session lock: {files:?}");
+        // This window is alive, so it is not a crash to recover.
+        assert_eq!(recovery::orphans(&rec).len(), 0);
+        // An unconfirmed close with unsaved changes keeps the file.
+        s.finish_session(false);
+        assert_eq!(std::fs::read_dir(&rec).unwrap().count(), 2);
+        // A confirmed one (saved or "Don't Save") removes everything.
+        s.finish_session(true);
+        assert_eq!(std::fs::read_dir(&rec).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn a_newer_autosave_is_offered_on_open_and_never_overwritten_meanwhile() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = recovering(dir.path(), true);
+        let project = dir.path().join("P.voxy");
+        let auto = recovery::autosave_path(&project);
+        edit_something(&mut s);
+        let t0 = Instant::now();
+        s.autosave_tick(t0, false);
+        s.autosave_tick(t0 + Duration::from_secs(10), false);
+        let crashed_doc = Document::clone(s.history.current());
+        // The window dies; a new one opens the project.
+        std::thread::sleep(Duration::from_millis(20));
+        let mut s2 = recovering(dir.path(), false);
+        s2.pending_recovery = None;
+        // (recovering() made a fresh composition; open_path replaces it.)
+        s2.open_path(&project);
+        assert!(s2.pending_recovery.is_some(), "newer than the project file");
+        // The user has not decided yet: edits must not overwrite the file.
+        let before = std::fs::read(&auto).unwrap();
+        edit_something(&mut s2);
+        s2.autosave_tick(t0, false);
+        s2.autosave_tick(t0 + Duration::from_secs(1000), false);
+        assert_eq!(std::fs::read(&auto).unwrap(), before);
+        // Undo that edit and recover: the autosaved document comes back, as
+        // an unsaved change to the same project.
+        s2.history.undo();
+        s2.recover();
+        assert!(s2.pending_recovery.is_none());
+        assert_eq!(&**s2.history.current(), &crashed_doc);
+        assert!(s2.history.is_dirty());
+        assert_eq!(s2.project_path.as_deref(), Some(project.as_path()));
+        assert!(auto.exists(), "kept until saved");
+        assert!(s2.save());
+        assert!(!auto.exists());
+    }
+
+    #[test]
+    fn discarding_an_offer_deletes_it_and_loading_a_bad_one_keeps_it() {
+        let dir = tempfile::tempdir().unwrap();
+        // The project exists on disk but is not open (as at launch).
+        let mut s = recovering(dir.path(), false);
+        let project = dir.path().join("P.voxy");
+        persist::save(s.history.current(), &project).unwrap();
+        let auto = recovery::autosave_path(&project);
+        std::thread::sleep(Duration::from_millis(20));
+        std::fs::write(&auto, "this is not a project").unwrap();
+        s.open_path(&project);
+        assert!(s.pending_recovery.is_some());
+        let before = Document::clone(s.history.current());
+        s.recover();
+        assert!(s.status.as_ref().is_some_and(|st| st.is_error));
+        assert_eq!(&**s.history.current(), &before, "nothing was replaced");
+        assert!(
+            auto.exists(),
+            "an unreadable autosave is left for inspection"
+        );
+        s.open_path(&project);
+        s.discard_recovery();
+        assert!(!auto.exists());
+        assert!(s.pending_recovery.is_none());
+    }
+
+    #[test]
+    fn a_crashed_untitled_project_is_recovered_and_the_old_file_cleaned_up() {
+        let dir = tempfile::tempdir().unwrap();
+        let rec = dir.path().join("recovery");
+        let crashed_doc;
+        {
+            let mut a = recovering(dir.path(), false);
+            edit_something(&mut a);
+            let t0 = Instant::now();
+            a.autosave_tick(t0, false);
+            a.autosave_tick(t0 + Duration::from_secs(10), false);
+            crashed_doc = Document::clone(a.history.current());
+            // `a` goes away without a clean exit: the process died.
+        }
+        let mut b = recovering(dir.path(), false);
+        b.offer_orphaned_recovery();
+        let offer = b
+            .pending_recovery
+            .clone()
+            .expect("the crashed session's copy");
+        b.recover();
+        assert_eq!(&**b.history.current(), &crashed_doc);
+        assert!(b.history.is_dirty() && b.project_path.is_none());
+        assert!(
+            offer.autosave.exists(),
+            "kept until this session has its own copy"
+        );
+        let t0 = Instant::now();
+        b.autosave_tick(t0, false);
+        b.autosave_tick(t0 + Duration::from_secs(10), false);
+        assert!(
+            !offer.autosave.exists(),
+            "superseded by this session's autosave"
+        );
+        assert_eq!(recovery::orphans(&rec).len(), 0);
+        b.finish_session(true);
     }
 
     fn write_png(path: &Path) {

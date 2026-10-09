@@ -79,7 +79,10 @@ impl Default for DialogMemory {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+/// Seconds of unsaved editing after which the project is autosaved.
+pub const DEFAULT_AUTOSAVE_SECONDS: u32 = 60;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Preferences {
     pub user_presets: Vec<UserPreset>,
@@ -87,6 +90,26 @@ pub struct Preferences {
     #[serde(deserialize_with = "lenient_list")]
     pub easing_presets: Vec<EasingPreset>,
     pub comp_dialog: DialogMemory,
+    /// How long after the first unsaved edit the project is autosaved, in
+    /// seconds; `0` turns autosave off. There is no settings dialog yet:
+    /// edit `preferences.toml`.
+    pub autosave_seconds: u32,
+}
+
+impl Default for Preferences {
+    fn default() -> Self {
+        Preferences {
+            user_presets: Vec::new(),
+            easing_presets: Vec::new(),
+            comp_dialog: DialogMemory::default(),
+            autosave_seconds: DEFAULT_AUTOSAVE_SECONDS,
+        }
+    }
+}
+
+/// The per-user folder for recovery files: `<config dir>/recovery`.
+pub fn recovery_dir() -> Option<PathBuf> {
+    config_dir_with(Os::current(), &|k| std::env::var_os(k)).map(|d| d.join("recovery"))
 }
 
 /// The per-user config directory for voXY on `os`, from environment
@@ -328,6 +351,32 @@ mod tests {
         assert_eq!(p.easing_presets[0].ease, b);
         assert!(p.remove_easing_preset("Mine"));
         assert!(!p.remove_easing_preset("Mine"));
+    }
+
+    #[test]
+    fn autosave_defaults_on_and_can_be_turned_off() {
+        assert_eq!(
+            Preferences::default().autosave_seconds,
+            DEFAULT_AUTOSAVE_SECONDS
+        );
+        // A file without the key keeps the default; the key can disable it.
+        assert_eq!(
+            Preferences::parse("user_presets = []").autosave_seconds,
+            DEFAULT_AUTOSAVE_SECONDS
+        );
+        assert_eq!(
+            Preferences::parse("autosave_seconds = 0").autosave_seconds,
+            0
+        );
+        assert_eq!(
+            Preferences::parse("autosave_seconds = 15").autosave_seconds,
+            15
+        );
+        // A wrong type is a corrupt file: everything defaults, as before.
+        assert_eq!(
+            Preferences::parse("autosave_seconds = \"often\""),
+            Preferences::default()
+        );
     }
 
     #[test]

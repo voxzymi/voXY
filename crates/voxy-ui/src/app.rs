@@ -60,6 +60,9 @@ impl VoxyApp {
         state.gpu_max_texture = viewport
             .as_ref()
             .map(ViewportRenderer::max_texture_dimension);
+        if let Some(dir) = crate::prefs::recovery_dir() {
+            state.enable_recovery(dir);
+        }
         for c in state.keymap.conflicts() {
             tracing::warn!(
                 "shortcut {:?} is bound to more than one action: {:?}",
@@ -69,6 +72,8 @@ impl VoxyApp {
         }
         if let Some(path) = open {
             state.open_path(&path);
+        } else {
+            state.offer_orphaned_recovery();
         }
         VoxyApp {
             state,
@@ -335,6 +340,47 @@ impl VoxyApp {
                 None => {}
             }
         }
+        if let Some(offer) = self.state.pending_recovery.clone() {
+            let what = offer.project.as_ref().map_or_else(
+                || "an untitled project".to_owned(),
+                |p| {
+                    format!(
+                        "“{}”",
+                        p.file_stem()
+                            .map_or_else(|| p.to_string_lossy(), |s| s.to_string_lossy())
+                    )
+                },
+            );
+            let when = crate::recovery::describe_age(std::time::SystemTime::now(), offer.modified);
+            let mut choice = None;
+            egui::Modal::new(egui::Id::new("voxy-recovery")).show(ctx, |ui| {
+                ui.heading("Recover unsaved changes?");
+                ui.label(format!(
+                    "voXY did not shut down cleanly last time. It kept a copy of {what} saved {when}."
+                ));
+                if offer.project.is_some() {
+                    ui.label("It is newer than the project file, which is untouched until you save.");
+                }
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Recover").clicked() {
+                        choice = Some(true);
+                    }
+                    if ui
+                        .button("Discard")
+                        .on_hover_text("Delete the autosaved copy. This cannot be undone.")
+                        .clicked()
+                    {
+                        choice = Some(false);
+                    }
+                });
+            });
+            match choice {
+                Some(true) => self.state.recover(),
+                Some(false) => self.state.discard_recovery(),
+                None => {}
+            }
+        }
         if self.show_about {
             egui::Modal::new(egui::Id::new("voxy-about")).show(ctx, |ui| {
                 ui.heading(PRODUCT_NAME);
@@ -350,6 +396,13 @@ impl VoxyApp {
 }
 
 impl eframe::App for VoxyApp {
+    /// A clean exit removes the autosave. A close the user did not confirm
+    /// while there were unsaved changes (the system ending the session, say)
+    /// keeps it, like a crash.
+    fn on_exit(&mut self) {
+        self.state.finish_session(self.allow_close);
+    }
+
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
 
@@ -361,8 +414,24 @@ impl eframe::App for VoxyApp {
             self.pending = Some(Discarding::Quit);
         }
 
-        if self.pending.is_none() && !self.show_about && self.state.comp_dialog.is_none() {
+        if self.pending.is_none()
+            && !self.show_about
+            && self.state.comp_dialog.is_none()
+            && self.state.pending_recovery.is_none()
+        {
             self.shortcuts(&ctx);
+        }
+
+        // Autosave: not mid-drag, while typing, or behind a dialog; and wake
+        // up now and then while there are unsaved changes, since egui only
+        // draws frames on input.
+        let busy = ctx.input(|i| i.pointer.any_down())
+            || ctx.egui_wants_keyboard_input()
+            || self.pending.is_some()
+            || self.state.comp_dialog.is_some();
+        self.state.autosave_tick(std::time::Instant::now(), busy);
+        if self.state.history.is_dirty() {
+            ctx.request_repaint_after(std::time::Duration::from_secs(5));
         }
 
         // Playback: the master clock moves the playhead.

@@ -16,6 +16,7 @@ mod panels;
 mod prefs;
 mod project_panel;
 mod project_view;
+mod recovery;
 mod reveal;
 mod state;
 mod theme;
