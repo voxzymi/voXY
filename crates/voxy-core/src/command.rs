@@ -1,5 +1,13 @@
 //! Commands: every edit to a document is one.
 
+mod pool;
+mod precomp;
+mod settings;
+
+pub use pool::*;
+pub use precomp::*;
+pub use settings::*;
+
 use std::borrow::Cow;
 use std::fmt::Debug;
 
@@ -36,6 +44,18 @@ pub enum CommandError {
     Validation(#[from] ValidationError),
 }
 
+/// What a command reports besides the edit itself: items it created (so the
+/// UI can select or open them) and warnings to show.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CommandReport {
+    pub created_comps: Vec<CompId>,
+    pub created_layers: Vec<LayerId>,
+    pub created_folders: Vec<crate::FolderId>,
+    /// Things the user should know: data that could not be preserved
+    /// exactly, mismatches, counts of adjusted keyframes.
+    pub warnings: Vec<String>,
+}
+
 /// An edit. [`crate::History`] applies it to a copy of the current document,
 /// so `apply` only has to move forward: undo restores the previous snapshot
 /// and no inverse operation is needed.
@@ -46,18 +66,31 @@ pub trait Command: Send + Debug + 'static {
     /// Shown in the Edit menu, e.g. "Undo Add Solid".
     fn label(&self) -> Cow<'static, str>;
     fn apply(&self, doc: &mut Document) -> Result<(), CommandError>;
+    /// [`Command::apply`], also filling in `report`. Commands that report
+    /// override this and implement `apply` by calling it.
+    fn apply_reported(
+        &self,
+        doc: &mut Document,
+        report: &mut CommandReport,
+    ) -> Result<(), CommandError> {
+        let _ = report;
+        self.apply(doc)
+    }
     /// Commands with equal keys merge while an interaction is open.
     fn merge_key(&self) -> Option<MergeKey> {
         None
     }
 }
 
-fn comp_mut(doc: &mut Document, id: CompId) -> Result<&mut crate::Composition, CommandError> {
+pub(crate) fn comp_mut(
+    doc: &mut Document,
+    id: CompId,
+) -> Result<&mut crate::Composition, CommandError> {
     doc.comp_mut(id)
         .ok_or_else(|| CommandError::NotFound(id.to_string()))
 }
 
-fn insert_layer(
+pub(crate) fn insert_layer(
     doc: &mut Document,
     comp: CompId,
     index: usize,
@@ -137,13 +170,8 @@ impl Command for AddImageLayer {
             self.comp,
             self.index,
             Asset {
-                id: 0.into(),
-                name: file_name(&self.path),
-                kind: AssetKind::Image,
-                path: self.path.clone(),
                 pixel_size: Some(self.pixel_size),
-                duration: None,
-                frame_rate: None,
+                ..Asset::new(AssetKind::Image, file_name(&self.path), self.path.clone())
             },
             |asset| LayerKind::Image { asset },
         )
@@ -174,20 +202,17 @@ impl Command for AddVideoLayer {
             self.comp,
             self.index,
             Asset {
-                id: 0.into(),
-                name: file_name(&self.path),
-                kind: AssetKind::Video,
-                path: self.path.clone(),
                 pixel_size: Some(self.pixel_size),
                 duration: self.duration,
                 frame_rate: self.frame_rate,
+                ..Asset::new(AssetKind::Video, file_name(&self.path), self.path.clone())
             },
             |asset| LayerKind::Video { asset },
         )
     }
 }
 
-fn file_name(path: &str) -> String {
+pub(crate) fn file_name(path: &str) -> String {
     path.rsplit(['/', '\\']).next().unwrap_or(path).to_owned()
 }
 
@@ -218,7 +243,7 @@ fn add_media_layer(
     insert_layer(doc, comp, index, layer)
 }
 
-fn new_layer(
+pub(crate) fn new_layer(
     id: LayerId,
     name: String,
     kind: LayerKind,

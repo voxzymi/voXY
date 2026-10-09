@@ -101,8 +101,11 @@ struct Cx {
 }
 
 pub fn show(ui: &mut Ui, state: &mut EditorState) {
-    let doc = state.history.current().clone();
-    let comp = doc.root();
+    let Some(comp) = state.comp() else {
+        ui.label("No composition is open.");
+        return;
+    };
+    let comp = &*comp;
     let rate = comp.frame_rate;
     let duration = comp.duration.as_secs_f64().max(0.001);
 
@@ -296,6 +299,8 @@ fn bar_color(layer: &Layer, time: Time) -> Color32 {
         }
         LayerKind::Image { .. } => Color32::from_rgb(60, 150, 160),
         LayerKind::Video { .. } => Color32::from_rgb(70, 110, 190),
+        LayerKind::Precomp { .. } => Color32::from_rgb(170, 120, 60),
+        LayerKind::Placeholder { .. } => Color32::from_rgb(110, 110, 110),
     }
 }
 

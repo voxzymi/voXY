@@ -93,10 +93,18 @@ impl Panels<'_> {
         let avail = ui.available_size();
         let ppp = ui.ctx().pixels_per_point();
         let doc = self.state.history.current().clone();
+        let Some(comp_id) = self.state.comp_id() else {
+            ui.centered_and_justified(|ui| ui.label("No composition is open."));
+            return;
+        };
+        let shot = crate::viewport::Shot {
+            doc: &doc,
+            comp: comp_id,
+            revision: self.state.history.revision(),
+            time: self.state.time,
+        };
         let frame = viewport.frame(
-            &doc,
-            self.state.history.revision(),
-            self.state.time,
+            &shot,
             avail * ppp,
             self.state.asset_root(),
             self.state.transport.is_playing(),
@@ -104,7 +112,9 @@ impl Panels<'_> {
         let Some((id, _)) = frame else { return };
         // Fit the whole composition into the panel, preserving aspect ratio.
         // The frame itself is rendered at most at full resolution.
-        let comp = doc.root();
+        let Some(comp) = doc.comp(comp_id) else {
+            return;
+        };
         let scale = (avail.x / comp.width as f32).min(avail.y / comp.height as f32);
         let size = egui::vec2(comp.width as f32, comp.height as f32) * scale;
         ui.centered_and_justified(|ui| {
@@ -113,8 +123,10 @@ impl Panels<'_> {
     }
 
     fn timeline_ui(&mut self, ui: &mut Ui) {
-        let doc = self.state.history.current().clone();
-        let comp = doc.root();
+        let Some(comp) = self.state.comp() else {
+            ui.label("No composition is open.");
+            return;
+        };
         ui.horizontal(|ui| {
             ui.label(RichText::new(&comp.name).strong());
             ui.label(format!(
@@ -125,7 +137,7 @@ impl Panels<'_> {
                 comp.duration.as_secs_f64()
             ));
         });
-        self.time_scrubber(ui, comp);
+        self.time_scrubber(ui, &comp);
         ui.separator();
         crate::timeline::show(ui, self.state);
     }
@@ -187,22 +199,24 @@ impl Panels<'_> {
     }
 
     fn composition_ui(&mut self, ui: &mut Ui, doc: &voxy_core::Document) {
-        let comp = doc.root();
+        let comp = self.state.comp();
         ui.label(RichText::new("Composition").strong());
         egui::Grid::new("comp")
             .num_columns(2)
             .striped(true)
             .show(ui, |ui| {
-                ui.label("Size");
-                ui.label(format!("{} × {} px", comp.width, comp.height));
-                ui.end_row();
-                ui.label("Frame rate");
-                ui.label(comp.frame_rate.to_string());
-                ui.end_row();
-                ui.label("Duration");
-                ui.label(format!("{:.3} s", comp.duration.as_secs_f64()));
-                ui.end_row();
-                self.property_row(ui, &comp.background);
+                if let Some(comp) = &comp {
+                    ui.label("Size");
+                    ui.label(format!("{} × {} px", comp.width, comp.height));
+                    ui.end_row();
+                    ui.label("Frame rate");
+                    ui.label(comp.frame_rate.to_string());
+                    ui.end_row();
+                    ui.label("Duration");
+                    ui.label(format!("{:.3} s", comp.duration.as_secs_f64()));
+                    ui.end_row();
+                    self.property_row(ui, &comp.background);
+                }
                 ui.label("Working space");
                 let mut space = doc.meta.working_space;
                 egui::ComboBox::from_id_salt("working-space")

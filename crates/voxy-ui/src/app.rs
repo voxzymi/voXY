@@ -157,8 +157,9 @@ impl VoxyApp {
                 })
                 .sum()
         });
-        if step != 0 {
-            let comp = self.state.history.current().root().clone();
+        if step != 0
+            && let Some(comp) = self.state.comp()
+        {
             let rate = comp.frame_rate;
             let last = (rate.time_to_frame(comp.duration) - 1).max(0);
             let frame = (rate.time_to_frame(self.state.time) + step).clamp(0, last);
@@ -283,13 +284,16 @@ impl VoxyApp {
                 ""
             };
             ui.label(RichText::new(format!("{}{dirty}", self.state.display_name())).strong());
-            let doc = self.state.history.current();
-            let comp = doc.root();
+            let doc = self.state.history.current().clone();
             ui.separator();
-            ui.label(format!(
-                "{}×{} · {}",
-                comp.width, comp.height, comp.frame_rate
-            ));
+            if let Some(comp) = self.state.comp() {
+                ui.label(format!(
+                    "{}×{} · {}",
+                    comp.width, comp.height, comp.frame_rate
+                ));
+            } else {
+                ui.label("No composition");
+            }
             ui.separator();
             ui.label(working_space_label(doc.meta.working_space));
             if let Some(v) = &self.viewport
@@ -401,11 +405,11 @@ impl eframe::App for VoxyApp {
         }
 
         // Playback: the master clock moves the playhead.
-        let comp = self.state.history.current().root().clone();
-        if let Some(t) = self
-            .state
-            .transport
-            .tick(self.state.time, comp.duration, comp.frame_rate)
+        if let Some(comp) = self.state.comp()
+            && let Some(t) =
+                self.state
+                    .transport
+                    .tick(self.state.time, comp.duration, comp.frame_rate)
         {
             self.state.time = t;
         }

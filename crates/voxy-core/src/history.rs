@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwap;
 
-use crate::command::{Command, CommandError, MergeKey};
+use crate::command::{Command, CommandError, CommandReport, MergeKey};
 use crate::document::Document;
 
 /// A lock-free handle other threads use to read the latest document.
@@ -46,6 +46,9 @@ pub struct History {
     /// Merge key of the most recent step while an interaction is open.
     merge: Option<MergeKey>,
     next_revision: u64,
+    /// Highest `next_id` any state has had. Edits start from at least this,
+    /// so an ID handed out before an undo is never handed out again.
+    id_high_water: u64,
     saved_revision: Option<u64>,
     max_steps: usize,
     shared: SharedDocument,
@@ -56,8 +59,10 @@ impl History {
 
     /// Starts a history at `doc`, which counts as saved.
     pub fn new(doc: Document) -> Self {
+        let id_high_water = doc.next_id();
         let doc = Arc::new(doc);
         History {
+            id_high_water,
             shared: Arc::new(ArcSwap::new(doc.clone())),
             current: State { doc, revision: 0 },
             undo: Vec::new(),
@@ -98,14 +103,27 @@ impl History {
     // log (bug-report replay) lands.
     #[allow(clippy::needless_pass_by_value)]
     pub fn execute(&mut self, cmd: impl Command) -> Result<(), CommandError> {
-        let mut next = Document::clone(&self.current.doc);
-        cmd.apply(&mut next)?;
+        self.execute_reported(cmd).map(drop)
+    }
+
+    /// [`History::execute`], also returning what the command reported
+    /// (created items, warnings).
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn execute_reported(&mut self, cmd: impl Command) -> Result<CommandReport, CommandError> {
+        let mut base = Document::clone(&self.current.doc);
+        base.reserve_ids(self.id_high_water);
+        let mut next = base.clone();
+        let mut report = CommandReport::default();
+        cmd.apply_reported(&mut next, &mut report)?;
         if cfg!(debug_assertions) {
             next.validate()?;
         }
-        if next == *self.current.doc {
-            return Ok(());
+        // Compare against the base, so raising the ID counter alone is not
+        // an edit.
+        if next == base {
+            return Ok(report);
         }
+        self.id_high_water = self.id_high_water.max(next.next_id());
         let key = cmd.merge_key();
         let merges =
             self.txn.is_none() && key.is_some() && key == self.merge && !self.undo.is_empty();
@@ -121,7 +139,7 @@ impl History {
             self.merge = key;
         }
         self.redo.clear();
-        Ok(())
+        Ok(report)
     }
 
     /// Ends the current interaction: the next mergeable command starts a new
@@ -289,7 +307,7 @@ mod tests {
     }
 
     fn add_solid(h: &mut History) {
-        let comp = h.current().root_comp;
+        let comp = h.current().main_comp.unwrap();
         h.execute(AddSolidLayer {
             comp,
             name: None,
@@ -300,7 +318,7 @@ mod tests {
     }
 
     fn top_layer(h: &History) -> crate::LayerId {
-        h.current().root().layers[0].id
+        h.current().main().unwrap().layers[0].id
     }
 
     #[test]
@@ -343,7 +361,7 @@ mod tests {
     fn mergeable_edits_collapse_until_interaction_ends() {
         let mut h = history();
         add_solid(&mut h);
-        let opacity = h.current().root().layers[0].transform.opacity.id;
+        let opacity = h.current().main().unwrap().layers[0].transform.opacity.id;
         for v in [0.9, 0.8, 0.7] {
             h.execute(SetProperty {
                 time: crate::Time::ZERO,
@@ -377,7 +395,7 @@ mod tests {
             Value::Scalar(1.0)
         );
         h.undo();
-        assert_eq!(h.current().root().layers, []);
+        assert_eq!(h.current().main().unwrap().layers, []);
         assert!(!h.can_undo());
     }
 
@@ -391,10 +409,10 @@ mod tests {
         h.commit();
         assert!(h.in_transaction());
         h.commit();
-        assert_eq!(h.current().root().layers.len(), 2);
+        assert_eq!(h.current().main().unwrap().layers.len(), 2);
         assert_eq!(h.undo_label(), Some("Add Two"));
         h.undo();
-        assert_eq!(h.current().root().layers, []);
+        assert_eq!(h.current().main().unwrap().layers, []);
 
         let before = h.current().clone();
         h.begin("Abandoned");
@@ -408,7 +426,7 @@ mod tests {
         let mut h = history();
         add_solid(&mut h);
         let layer = top_layer(&h);
-        let name = h.current().root().layers[0].name.clone();
+        let name = h.current().main().unwrap().layers[0].name.clone();
         let rev = h.revision();
         h.execute(RenameLayer { layer, name }).unwrap();
         assert_eq!(h.revision(), rev);
@@ -463,9 +481,12 @@ mod tests {
             })
             .unwrap();
         }
-        assert_eq!(h.current().root().layers[0].in_point, Time::from_secs(3));
+        assert_eq!(
+            h.current().main().unwrap().layers[0].in_point,
+            Time::from_secs(3)
+        );
         h.undo();
-        assert_eq!(h.current().root().layers[0].in_point, Time::ZERO);
+        assert_eq!(h.current().main().unwrap().layers[0].in_point, Time::ZERO);
     }
 
     #[test]
@@ -478,6 +499,6 @@ mod tests {
         assert!(h.undo());
         assert!(h.undo());
         assert!(!h.undo());
-        assert_eq!(h.current().root().layers.len(), 2);
+        assert_eq!(h.current().main().unwrap().layers.len(), 2);
     }
 }

@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use glam::DVec2;
 use serde::{Deserialize, Serialize};
 
-use crate::id::{AssetId, LayerId, PropId};
+use crate::id::{AssetId, CompId, LayerId, PropId};
 use crate::property::{Property, keys};
 use crate::time::Time;
 use crate::value::Value;
@@ -70,10 +70,44 @@ impl Transform {
     }
 }
 
+/// What a layer shows when its source is a project item: a media file or a
+/// composition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(tag = "type", content = "id", rename_all = "snake_case")]
+pub enum SourceRef {
+    Asset(AssetId),
+    Comp(CompId),
+}
+
+/// What kind of source a placeholder layer stands in for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlaceholderKind {
+    Image,
+    Video,
+    Comp,
+}
+
+/// What a placeholder layer remembers about its removed source.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PlaceholderInfo {
+    pub kind: PlaceholderKind,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pixel_size: Option<[u32; 2]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration: Option<Time>,
+}
+
+fn one() -> f64 {
+    1.0
+}
+
 /// What a layer draws.
 ///
-/// Solids, still images and video so far; the remaining layer types from the
-/// design proposal arrive with their milestones.
+/// Solids, still images, video, nested compositions and placeholders so
+/// far; the remaining layer types from the design proposal arrive with their
+/// milestones.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum LayerKind {
@@ -84,6 +118,28 @@ pub enum LayerKind {
     /// A video asset at its native pixel size, showing source time
     /// [`Layer::source_time`].
     Video { asset: AssetId },
+    /// Another composition (a precomp), showing child time
+    /// [`Layer::child_time`] (format 0.4.0).
+    Precomp {
+        comp: CompId,
+        /// Playback rate: 1.0 is normal, 2.0 twice as fast. Always > 0.
+        #[serde(default = "one")]
+        speed: f64,
+        /// Repeat the child composition after its end.
+        #[serde(default)]
+        looping: bool,
+        /// Child time in seconds as a function of composition time
+        /// (`precomp.time_remap`). Overrides `speed` and `start_offset`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        time_remap: Option<Property>,
+        /// Collapse transformations (2D): render the child's layers directly
+        /// into this composition instead of through an offscreen canvas.
+        #[serde(default)]
+        collapse: bool,
+    },
+    /// Stands in for a source that was removed from the project (format
+    /// 0.4.0). Draws a neutral placeholder at the remembered size.
+    Placeholder { was: PlaceholderInfo },
 }
 
 impl LayerKind {
@@ -92,14 +148,27 @@ impl LayerKind {
             LayerKind::Solid { .. } => "Solid",
             LayerKind::Image { .. } => "Image",
             LayerKind::Video { .. } => "Video",
+            LayerKind::Precomp { .. } => "Precomp",
+            LayerKind::Placeholder { .. } => "Placeholder",
         }
     }
 
     /// The asset this layer draws, if any.
     pub fn asset(&self) -> Option<AssetId> {
         match self {
-            LayerKind::Solid { .. } => None,
             LayerKind::Image { asset } | LayerKind::Video { asset } => Some(*asset),
+            _ => None,
+        }
+    }
+
+    /// The project item this layer shows, if any.
+    pub fn source(&self) -> Option<SourceRef> {
+        match self {
+            LayerKind::Image { asset } | LayerKind::Video { asset } => {
+                Some(SourceRef::Asset(*asset))
+            }
+            LayerKind::Precomp { comp, .. } => Some(SourceRef::Comp(*comp)),
+            LayerKind::Solid { .. } | LayerKind::Placeholder { .. } => None,
         }
     }
 }
@@ -163,28 +232,75 @@ impl Layer {
         t - self.in_point + self.start_offset
     }
 
+    /// The child composition time a precomp layer shows at composition
+    /// time `t` (design note §7.2), or `None` for other layer kinds.
+    ///
+    /// - With time remap, the remap value (seconds), rounded to a flick.
+    /// - Otherwise `start_offset + (t − in_point) × speed`; speed 1 is exact
+    ///   integer arithmetic.
+    /// - Looping wraps the result into `[0, child_duration)`.
+    ///
+    /// The result is not clamped: times outside the child show nothing.
+    pub fn child_time(&self, t: Time, child_duration: Time) -> Option<Time> {
+        let LayerKind::Precomp {
+            speed,
+            looping,
+            time_remap,
+            ..
+        } = &self.kind
+        else {
+            return None;
+        };
+        let c = if let Some(remap) = time_remap {
+            Time::from_secs_f64(remap.value_at(t).as_scalar().unwrap_or(0.0))
+        } else if *speed == 1.0 {
+            self.start_offset + (t - self.in_point)
+        } else {
+            let local = (t - self.in_point).flicks() as f64 * speed;
+            self.start_offset + Time::from_flicks(local.round() as i64)
+        };
+        Some(if *looping && child_duration > Time::ZERO {
+            Time::from_flicks(c.flicks().rem_euclid(child_duration.flicks()))
+        } else {
+            c
+        })
+    }
+
     /// Every property of the layer, transform first.
     pub fn properties(&self) -> Vec<&Property> {
         let mut out: Vec<&Property> = self.transform.properties().to_vec();
-        if let LayerKind::Solid { color, size } = &self.kind {
-            out.push(color);
-            out.push(size);
+        match &self.kind {
+            LayerKind::Solid { color, size } => {
+                out.push(color);
+                out.push(size);
+            }
+            LayerKind::Precomp {
+                time_remap: Some(remap),
+                ..
+            } => out.push(remap),
+            _ => {}
+        }
+        out
+    }
+
+    /// Every property of the layer, mutably, transform first.
+    pub fn properties_mut(&mut self) -> Vec<&mut Property> {
+        let mut out: Vec<&mut Property> = self.transform.properties_mut().into_iter().collect();
+        match &mut self.kind {
+            LayerKind::Solid { color, size } => {
+                out.push(color);
+                out.push(size);
+            }
+            LayerKind::Precomp {
+                time_remap: Some(remap),
+                ..
+            } => out.push(remap),
+            _ => {}
         }
         out
     }
 
     pub fn property_mut(&mut self, id: PropId) -> Option<&mut Property> {
-        if let Some(p) = self
-            .transform
-            .properties_mut()
-            .into_iter()
-            .find(|p| p.id == id)
-        {
-            return Some(p);
-        }
-        match &mut self.kind {
-            LayerKind::Solid { color, size } => [color, size].into_iter().find(|p| p.id == id),
-            LayerKind::Image { .. } | LayerKind::Video { .. } => None,
-        }
+        self.properties_mut().into_iter().find(|p| p.id == id)
     }
 }

@@ -1,6 +1,6 @@
 # The `.voxy` project format
 
-**Format version: 0.3.0** (Milestone 3c: video layers)
+**Format version: 0.4.0** (media pool and compositions, Milestone A)
 
 A voXY project is a single UTF-8 JSON file with the extension `.voxy`. Media
 the project uses lives in a sibling folder named `<name>.assets/`:
@@ -20,9 +20,10 @@ MyProject.assets/
 ```json
 {
   "format": "voxy-project",
-  "format_version": "0.3.0",
+  "format_version": "0.4.0",
   "generator": "voXY 0.1.0",
-  "project": { ... }
+  "project": { ... },
+  "ui_state": { ... }
 }
 ```
 
@@ -32,6 +33,7 @@ MyProject.assets/
 | `format_version` | Semantic version of the schema below. |
 | `generator` | The program that wrote the file. Informational only. |
 | `project` | The document. |
+| `ui_state` | Optional (0.4.0). Editor state: open composition tabs, playheads, zoom, selection, panel state. It never affects rendering, is versioned on its own (`ui_state.version`), and a loader that does not understand it ignores it. Tabs pointing at compositions that no longer exist are dropped. |
 
 ### Version policy
 
@@ -46,6 +48,7 @@ MyProject.assets/
 | 0.1.0 | First format (Milestone 1). Static properties only. | — |
 | 0.2.0 | Adds keyframed properties. | None needed: every 0.1.0 file is valid 0.2.0 content. |
 | 0.3.0 | Adds video assets and layers, and the optional asset fields `duration` and `frame_rate`. | None needed: every 0.2.0 file is valid 0.3.0 content. |
+| 0.4.0 | Media pool and compositions: folders, the optional `main_comp` (replacing `root_comp`), project settings, composition pixel aspect and work area, `precomp` and `placeholder` layers, asset `content_hash`, `audio` and `folder`, and the `ui_state` envelope field. | `root_comp` is renamed `main_comp`. Everything else is new and optional: no folders, square pixels, no work area, default project settings. A 0.3.0 project opens as one main composition with its media at the top level. |
 
 Before writing, voXY validates the document and refuses to write an invalid
 one. Saving is atomic: the file is written to a temporary file in the same
@@ -76,33 +79,57 @@ folder, flushed, then renamed over the target.
 |---|---|---|
 | `meta.name` | string | Project name. |
 | `meta.working_space` | `"linear"` \| `"srgb_compat"` | Color space that blending and opacity are computed in. Defaults to `linear`. |
+| `meta.settings` | Project settings | Optional. Defaults for new items, below. |
 | `assets` | array of Asset | |
 | `comps` | array of Composition | |
-| `root_comp` | ID | The composition the viewport and export show. |
+| `folders` | array of Folder | Optional (0.4.0). Project panel folders. |
+| `main_comp` | ID or `null` | The composition shown when no other is open, and the default for export. `null` when the project has no compositions. Called `root_comp` before 0.4.0. |
 | `foreign` | object | Optional. |
 | `next_id` | integer | Greater than every ID in the file. |
+
+### Project settings
+
+| Field | Type | Notes |
+|---|---|---|
+| `new_comp` | object | Settings of a new composition: `name` (base of new names), `width`, `height`, `pixel_aspect` (optional), `frame_rate`, `duration`, `background` (color). |
+| `default_still_duration` | flicks | Optional. Length of a still image layer. Absent: until the composition ends. |
+
+### Folder
+
+| Field | Type | Notes |
+|---|---|---|
+| `id`, `name` | ID, string | |
+| `parent` | ID | Optional. Absent: top level. Folders may not contain themselves. |
+
+Items inside a folder have no stored order; the project panel sorts them.
 
 ### Asset
 
 | Field | Type | Notes |
 |---|---|---|
 | `id` | ID | |
-| `name` | string | |
+| `name` | string | Display name, independent of the file name. |
 | `kind` | `"image"` or `"video"` | Audio assets arrive later. A video's audio track is not used yet. |
 | `path` | string | See conventions. |
 | `pixel_size` | `[w, h]` | Optional. |
 | `duration` | flicks | Optional. Length of a video. |
 | `frame_rate` | `{ "num", "den" }` | Optional. Nominal frame rate of a video. |
+| `audio` | `{ "channels", "sample_rate" }` | Optional (0.4.0). |
+| `content_hash` | `{ "algo", "size", "digest" }` | Optional (0.4.0). A fingerprint of the file used to suggest relink candidates; never an identity. |
+| `folder` | ID | Optional (0.4.0). Absent: top level. |
 
 ### Composition
 
 | Field | Type | Notes |
 |---|---|---|
 | `id`, `name` | ID, string | |
-| `width`, `height` | integer | Pixels, greater than 0. |
+| `width`, `height` | integer | Pixels, greater than 0. voXY creates 16–16384; larger files still load. |
+| `pixel_aspect` | `{ "num", "den" }` | Optional (0.4.0). Absent: square pixels. |
 | `frame_rate` | `{ "num", "den" }` | For example `{ "num": 30000, "den": 1001 }`. |
 | `duration` | flicks | |
-| `background` | Property (`comp.background`) | Color. |
+| `work_area` | `{ "start", "end" }` | Optional (0.4.0). Flicks, `0 ≤ start < end ≤ duration`. Absent: the whole composition. |
+| `background` | Property (`comp.background`) | Color. Shown when the composition is viewed or exported directly; a nested composition is transparent behind its layers. |
+| `folder` | ID | Optional (0.4.0). |
 | `layers` | array of Layer | Index 0 is the **top** of the stack. |
 
 ### Layer
@@ -125,6 +152,10 @@ folder, flushed, then renamed over the target.
 { "type": "solid", "color": <Property solid.color>, "size": <Property solid.size> }
 { "type": "image", "asset": <ID> }
 { "type": "video", "asset": <ID> }
+{ "type": "precomp", "comp": <ID>, "speed": 1.0, "looping": false,
+  "time_remap": <Property precomp.time_remap, optional>, "collapse": false }
+{ "type": "placeholder", "was": { "kind": "image" | "video" | "comp", "name": "…",
+  "pixel_size": [w, h] (optional), "duration": <flicks> (optional) } }
 ```
 
 A solid fills the rectangle from its local origin to `size`. An image is drawn
@@ -132,6 +163,20 @@ at its native pixel size from its local origin, and so is a video. At
 composition time `t` a video layer shows the frame on screen at source time
 `t − in_point + start_offset`, measured from the video's first frame. Before
 the first frame it shows the first frame, after the last frame the last.
+
+A **precomp** layer (0.4.0) shows another composition, drawn at that
+composition's size from its local origin. At time `t` it shows child time:
+- with `time_remap`: the remap property's value at `t`, in seconds, rounded
+  to the nearest flick;
+- otherwise `start_offset + (t − in_point) × speed` (`speed` > 0);
+- with `looping`, wrapped into `[0, child duration)`.
+
+Child times outside the child composition show nothing. A composition may
+not contain itself, directly or through other compositions. `collapse`
+renders the child's layers directly into this composition (2D).
+
+A **placeholder** layer (0.4.0) stands in for a source removed from the
+project and draws a grey rectangle of `pixel_size` if known.
 
 ### Transform
 
@@ -142,6 +187,10 @@ the first frame it shows the first frame, after the last frame the last.
 | `scale` | `transform.scale` | vec2 | factor (1.0 = 100%) |
 | `rotation` | `transform.rotation` | scalar | degrees, clockwise |
 | `opacity` | `transform.opacity` | scalar | 0–1 |
+
+Other built-in property keys: `solid.color` (color), `solid.size` (vec2,
+px), `comp.background` (color), `precomp.time_remap` (scalar, seconds of
+child time).
 
 The layer-to-parent matrix is `T(position) · R(rotation) · S(scale) · T(−anchor)`.
 

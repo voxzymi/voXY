@@ -84,7 +84,7 @@ fn scene(image_path: &Path, space: WorkingSpace) -> Document {
         },
     );
     doc.meta.working_space = space;
-    let comp = doc.root_comp;
+    let comp = doc.main_comp.unwrap();
 
     let solid = |doc: &mut Document, color: LinearRgba, size: DVec2, pos: DVec2| {
         AddSolidLayer {
@@ -95,7 +95,7 @@ fn scene(image_path: &Path, space: WorkingSpace) -> Document {
         }
         .apply(doc)
         .unwrap();
-        let l = doc.root().layers[0].clone();
+        let l = doc.main().unwrap().layers[0].clone();
         let LayerKind::Solid {
             size: size_prop, ..
         } = &l.kind
@@ -146,7 +146,7 @@ fn scene(image_path: &Path, space: WorkingSpace) -> Document {
     }
     .apply(&mut doc)
     .unwrap();
-    let img = doc.root().layers[0].clone();
+    let img = doc.main().unwrap().layers[0].clone();
     set(
         &mut doc,
         img.transform.position.id,
@@ -185,7 +185,7 @@ fn render(gpu: &GpuContext, compositor: &mut Compositor, doc: &Document) -> Rgba
         &gpu.queue,
         doc,
         &NoVideo,
-        &FrameRequest::export(doc.root_comp, Time::ZERO),
+        &FrameRequest::export(doc.main_comp.unwrap(), Time::ZERO),
     )
     .expect("root comp exists")
     .expect("readback");
@@ -319,7 +319,7 @@ fn opaque_solid_is_exact() {
             },
         );
         doc.meta.working_space = space;
-        let comp = doc.root_comp;
+        let comp = doc.main_comp.unwrap();
         AddSolidLayer {
             comp,
             name: None,
@@ -346,7 +346,7 @@ fn missing_images_are_reported_not_fatal() {
             ..CompSettings::default()
         },
     );
-    let comp = doc.root_comp;
+    let comp = doc.main_comp.unwrap();
     AddImageLayer {
         comp,
         path: "/nonexistent/voxy/missing.png".into(),
@@ -396,7 +396,7 @@ fn preview_scale_renders_smaller_frame() {
         &doc,
         &NoVideo,
         &FrameRequest {
-            comp: doc.root_comp,
+            comp: doc.main_comp.unwrap(),
             time: Time::ZERO,
             settings: RenderSettings { scale: 0.25 },
             alpha: OutputAlpha::Premultiplied,
@@ -419,7 +419,7 @@ fn media_scene(video: bool, image_path: &Path) -> Document {
             ..CompSettings::default()
         },
     );
-    let comp = doc.root_comp;
+    let comp = doc.main_comp.unwrap();
     let path = image_path.to_string_lossy().into_owned();
     if video {
         AddVideoLayer {
@@ -442,7 +442,7 @@ fn media_scene(video: bool, image_path: &Path) -> Document {
         .apply(&mut doc)
         .unwrap();
     }
-    let layer = doc.root().layers[0].clone();
+    let layer = doc.main().unwrap().layers[0].clone();
     set(
         &mut doc,
         layer.transform.scale.id,
@@ -465,7 +465,7 @@ fn render_with(
         &gpu.queue,
         doc,
         video,
-        &FrameRequest::export(doc.root_comp, time),
+        &FrameRequest::export(doc.main_comp.unwrap(), time),
     )
     .unwrap()
     .unwrap()

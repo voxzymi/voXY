@@ -323,6 +323,77 @@ impl Property {
         })
     }
 
+    /// Moves every keyframe to `time(old time)`. Keys that land on the same
+    /// time merge, the later original winning. Returns how many merged
+    /// away. Static properties are unchanged.
+    pub fn retime_keys(&mut self, time: impl Fn(Time) -> Time) -> usize {
+        let Animation::Keyframed(track) = &mut self.anim else {
+            return 0;
+        };
+        let mut out: std::collections::BTreeMap<Time, Keyframe> = std::collections::BTreeMap::new();
+        for k in track.keys() {
+            let mut k = k.clone();
+            k.time = time(k.time);
+            out.insert(k.time, k);
+        }
+        let merged = track.len() - out.len();
+        *track = KeyframeTrack::from_unsorted(out.into_values().collect())
+            .expect("deduplicated, non-empty keys");
+        merged
+    }
+
+    /// Replaces the static value or every keyframe value with `value(old)`,
+    /// and every spatial tangent with `tangents(old)`. Atomic.
+    pub fn map_values(
+        &mut self,
+        value: impl Fn(&Value) -> Value,
+        tangents: impl Fn(SpatialTangents) -> SpatialTangents,
+    ) -> Result<(), PropertyError> {
+        match &self.anim {
+            Animation::Static(v) => {
+                let v = validate(&self.desc, value(v))?;
+                self.anim = Animation::Static(v);
+            }
+            Animation::Keyframed(track) => {
+                let mut keys = Vec::with_capacity(track.len());
+                for k in track.keys() {
+                    let mut k = k.clone();
+                    k.value = validate(&self.desc, value(&k.value))?;
+                    k.spatial = k.spatial.map(&tangents);
+                    if k.spatial.is_some_and(|s| !s.is_finite()) {
+                        return Err(PropertyError::NonFinite {
+                            key: self.desc.key.clone(),
+                        });
+                    }
+                    keys.push(k);
+                }
+                self.anim = Animation::Keyframed(
+                    KeyframeTrack::try_from(keys).expect("times are unchanged"),
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Replaces the animation with linear keys sampled from `sample` at
+    /// `times` (strictly increasing, non-empty). Used to bake a nonlinear
+    /// time mapping into keyframes.
+    pub fn bake_samples(
+        &mut self,
+        times: &[Time],
+        sample: impl Fn(Time) -> Value,
+    ) -> Result<(), PropertyError> {
+        let key = self.desc.key.clone();
+        let mut keys = Vec::with_capacity(times.len());
+        for &t in times {
+            keys.push(Keyframe::new(t, validate(&self.desc, sample(t))?));
+        }
+        let track =
+            KeyframeTrack::try_from(keys).map_err(|source| PropertyError::Track { key, source })?;
+        self.anim = Animation::Keyframed(track);
+        Ok(())
+    }
+
     fn track_mut(&mut self) -> Result<&mut KeyframeTrack, PropertyError> {
         match &mut self.anim {
             Animation::Keyframed(t) => Ok(t),
@@ -443,6 +514,7 @@ pub mod keys {
     pub const SOLID_COLOR: &str = "solid.color";
     pub const SOLID_SIZE: &str = "solid.size";
     pub const COMP_BACKGROUND: &str = "comp.background";
+    pub const TIME_REMAP: &str = "precomp.time_remap";
 }
 
 /// Looks up a built-in property descriptor.
@@ -528,6 +600,14 @@ static BUILTINS: LazyLock<HashMap<&'static str, Arc<PropertyDesc>>> = LazyLock::
             None,
             Some((1.0, 8192.0)),
             Unit::Pixels,
+        ),
+        d(
+            keys::TIME_REMAP,
+            "Time Remap",
+            Value::Scalar(0.0),
+            None,
+            None,
+            Unit::Seconds,
         ),
         d(
             keys::COMP_BACKGROUND,
