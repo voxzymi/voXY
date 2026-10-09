@@ -78,10 +78,16 @@ generated on Linux x86-64.
 **Result (CI run 37980901457, commit `32f1c94`, debug builds):** the pinned
 table, `legacy_interp.txt` and the other `voxy-core` tests **passed on Windows
 x64, macOS arm64 and macOS x64**, and on Linux x64, so the evaluators are
-bit-identical on those four targets. A release build was also checked on
-Linux. Two limits on that claim: CI does not run release builds on the other
-platforms, and it covers only these targets and the Rust version CI used
-(1.99). The golden-*image* tests (`parametric_easings_render_as_pinned`) are a
+bit-identical on those four targets.
+
+**Optimized builds (CI runs 37986352929 on `983bf87` and 37987980892 on
+`c22967b`):** the `determinism-release` job runs the `voxy-core` suite,
+including the pinned tables, with `--release`, and it **passed on Linux x64,
+Windows x64, macOS arm64 and macOS x64**. So the tables are bit-identical in
+optimized builds on those four targets too. The claim covers only those targets
+and the Rust version CI used (1.99).
+
+The golden-*image* tests (`parametric_easings_render_as_pinned`) are a
 different matter: they need a GPU, which only the Linux job has (software
 Vulkan, required there), so on Windows and macOS they are skipped and prove
 nothing about rendering on those systems.
