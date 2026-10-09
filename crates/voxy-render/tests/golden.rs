@@ -59,7 +59,13 @@ fn golden_dir() -> PathBuf {
 }
 
 fn set(doc: &mut Document, prop: voxy_core::PropId, value: Value) {
-    SetProperty { prop, value }.apply(doc).unwrap();
+    SetProperty {
+        prop,
+        time: Time::ZERO,
+        value,
+    }
+    .apply(doc)
+    .unwrap();
 }
 
 /// A small scene exercising transforms, parenting, opacity and an image with

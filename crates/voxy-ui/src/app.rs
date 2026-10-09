@@ -126,6 +126,35 @@ impl VoxyApp {
         if ctx.input(|i| i.key_pressed(Key::Escape)) {
             self.state.selection = None;
         }
+        // Count every press (and auto-repeat) this frame, not just whether a
+        // key went down, so fast stepping never drops frames.
+        let step: i64 = ctx.input(|i| {
+            i.events
+                .iter()
+                .map(|e| match e {
+                    egui::Event::Key {
+                        key: Key::ArrowRight,
+                        pressed: true,
+                        modifiers,
+                        ..
+                    } if modifiers.is_none() => 1,
+                    egui::Event::Key {
+                        key: Key::ArrowLeft,
+                        pressed: true,
+                        modifiers,
+                        ..
+                    } if modifiers.is_none() => -1,
+                    _ => 0,
+                })
+                .sum()
+        });
+        if step != 0 {
+            let comp = self.state.history.current().root().clone();
+            let rate = comp.frame_rate;
+            let last = (rate.time_to_frame(comp.duration) - 1).max(0);
+            let frame = (rate.time_to_frame(self.state.time) + step).clamp(0, last);
+            self.state.time = rate.frame_to_time(frame);
+        }
     }
 
     fn menu_bar(&mut self, ui: &mut Ui) {

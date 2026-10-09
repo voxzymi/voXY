@@ -346,6 +346,7 @@ mod tests {
         let opacity = h.current().root().layers[0].transform.opacity.id;
         for v in [0.9, 0.8, 0.7] {
             h.execute(SetProperty {
+                time: crate::Time::ZERO,
                 prop: opacity,
                 value: Value::Scalar(v),
             })
@@ -353,6 +354,7 @@ mod tests {
         }
         h.end_interaction();
         h.execute(SetProperty {
+            time: crate::Time::ZERO,
             prop: opacity,
             value: Value::Scalar(0.1),
         })
@@ -364,7 +366,7 @@ mod tests {
                 .property(opacity)
                 .unwrap()
                 .value_at(crate::Time::ZERO),
-            &Value::Scalar(0.7)
+            Value::Scalar(0.7)
         );
         h.undo();
         assert_eq!(
@@ -372,7 +374,7 @@ mod tests {
                 .property(opacity)
                 .unwrap()
                 .value_at(crate::Time::ZERO),
-            &Value::Scalar(1.0)
+            Value::Scalar(1.0)
         );
         h.undo();
         assert!(h.current().root().layers.is_empty());

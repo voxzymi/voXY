@@ -15,7 +15,6 @@ use crate::document::Document;
 use crate::id::{AssetId, CompId, LayerId};
 use crate::layer::{BlendMode, Layer, LayerKind, Transform};
 use crate::time::Time;
-use crate::value::Value;
 
 /// A composition with every property resolved at one time.
 #[derive(Debug, Clone, PartialEq)]
@@ -108,10 +107,7 @@ fn scalar(p: &crate::Property, time: Time, fallback: f64) -> f64 {
 }
 
 fn vec2(p: &crate::Property, time: Time, fallback: DVec2) -> DVec2 {
-    match p.value_at(time) {
-        Value::Vec2(v) => *v,
-        _ => fallback,
-    }
+    p.value_at(time).as_vec2().unwrap_or(fallback)
 }
 
 /// The layer-to-parent matrix `T(position) · R(rotation) · S(scale) · T(−anchor)`.
@@ -170,6 +166,7 @@ mod tests {
     use super::*;
     use crate::command::{AddSolidLayer, Command, SetLayerVisible, SetProperty};
     use crate::document::CompSettings;
+    use crate::value::Value;
 
     fn doc_with_two_solids() -> Document {
         let mut doc = Document::new(
@@ -222,6 +219,7 @@ mod tests {
         let child_id = doc.root().layers[0].id;
         // Parent: rotate 90° clockwise about its anchor (the comp center).
         SetProperty {
+            time: Time::ZERO,
             prop: parent.transform.rotation.id,
             value: Value::Scalar(90.0),
         }
@@ -242,6 +240,7 @@ mod tests {
         // Moving the child moves it in the parent's rotated frame: +x local
         // becomes +y on screen.
         SetProperty {
+            time: Time::ZERO,
             prop: doc.root().layers[0].transform.position.id,
             value: Value::Vec2(DVec2::new(110.0, 50.0)),
         }

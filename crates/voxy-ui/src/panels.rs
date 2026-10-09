@@ -5,10 +5,13 @@ use std::fmt::Write as _;
 use egui::{Id, RichText, Ui, WidgetText};
 use egui_dock::TabViewer;
 use voxy_core::command::{
-    MoveLayer, RemoveLayers, RenameLayer, SetLayerVisible, SetProperty, SetWorkingSpace,
+    AddKeyframe, ApplyEasePreset, MoveLayer, RemoveKeyframes, RemoveLayers, RenameLayer,
+    SetAnimated, SetInterpolation, SetLayerVisible, SetProperty, SetWorkingSpace,
 };
 use voxy_core::glam::DVec2;
-use voxy_core::{LayerKind, LinearRgba, Property, Unit, Value, WorkingSpace};
+use voxy_core::{
+    EasePreset, FrameRate, Interp, LayerKind, LinearRgba, Property, Time, Unit, Value, WorkingSpace,
+};
 
 use crate::state::EditorState;
 use crate::viewport::ViewportRenderer;
@@ -116,8 +119,8 @@ impl Panels<'_> {
                 comp.frame_rate,
                 comp.duration.as_secs_f64()
             ));
-            ui.weak("(keyframes and the full timeline arrive in Milestone 2)");
         });
+        self.time_scrubber(ui, comp);
         ui.separator();
         if comp.layers.is_empty() {
             ui.weak("No layers. Use Layer ▸ New Solid or Layer ▸ Import Image…");
@@ -273,19 +276,134 @@ impl Panels<'_> {
     }
 
     /// One editable grid row for a property.
+    /// Current-time control. The full timeline with keyframe lanes and the
+    /// graph editor replace this in the next step of Milestone 2.
+    fn time_scrubber(&mut self, ui: &mut Ui, comp: &voxy_core::Composition) {
+        let rate = comp.frame_rate;
+        let last = (rate.time_to_frame(comp.duration) - 1).max(0);
+        let mut frame = rate.time_to_frame(self.state.time).clamp(0, last);
+        ui.horizontal(|ui| {
+            ui.label("Time");
+            let slider = egui::Slider::new(&mut frame, 0..=last)
+                .suffix(" f")
+                .clamping(egui::SliderClamping::Always);
+            if ui.add(slider).changed() {
+                self.state.time = rate.frame_to_time(frame);
+            }
+            ui.weak(timecode(self.state.time, rate));
+            ui.weak("· Left/Right arrow keys step one frame");
+        });
+    }
+
+    /// One editable grid row for a property: keyframe controls and label,
+    /// then the value editor.
     fn property_row(&mut self, ui: &mut Ui, p: &Property) {
-        ui.label(p.desc.label.as_ref());
-        let value = p.value_at(self.state.time).clone();
+        let time = self.state.time;
+        ui.horizontal(|ui| {
+            if p.desc.animatable {
+                self.keyframe_controls(ui, p, time);
+            }
+            ui.label(p.desc.label.as_ref());
+        });
+        let value = p.value_at(time);
         let new = ui.horizontal(|ui| edit_value(ui, p, &value)).inner;
         if let Some(v) = new
             && v != value
         {
+            // On an animated property this sets (or creates) the key at the
+            // current time.
             self.state.execute(SetProperty {
                 prop: p.id,
+                time,
                 value: v,
             });
         }
         ui.end_row();
+    }
+
+    fn keyframe_controls(&mut self, ui: &mut Ui, p: &Property, time: voxy_core::Time) {
+        let animated = p.is_animated();
+        let stopwatch = ui
+            .selectable_label(animated, "⏱")
+            .on_hover_text(if animated {
+                "Animated: click to remove all keyframes"
+            } else {
+                "Animate this property"
+            });
+        if stopwatch.clicked() {
+            self.state.execute(SetAnimated {
+                prop: p.id,
+                time,
+                animated: !animated,
+            });
+        }
+        let Some(track) = p.track() else {
+            return;
+        };
+        let (prev, next) = track.neighbors(time);
+        if ui
+            .add_enabled(prev.is_some(), egui::Button::new("◀").small())
+            .on_hover_text("Previous keyframe")
+            .clicked()
+            && let Some(k) = prev
+        {
+            self.state.time = k.time;
+        }
+        let key = track.key_at(time);
+        let diamond = keyframe_button(ui, key.is_some()).on_hover_text(if key.is_some() {
+            "Keyframe here: click to delete, right-click for easing"
+        } else {
+            "Add a keyframe at the current time"
+        });
+        if diamond.clicked() {
+            if key.is_some() {
+                self.state.execute(RemoveKeyframes {
+                    prop: p.id,
+                    times: vec![time],
+                });
+            } else {
+                self.state.execute(AddKeyframe { prop: p.id, time });
+            }
+        }
+        if let Some(k) = key {
+            diamond.context_menu(|ui| {
+                ui.label(RichText::new("Interpolation").weak());
+                for (interp, label) in [
+                    (Interp::Linear, "Linear"),
+                    (Interp::Bezier, "Bézier"),
+                    (Interp::Hold, "Hold"),
+                ] {
+                    if ui.radio(k.interp == interp, label).clicked() {
+                        self.state.execute(SetInterpolation {
+                            prop: p.id,
+                            times: vec![time],
+                            interp,
+                        });
+                        ui.close();
+                    }
+                }
+                ui.separator();
+                ui.label(RichText::new("Ease to next keyframe").weak());
+                for preset in EasePreset::ALL {
+                    if ui.button(preset.label()).clicked() {
+                        self.state.execute(ApplyEasePreset {
+                            prop: p.id,
+                            times: vec![time],
+                            preset,
+                        });
+                        ui.close();
+                    }
+                }
+            });
+        }
+        if ui
+            .add_enabled(next.is_some(), egui::Button::new("▶").small())
+            .on_hover_text("Next keyframe")
+            .clicked()
+            && let Some(k) = next
+        {
+            self.state.time = k.time;
+        }
     }
 
     fn media_ui(&mut self, ui: &mut Ui) {
@@ -372,4 +490,52 @@ fn edit_value(ui: &mut Ui, p: &Property, value: &Value) -> Option<Value> {
             None
         }
     }
+}
+
+/// `HH:MM:SS:FF` (frames counted at the nominal integer rate).
+fn timecode(time: Time, rate: FrameRate) -> String {
+    let frame = rate.time_to_frame(time).max(0);
+    let fps = (rate.as_f64().round() as i64).max(1);
+    let (secs, ff) = (frame / fps, frame % fps);
+    format!(
+        "{:02}:{:02}:{:02}:{:02}",
+        secs / 3600,
+        (secs / 60) % 60,
+        secs % 60,
+        ff
+    )
+}
+
+/// A keyframe diamond: filled when a key sits at the current time, hollow
+/// otherwise. Painted rather than taken from a font so it renders the same
+/// everywhere.
+fn keyframe_button(ui: &mut Ui, filled: bool) -> egui::Response {
+    let size = ui.spacing().interact_size.y;
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click());
+    let visuals = ui.style().interact(&response);
+    let c = rect.center();
+    let r = size * 0.32;
+    let points = vec![
+        c + egui::vec2(0.0, -r),
+        c + egui::vec2(r, 0.0),
+        c + egui::vec2(0.0, r),
+        c + egui::vec2(-r, 0.0),
+    ];
+    let accent = ui.visuals().selection.stroke.color;
+    let fill = if filled {
+        accent
+    } else {
+        egui::Color32::TRANSPARENT
+    };
+    let stroke = egui::Stroke::new(
+        1.5,
+        if filled {
+            accent
+        } else {
+            visuals.fg_stroke.color
+        },
+    );
+    ui.painter()
+        .add(egui::Shape::convex_polygon(points, fill, stroke));
+    response
 }

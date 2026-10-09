@@ -19,7 +19,7 @@ pub const PACKAGE_EXTENSION: &str = "voxyz";
 /// Value of the envelope's `format` field.
 pub const FORMAT_ID: &str = "voxy-project";
 /// The format version this build writes, and the newest it reads.
-pub const FORMAT_VERSION: Version = Version::new(0, 1, 0);
+pub const FORMAT_VERSION: Version = Version::new(0, 2, 0);
 
 #[derive(Debug, thiserror::Error)]
 pub enum LoadError {
@@ -99,8 +99,9 @@ pub fn from_json(json: &str) -> Result<Document, LoadError> {
             supported: FORMAT_VERSION,
         });
     }
-    // Older versions would be migrated here, one step at a time. 0.1.0 is the
-    // first format, so there is nothing to migrate yet.
+    // Older versions are migrated here, one step at a time.
+    // - 0.1.0 → 0.2.0: 0.2.0 only adds keyframed properties; every 0.1.0 file
+    //   is already a valid 0.2.0 document, so no rewrite is needed.
     let env: EnvelopeIn = serde_json::from_str(json)?;
     env.project.validate()?;
     Ok(env.project)
@@ -172,6 +173,7 @@ mod tests {
         .unwrap();
         let rot = doc.root().layers[0].transform.rotation.id;
         SetProperty {
+            time: crate::Time::ZERO,
             prop: rot,
             value: Value::Scalar(0.1 + 0.2),
         }
@@ -205,14 +207,62 @@ mod tests {
 
     #[test]
     fn newer_versions_are_refused() {
-        let json = to_json(&sample())
-            .unwrap()
-            .replace("\"0.1.0\"", "\"0.2.0\"");
+        let current = format!("\"{FORMAT_VERSION}\"");
+        let json = to_json(&sample()).unwrap().replace(&current, "\"0.3.0\"");
         assert!(matches!(from_json(&json), Err(LoadError::TooNew { .. })));
-        let json = to_json(&sample())
-            .unwrap()
-            .replace("\"0.1.0\"", "\"banana\"");
+        let json = to_json(&sample()).unwrap().replace(&current, "\"banana\"");
         assert!(matches!(from_json(&json), Err(LoadError::BadVersion(_))));
+    }
+
+    #[test]
+    fn version_0_1_0_files_still_load() {
+        // A 0.1.0 file (static properties only) is valid 0.2.0 content.
+        let doc = sample();
+        let current = format!("\"{FORMAT_VERSION}\"");
+        let old = to_json(&doc).unwrap().replace(&current, "\"0.1.0\"");
+        assert_eq!(from_json(&old).unwrap(), doc);
+    }
+
+    #[test]
+    fn keyframed_documents_round_trip() {
+        use crate::command::{AddKeyframe, ApplyEasePreset, SetSpatialTangents};
+        use crate::{EasePreset, SpatialTangents, Time};
+        let mut doc = sample();
+        let pos = doc.root().layers[0].transform.position.id;
+        AddKeyframe {
+            prop: pos,
+            time: Time::ZERO,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        SetProperty {
+            prop: pos,
+            time: Time::from_secs(2),
+            value: Value::Vec2(crate::glam::DVec2::new(10.0, 20.0)),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        ApplyEasePreset {
+            prop: pos,
+            times: vec![Time::ZERO],
+            preset: EasePreset::EasyEase,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        SetSpatialTangents {
+            prop: pos,
+            time: Time::ZERO,
+            tangents: Some(SpatialTangents {
+                incoming: crate::glam::DVec3::ZERO,
+                outgoing: crate::glam::DVec3::new(0.0, 300.0, 0.0),
+            }),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let json = to_json(&doc).unwrap();
+        let back = from_json(&json).unwrap();
+        assert_eq!(back, doc);
+        assert_eq!(to_json(&back).unwrap(), json);
     }
 
     #[test]

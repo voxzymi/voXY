@@ -611,3 +611,32 @@ with the approved design.
   audio threads arrive with playback in Milestone 3.
 - **voXY's own license.** It has not been chosen. That is the owner's
   decision; see LICENSING.md.
+
+## Implementation notes (Milestone 2a: keyframe model)
+
+- **Ease handles live on the keys.** A segment's curve is the CSS-style
+  normalized cubic `(0,0)`, `k0.ease_out`, `k1.ease_in`, `(1,1)`.
+  - `x` is restricted to `[0, 1]`, so time maps to one value; `y` may
+    overshoot.
+  - Linear sides use the exact-linear handles (1/3, 1/3) and (2/3, 2/3).
+  - Speed/influence conventions from other tools (and Alight Motion's,
+    once known from samples) convert to this form in the mapping tables.
+- **One ease curve per key, shared by every dimension.** Separate-dimension
+  animation (independent X/Y curves) can be added later as split
+  properties, without changing this model.
+- **Solving.** Bézier x is inverted with Newton plus a fixed-length
+  bisection fallback. Arc length uses 32 spans of 5-point Gauss–Legendre
+  quadrature, inverted with safeguarded Newton. All iteration limits are
+  fixed, so evaluation is deterministic, and it is pure, recomputed per
+  call. Caching comes with the frame cache (Milestone 9) if profiling asks
+  for it.
+- **Overshoot on motion paths** continues in a straight line along the end
+  tangent. Interpolated values are clamped to the property's hard range.
+- **Color keys interpolate in linear light, straight alpha.** Whether
+  Alight Motion interpolates in sRGB will be settled by the golden tests,
+  not assumed.
+- **Keys are identified by time.** There are no key IDs. Commands address
+  keys by their current time, and drags merge into one undo step.
+- **Editing an animated property** at the current time creates or updates
+  the key there, as in common motion-design tools.
+- **Format 0.2.0** adds keyframed properties. 0.1.0 files load unchanged.

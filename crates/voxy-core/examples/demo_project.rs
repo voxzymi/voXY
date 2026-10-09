@@ -44,7 +44,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             (l.transform.rotation.id, Value::Scalar(rot)),
             (l.transform.opacity.id, Value::Scalar(opacity)),
         ] {
-            SetProperty { prop, value }.apply(&mut doc)?;
+            SetProperty {
+                prop,
+                time: voxy_core::Time::ZERO,
+                value,
+            }
+            .apply(&mut doc)?;
         }
     }
     persist::save(&doc, std::path::Path::new(&path))?;

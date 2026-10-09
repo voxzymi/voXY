@@ -1,6 +1,6 @@
 # The `.voxy` project format
 
-**Format version: 0.1.0** (written by voXY 0.1.0, Milestone 1)
+**Format version: 0.2.0** (Milestone 2a: keyframes)
 
 A voXY project is a single UTF-8 JSON file with the extension `.voxy`. Media
 the project uses lives in a sibling folder named `<name>.assets/`:
@@ -20,7 +20,7 @@ MyProject.assets/
 ```json
 {
   "format": "voxy-project",
-  "format_version": "0.1.0",
+  "format_version": "0.2.0",
   "generator": "voXY 0.1.0",
   "project": { ... }
 }
@@ -41,7 +41,10 @@ MyProject.assets/
 | Newer | Refused with a clear message, never guessed at or partially loaded. |
 | Older | Migrated forward one version at a time, in memory. The file on disk is rewritten only when the user saves. |
 
-0.1.0 is the first version, so no migrations exist yet.
+| Version | Change | Migration from the previous version |
+|---|---|---|
+| 0.1.0 | First format (Milestone 1). Static properties only. | — |
+| 0.2.0 | Adds keyframed properties. | None needed: every 0.1.0 file is valid 0.2.0 content. |
 
 Before writing, voXY validates the document and refuses to write an invalid
 one. Saving is atomic: the file is written to a temporary file in the same
@@ -137,12 +140,41 @@ The layer-to-parent matrix is `T(position) · R(rotation) · S(scale) · T(−an
 
 ### Property
 
+A property is either static:
+
 ```json
 { "id": 17, "key": "transform.rotation", "static": { "type": "scalar", "value": 45.0 } }
 ```
 
-- `key` names the property's descriptor: its type, range and unit. Descriptors
-  are defined by voXY, not stored in the file.
+or keyframed:
+
+```json
+{
+  "id": 9,
+  "key": "transform.position",
+  "keyframed": [
+    {
+      "time": 0,
+      "value": { "type": "vec2", "value": [100.0, 500.0] },
+      "interp": "bezier",
+      "ease_in": [0.6666666666666666, 0.6666666666666666],
+      "ease_out": [0.3333333333333333, 0.0],
+      "spatial": { "in": [0.0, 0.0, 0.0], "out": [50.0, -600.0, 0.0] }
+    },
+    {
+      "time": 1411200000,
+      "value": { "type": "vec2", "value": [900.0, 500.0] },
+      "interp": "linear",
+      "ease_in": [0.6666666666666666, 1.0],
+      "ease_out": [0.3333333333333333, 0.3333333333333333]
+    }
+  ]
+}
+```
+
+- `key` names the property's descriptor: its type, range, unit, and whether
+  it is *spatial* (`transform.position` and `transform.anchor` are).
+  Descriptors are defined by voXY, not stored in the file.
 - Value types:
 
   | `type` | `value` |
@@ -157,5 +189,44 @@ The layer-to-parent matrix is `T(position) · R(rotation) · S(scale) · T(−an
   | `string` | string |
 
 - Non-finite numbers are invalid.
-- In 0.1.0 every property is `static`. Keyframed animation arrives in
-  Milestone 2 with format 0.2.0.
+
+#### Keyframes
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `time` | flicks | required | Strictly increasing within a track. A track has at least one key. |
+| `value` | value | required | Same kind as the property. |
+| `interp` | `"hold"` \| `"linear"` \| `"bezier"` | `"linear"` | Timing of the segment that **starts** at this key. |
+| `ease_in` | `[x, y]` | `[2/3, 2/3]` | Control point `P2` of the segment **arriving** at this key. |
+| `ease_out` | `[x, y]` | `[1/3, 1/3]` | Control point `P1` of the segment **leaving** this key. |
+| `spatial` | `{ "in": [x,y,z], "out": [x,y,z] }` | absent | Motion-path tangents, relative to the key's value. Used only by spatial properties. |
+
+Ease handles live in normalized segment space: `x` is the fraction of the
+segment's duration and must be in `[0, 1]`; `y` is the fraction of the value
+change and may leave `[0, 1]` to overshoot. The defaults make a segment
+exactly linear.
+
+**Evaluation** of the segment from key `k0` to the next key `k1` at time `t`:
+
+1. `u = (t − t0) / (t1 − t0)`, computed from the integer times.
+2. Progress `p`:
+   - `hold`: the value is `k0.value` until `t1`;
+   - `linear`: `p = u`;
+   - `bezier`: `p = y(s)` where `x(s) = u` on the cubic `(0,0)`,
+     `k0.ease_out`, `k1.ease_in`, `(1,1)`.
+3. Value:
+   - Scalars, vectors and colors: component-wise `v0·(1−p) + v1·p`. Colors
+     interpolate in linear light with straight alpha.
+   - Integers: the same, then rounded half away from zero.
+   - Booleans, enums and strings: hold.
+   - **Spatial properties with tangents:** the value travels along the cubic
+     Bézier `v0, v0 + k0.spatial.out, v1 + k1.spatial.in, v1`, and `p` is
+     the fraction of the path's **arc length**. Speed along the path
+     therefore follows the ease curve. Progress outside `[0, 1]` continues
+     in a straight line along the end tangent.
+4. The result is clamped to the property's hard range (for example opacity
+   to `0..1`).
+
+Before the first key the value is the first key's value; from the last key
+on, it is the last key's. At a key's exact time the result is that key's
+value, bit for bit.

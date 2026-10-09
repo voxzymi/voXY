@@ -5,11 +5,15 @@
 
 use proptest::prelude::*;
 use voxy_core::command::{
-    AddImageLayer, AddSolidLayer, MoveLayer, RemoveLayers, RenameLayer, SetLayerVisible,
-    SetProperty, SetWorkingSpace,
+    AddImageLayer, AddSolidLayer, ApplyEasePreset, MoveKeyframes, MoveLayer, RemoveKeyframes,
+    RemoveLayers, RenameLayer, SetAnimated, SetEase, SetInterpolation, SetLayerVisible,
+    SetProperty, SetSpatialTangents, SetWorkingSpace,
 };
-use voxy_core::glam::DVec2;
-use voxy_core::{CompSettings, Document, History, LinearRgba, Time, Value, WorkingSpace, persist};
+use voxy_core::glam::{DVec2, DVec3};
+use voxy_core::{
+    CompSettings, Document, EaseHandle, EasePreset, History, Interp, Layer, LinearRgba, PropId,
+    SpatialTangents, Time, Value, WorkingSpace, persist,
+};
 
 /// An edit described independently of the IDs that exist at run time; layer
 /// and property choices are indices resolved against the current document.
@@ -25,6 +29,15 @@ enum Edit {
     Rotation(usize, f64),
     Opacity(usize, f64),
     WorkingSpace(bool),
+    // Keyframe edits: (layer, property selector, ...). Times are milliseconds.
+    Animate(usize, u8, i64, bool),
+    SetAt(usize, u8, i64, f64),
+    RemoveKey(usize, u8, usize),
+    MoveKey(usize, u8, usize, i64),
+    Interp(usize, u8, usize, u8),
+    Preset(usize, u8, usize, usize),
+    Ease(usize, u8, usize, [f64; 4]),
+    Tangent(usize, usize, f64, f64),
     Undo,
     Redo,
     EndInteraction,
@@ -44,10 +57,57 @@ fn edit() -> impl Strategy<Value = Edit> {
         (any::<usize>(), -720.0f64..720.0).prop_map(|(i, r)| Edit::Rotation(i, r)),
         (any::<usize>(), -1.0f64..2.0).prop_map(|(i, o)| Edit::Opacity(i, o)),
         any::<bool>().prop_map(Edit::WorkingSpace),
+        (any::<usize>(), 0u8..4, -2000i64..12_000, any::<bool>())
+            .prop_map(|(i, p, t, on)| Edit::Animate(i, p, t, on)),
+        (any::<usize>(), 0u8..4, -2000i64..12_000, -1000.0f64..1000.0)
+            .prop_map(|(i, p, t, v)| Edit::SetAt(i, p, t, v)),
+        (any::<usize>(), 0u8..4, any::<usize>()).prop_map(|(i, p, k)| Edit::RemoveKey(i, p, k)),
+        (any::<usize>(), 0u8..4, any::<usize>(), -3000i64..3000)
+            .prop_map(|(i, p, k, d)| Edit::MoveKey(i, p, k, d)),
+        (any::<usize>(), 0u8..4, any::<usize>(), 0u8..3)
+            .prop_map(|(i, p, k, m)| Edit::Interp(i, p, k, m)),
+        (
+            any::<usize>(),
+            0u8..4,
+            any::<usize>(),
+            0usize..EasePreset::ALL.len()
+        )
+            .prop_map(|(i, p, k, n)| Edit::Preset(i, p, k, n)),
+        (
+            any::<usize>(),
+            0u8..4,
+            any::<usize>(),
+            prop::array::uniform4(-1.0f64..2.0)
+        )
+            .prop_map(|(i, p, k, e)| Edit::Ease(i, p, k, e)),
+        (
+            any::<usize>(),
+            any::<usize>(),
+            -500.0f64..500.0,
+            -500.0f64..500.0
+        )
+            .prop_map(|(i, k, x, y)| Edit::Tangent(i, k, x, y)),
         Just(Edit::Undo),
         Just(Edit::Redo),
         Just(Edit::EndInteraction),
     ]
+}
+
+/// Property selector → (property ID, a value of its kind derived from `v`).
+fn target(l: &Layer, sel: u8, v: f64) -> (PropId, Value) {
+    let t = &l.transform;
+    match sel {
+        0 => (t.position.id, Value::Vec2(DVec2::new(v, -v))),
+        1 => (t.rotation.id, Value::Scalar(v)),
+        2 => (t.opacity.id, Value::Scalar(v / 1000.0)),
+        _ => (t.scale.id, Value::Vec2(DVec2::splat(v / 100.0))),
+    }
+}
+
+/// The time of the `k`-th keyframe (modulo count) of an animated property.
+fn key_time(doc: &Document, prop: PropId, k: usize) -> Option<Time> {
+    let track = doc.property(prop)?.track()?;
+    Some(track.keys()[k % track.len()].time)
 }
 
 fn apply(h: &mut History, e: &Edit) {
@@ -97,6 +157,7 @@ fn apply(h: &mut History, e: &Edit) {
         },
         Edit::Position(i, x, y) => match pick(*i) {
             Some(l) => h.execute(SetProperty {
+                time: Time::ZERO,
                 prop: l.transform.position.id,
                 value: Value::Vec2(DVec2::new(*x, *y)),
             }),
@@ -104,6 +165,7 @@ fn apply(h: &mut History, e: &Edit) {
         },
         Edit::Rotation(i, r) => match pick(*i) {
             Some(l) => h.execute(SetProperty {
+                time: Time::ZERO,
                 prop: l.transform.rotation.id,
                 value: Value::Scalar(*r),
             }),
@@ -111,6 +173,7 @@ fn apply(h: &mut History, e: &Edit) {
         },
         Edit::Opacity(i, o) => match pick(*i) {
             Some(l) => h.execute(SetProperty {
+                time: Time::ZERO,
                 prop: l.transform.opacity.id,
                 value: Value::Scalar(*o),
             }),
@@ -133,6 +196,95 @@ fn apply(h: &mut History, e: &Edit) {
             h.end_interaction();
             Ok(())
         }
+        Edit::Animate(i, sel, ms, on) => match pick(*i) {
+            Some(l) => h.execute(SetAnimated {
+                prop: target(l, *sel, 0.0).0,
+                time: Time::from_millis(*ms),
+                animated: *on,
+            }),
+            None => Ok(()),
+        },
+        Edit::SetAt(i, sel, ms, v) => match pick(*i) {
+            Some(l) => {
+                let (prop, value) = target(l, *sel, *v);
+                h.execute(SetProperty {
+                    prop,
+                    time: Time::from_millis(*ms),
+                    value,
+                })
+            }
+            None => Ok(()),
+        },
+        Edit::RemoveKey(i, sel, k) => match pick(*i).map(|l| target(l, *sel, 0.0).0) {
+            Some(prop) => match key_time(&doc, prop, *k) {
+                Some(t) => h.execute(RemoveKeyframes {
+                    prop,
+                    times: vec![t],
+                }),
+                None => Ok(()),
+            },
+            None => Ok(()),
+        },
+        Edit::MoveKey(i, sel, k, d) => match pick(*i).map(|l| target(l, *sel, 0.0).0) {
+            Some(prop) => match key_time(&doc, prop, *k) {
+                Some(t) => h.execute(MoveKeyframes {
+                    prop,
+                    times: vec![t],
+                    delta: Time::from_millis(*d),
+                }),
+                None => Ok(()),
+            },
+            None => Ok(()),
+        },
+        Edit::Interp(i, sel, k, m) => match pick(*i).map(|l| target(l, *sel, 0.0).0) {
+            Some(prop) => match key_time(&doc, prop, *k) {
+                Some(t) => h.execute(SetInterpolation {
+                    prop,
+                    times: vec![t],
+                    interp: [Interp::Hold, Interp::Linear, Interp::Bezier][usize::from(*m)],
+                }),
+                None => Ok(()),
+            },
+            None => Ok(()),
+        },
+        Edit::Preset(i, sel, k, n) => match pick(*i).map(|l| target(l, *sel, 0.0).0) {
+            Some(prop) => match key_time(&doc, prop, *k) {
+                Some(t) => h.execute(ApplyEasePreset {
+                    prop,
+                    times: vec![t],
+                    preset: EasePreset::ALL[*n],
+                }),
+                None => Ok(()),
+            },
+            None => Ok(()),
+        },
+        Edit::Ease(i, sel, k, [x1, y1, x2, y2]) => match pick(*i).map(|l| target(l, *sel, 0.0).0) {
+            // Out-of-range x values produce no handle: exercises "None" sides.
+            Some(prop) => match key_time(&doc, prop, *k) {
+                Some(t) => h.execute(SetEase {
+                    prop,
+                    time: t,
+                    ease_in: EaseHandle::new(*x1, *y1),
+                    ease_out: EaseHandle::new(*x2, *y2),
+                }),
+                None => Ok(()),
+            },
+            None => Ok(()),
+        },
+        Edit::Tangent(i, k, x, y) => match pick(*i).map(|l| l.transform.position.id) {
+            Some(prop) => match key_time(&doc, prop, *k) {
+                Some(t) => h.execute(SetSpatialTangents {
+                    prop,
+                    time: t,
+                    tangents: Some(SpatialTangents {
+                        incoming: DVec3::new(-x, -y, 0.0),
+                        outgoing: DVec3::new(*x, *y, 0.0),
+                    }),
+                }),
+                None => Ok(()),
+            },
+            None => Ok(()),
+        },
     };
 }
 

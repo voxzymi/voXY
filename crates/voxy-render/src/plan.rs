@@ -151,6 +151,7 @@ mod tests {
         .unwrap();
         let opacity = doc.root().layers[0].transform.opacity.id;
         SetProperty {
+            time: Time::ZERO,
             prop: opacity,
             value: Value::Scalar(0.5),
         }
@@ -192,6 +193,7 @@ mod tests {
         .unwrap();
         let opacity = doc.root().layers[0].transform.opacity.id;
         SetProperty {
+            time: Time::ZERO,
             prop: opacity,
             value: Value::Scalar(0.0),
         }

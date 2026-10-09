@@ -11,11 +11,13 @@ macOS, written in Rust.
 
 voXY is an original product. Its name, artwork, icons and theme are its own.
 
-> **Status: Milestone 1 of 10.** The project model, undo/redo, `.voxy`
-> save/load, the GPU compositor (solids and still images with transforms,
-> parenting and opacity) and the application shell work. Keyframes, the
-> timeline and the graph editor come next (Milestone 2). See
-> [`docs/design-proposal.md`](docs/design-proposal.md) for the full plan.
+> **Status: Milestone 2a.** Milestone 1 is complete: the project model,
+> undo/redo, `.voxy` save/load, the GPU compositor and the application
+> shell. Milestone 2a adds the keyframe and interpolation model: hold,
+> linear and cubic-bezier timing with ease presets, plus arc-length
+> ("speed-aware") motion paths. The full timeline and graph editor come
+> next (2b). See [`docs/design-proposal.md`](docs/design-proposal.md) for
+> the plan.
 
 ## What works today
 
@@ -35,11 +37,28 @@ voXY is an original product. Its name, artwork, icons and theme are its own.
   | Delete the selected layer | Del |
 
 - Editing transform and solid properties, including color.
+- Keyframes, from the Properties panel:
+  - the stopwatch turns animation on or off;
+  - the diamond adds or deletes a key at the current time;
+  - right-clicking the diamond sets interpolation or an ease preset;
+  - the arrows on either side of the diamond jump to the previous or next
+    key.
+
+  The Timeline panel has a time scrubber, and the Left/Right arrow keys step
+  one frame.
 - A prompt before discarding unsaved changes.
 
 **Undo/redo for every edit.** Each edit records a document snapshot, and
 snapshots share all unchanged data. A slider or drag gesture collapses into one
 undo step.
+
+**Keyframes** (`voxy-core`), all times integer flicks:
+- per-segment hold, linear or cubic-bezier timing, with handles stored on the
+  keys;
+- ease presets: CSS ease family, easy ease, back in and back out;
+- motion paths for position and anchor point, parameterized by arc length, so
+  speed along the path follows the ease curve;
+- a value at a key's time is returned exactly.
 
 **`.voxy` project files:** versioned JSON, written atomically, and validated
 when loaded and saved. See [`docs/voxy-format.md`](docs/voxy-format.md).
