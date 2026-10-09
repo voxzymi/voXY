@@ -262,7 +262,7 @@ compiled on Windows, macOS or Linux.
 | [`proptest`](https://github.com/proptest-rs/proptest) | 1.11.0 | `MIT OR Apache-2.0` |
 | [`pxfm`](https://github.com/awxkee/pxfm) | 0.1.30 | `BSD-3-Clause OR Apache-2.0` |
 | [`quick-error`](http://github.com/tailhook/quick-error) | 1.2.3, 2.0.1 | `MIT OR Apache-2.0` |
-| [`quick-xml`](https://github.com/tafia/quick-xml) | 0.41.0 | `MIT` |
+| [`quick-xml`](https://github.com/tafia/quick-xml) | 0.41.0, 0.42.0 | `MIT` |
 | [`quote`](https://github.com/dtolnay/quote) | 1.0.47 | `MIT OR Apache-2.0` |
 | [`r-efi`](https://github.com/r-efi/r-efi) | 5.3.0, 6.0.0 | `MIT OR Apache-2.0 OR LGPL-2.1-or-later` |
 | [`rand`](https://github.com/rust-random/rand) | 0.9.5 | `MIT OR Apache-2.0` |

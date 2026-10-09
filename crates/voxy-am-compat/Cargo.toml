@@ -13,3 +13,5 @@ workspace = true
 
 [dependencies]
 voxy-core.workspace = true
+quick-xml.workspace = true
+thiserror.workspace = true

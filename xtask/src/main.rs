@@ -22,7 +22,11 @@ fn main() -> Result<()> {
 }
 
 fn workspace_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
+    // Prefer the run-time value `cargo run` sets: the compile-time one goes
+    // stale if the binary was built from another checkout sharing `target/`.
+    let manifest_dir = std::env::var_os("CARGO_MANIFEST_DIR")
+        .map_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")), PathBuf::from);
+    Path::new(&manifest_dir)
         .parent()
         .expect("xtask lives in the workspace")
         .to_path_buf()
