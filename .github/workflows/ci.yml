@@ -89,7 +89,7 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked
       - name: Test
-        run: cargo test --workspace --locked
+        run: cargo test --workspace --locked --no-fail-fast
         env:
           # Linux always has lavapipe, so golden tests must run there; on
           # hosted Windows/macOS runners they run when an adapter exists.

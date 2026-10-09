@@ -255,7 +255,12 @@ impl AudioDecoder {
     }
 
     fn push(&mut self, f: &mut frame::Audio) -> Result<(), MediaError> {
-        if f.channel_layout().channels() == 0 {
+        // A stream without a channel mask (a plain WAV, for example) decodes
+        // with an unspecified layout: no mask bits before FFmpeg 7, an
+        // "unspecified order" layout from 7 on. The resampler would treat
+        // that as a layout change on every frame ("Input changed"), so
+        // give it the default layout for its channel count.
+        if f.channel_layout().is_empty() {
             f.set_channel_layout(ChannelLayout::default(i32::from(f.channels())));
         }
         if self.pending_start.is_none() {
