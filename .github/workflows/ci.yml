@@ -103,6 +103,33 @@ jobs:
           path: target/tmp/voxy-golden-*-actual.png
           if-no-files-found: ignore
 
+  # The easing evaluators promise bit-identical results on every platform
+  # (docs/design-graphs.md, "Numeric determinism"). Shipped builds are
+  # optimized and the optimizer may reorder floating-point work, so the pinned
+  # tables are also checked in release mode. voxy-core needs no FFmpeg or GPU,
+  # so this job is quick.
+  determinism-release:
+    name: determinism tables, optimized (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x64
+            os: ubuntu-22.04
+          - name: Windows x64
+            os: windows-latest
+          - name: macOS arm64
+            os: macos-latest
+          - name: macOS x64
+            os: macos-15-intel
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: voxy-core tests, release (includes the pinned easing and legacy tables)
+        run: cargo test --release --locked -p voxy-core --no-fail-fast
+
   licenses:
     name: cargo-deny (licenses, advisories, bans)
     runs-on: ubuntu-22.04

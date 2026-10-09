@@ -128,39 +128,73 @@ impl Preferences {
 mod tests {
     use super::*;
 
-    fn env<'a>(pairs: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<OsString> + 'a {
-        move |k| {
-            pairs
-                .iter()
-                .find(|(n, _)| *n == k)
-                .map(|(_, v)| OsString::from(v))
-        }
+    /// An absolute path on the host running the test: `C:\a\b` on Windows,
+    /// `/a/b` elsewhere. `config_dir_with` checks `Path::is_absolute`, which
+    /// is a property of the host, so the test inputs must be built that way
+    /// (`/home/me` is not absolute on Windows).
+    fn abs(parts: &[&str]) -> PathBuf {
+        let root = if cfg!(windows) { r"C:\" } else { "/" };
+        parts
+            .iter()
+            .fold(PathBuf::from(root), |p, part| p.join(part))
+    }
+
+    /// Lookup closure over `(name, absolute path)` pairs.
+    fn vars(pairs: &[(&str, PathBuf)]) -> impl Fn(&str) -> Option<OsString> + use<> {
+        let pairs: Vec<(String, OsString)> = pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), v.clone().into_os_string()))
+            .collect();
+        move |k| pairs.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone())
     }
 
     #[test]
     fn config_directories_per_os() {
-        let linux = config_dir_with(Os::Linux, &env(&[("HOME", "/home/me")]));
-        assert_eq!(linux, Some(PathBuf::from("/home/me/.config/voXY")));
+        let home = abs(&["home", "me"]);
+        let linux = config_dir_with(Os::Linux, &vars(&[("HOME", home.clone())]));
+        assert_eq!(linux, Some(home.join(".config").join("voXY")));
+
+        let cfg = abs(&["cfg"]);
         let xdg = config_dir_with(
             Os::Linux,
-            &env(&[("HOME", "/home/me"), ("XDG_CONFIG_HOME", "/cfg")]),
+            &vars(&[("HOME", home.clone()), ("XDG_CONFIG_HOME", cfg.clone())]),
         );
-        assert_eq!(xdg, Some(PathBuf::from("/cfg/voXY")));
+        assert_eq!(xdg, Some(cfg.join("voXY")));
+
         // A relative XDG value is ignored, as the spec says.
         let rel = config_dir_with(
             Os::Linux,
-            &env(&[("HOME", "/h"), ("XDG_CONFIG_HOME", "cfg")]),
+            &vars(&[
+                ("HOME", home.clone()),
+                ("XDG_CONFIG_HOME", PathBuf::from("cfg")),
+            ]),
         );
-        assert_eq!(rel, Some(PathBuf::from("/h/.config/voXY")));
-        let mac = config_dir_with(Os::Mac, &env(&[("HOME", "/Users/me")]));
+        assert_eq!(rel, Some(home.join(".config").join("voXY")));
+
+        let mac_home = abs(&["Users", "me"]);
+        let mac = config_dir_with(Os::Mac, &vars(&[("HOME", mac_home.clone())]));
         assert_eq!(
             mac,
-            Some(PathBuf::from("/Users/me/Library/Application Support/voXY"))
+            Some(
+                mac_home
+                    .join("Library")
+                    .join("Application Support")
+                    .join("voXY")
+            )
         );
-        // A drive-letter path is only absolute on Windows hosts, so check the
-        // variable handling with a path that is absolute everywhere.
-        assert!(config_dir_with(Os::Windows, &env(&[])).is_none());
-        assert!(config_dir_with(Os::Linux, &env(&[])).is_none());
+
+        // %APPDATA% on Windows (checkable on every host with a host-absolute
+        // path); a relative one is ignored.
+        let roaming = abs(&["Users", "me", "AppData", "Roaming"]);
+        let win = config_dir_with(Os::Windows, &vars(&[("APPDATA", roaming.clone())]));
+        assert_eq!(win, Some(roaming.join("voXY")));
+        let win_rel = config_dir_with(Os::Windows, &vars(&[("APPDATA", PathBuf::from("rel"))]));
+        assert_eq!(win_rel, None);
+
+        // Without the variables there is no directory.
+        assert_eq!(config_dir_with(Os::Windows, &vars(&[])), None);
+        assert_eq!(config_dir_with(Os::Linux, &vars(&[])), None);
+        assert_eq!(config_dir_with(Os::Mac, &vars(&[])), None);
     }
 
     #[test]
