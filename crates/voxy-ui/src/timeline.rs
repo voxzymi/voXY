@@ -107,7 +107,7 @@ struct Cx {
 
 pub fn show(ui: &mut Ui, state: &mut EditorState) {
     let Some(comp) = state.comp() else {
-        ui.label("No composition is open.");
+        crate::empty_state::show(ui, state);
         return;
     };
     let comp = &*comp;

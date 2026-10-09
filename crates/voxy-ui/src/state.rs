@@ -79,6 +79,8 @@ pub struct EditorState {
     pub comp_dialog: Option<Draft>,
     /// The last tab the dialog showed (saved in `ui_state`).
     pub dialog_tab: DialogTab,
+    /// The "items differ" question of New Composition From Footage.
+    pub footage_prompt: Option<crate::footage::Prompt>,
     pub prefs: Preferences,
     /// The easing last copied with "Copy Easing" (or the graph editor's Copy
     /// button). Lives for the session.
@@ -123,6 +125,7 @@ impl EditorState {
             dialogs: Box::new(NativeDialogs),
             comp_dialog: None,
             dialog_tab: DialogTab::Basic,
+            footage_prompt: None,
             prefs: Preferences::default(),
             ease_clipboard: None,
             recovery: None,
@@ -491,7 +494,7 @@ impl EditorState {
     }
 
     /// Selects what a command just created in the Project panel.
-    fn show_created(&mut self, report: &CommandReport) {
+    pub(crate) fn show_created(&mut self, report: &CommandReport) {
         let items: Vec<PoolItem> = report
             .created_folders
             .iter()
@@ -1135,6 +1138,7 @@ impl EditorState {
             Action::FileOpen => return Some(AppRequest::Open),
             Action::FileQuit => return Some(AppRequest::Quit),
             Action::FileNewComposition => self.open_new_comp_dialog(),
+            Action::FileNewCompositionFromFootage => self.new_comp_from_footage(),
             Action::CompositionSettings => {
                 if let Some(id) = self.comp_id() {
                     self.open_comp_settings(id);
@@ -1404,7 +1408,7 @@ pub(crate) fn segments_of(
 }
 
 /// `"<base> 1"`, or the smallest number that is not `taken`.
-fn next_name(base: &str, taken: impl Fn(&str) -> bool) -> String {
+pub(crate) fn next_name(base: &str, taken: impl Fn(&str) -> bool) -> String {
     let mut n = 1u64;
     loop {
         let candidate = format!("{base} {n}");
@@ -1429,7 +1433,7 @@ fn media_kind(path: &Path) -> Option<AssetKind> {
 
 /// Reads a media file's facts into an [`Asset`] (path stored relative to
 /// `root` when inside it). Fails with a short reason.
-fn probe_asset(path: &Path, root: Option<&Path>) -> Result<Asset, String> {
+pub(crate) fn probe_asset(path: &Path, root: Option<&Path>) -> Result<Asset, String> {
     let stored = portable_path(path, root);
     let name = path
         .file_name()

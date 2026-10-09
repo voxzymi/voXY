@@ -340,6 +340,7 @@ pub fn show(ui: &mut Ui, state: &mut EditorState) {
     });
 
     let Some(comp) = state.comp() else {
+        crate::empty_state::weak_notice(ui);
         return;
     };
     let comp = &*comp;

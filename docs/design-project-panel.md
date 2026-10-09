@@ -436,3 +436,46 @@ What landed, and where it refines the design above.
     other than the open one. (Tracked in [`deferred.md`](deferred.md).)
   - Saving the dock layout and shortcut overrides (Preferences, P-D).
   - Dragging items onto the timeline or viewport (Milestone D).
+
+## Implementation notes (P-B audit and P-C)
+
+- **P-B audit** (`crates/voxy-ui/src/audit.rs`, tests only). Every registered
+  action is run against an empty project, an empty composition and an animated
+  project with every kind of easing and all keys selected, with the file
+  pickers answering "cancel". Asserted: no panic; an empty project is not
+  changed by any action except New Folder; no action creates a composition;
+  an action that cannot run says why in the status bar; the document still
+  validates afterwards. Every panel is also drawn headlessly for several
+  frames in each situation (and with media in the pool but no composition).
+  The audit found no panics; it exists to keep it that way as actions and
+  panels are added.
+- **Empty-state screen** (`empty_state.rs`). Shows in the timeline area while
+  no composition is open. `empty_state_layout(width, height)` is the pure
+  layout of §4.4 (side by side from 560 points, stacked below, tiles shrink to
+  120 × 84, the tip space hides under 340, compact buttons under 200) and is
+  tested for overlap and fit over a grid of sizes. The viewport shows only
+  "No composition open" and the hint (Q3); the graph editor a weak notice.
+  Tiles are painter-drawn line art, focusable, activated by click, Enter or
+  Space, and files can be dropped on the second tile.
+- **New Composition From Footage** (`footage.rs`, action
+  `file.new_composition_from_footage`, no default shortcut; File > New and the
+  Project panel's context menu). Selected footage (folders expanded,
+  compositions ignored) is used without a picker; otherwise a multi-select
+  picker (cancel does nothing, not even a status line). One item, or several
+  that agree on size, rate and duration, make one composition with that item's
+  settings; stills keep the project's rate and duration. Items that differ ask
+  "Use settings from" and single versus one-per-item (default single). The
+  composition takes the first item's name, numbered if taken. Unreadable
+  files are skipped and named in the status line; nothing happens if none can
+  be read.
+  - **Deviation from §4.3, to fold into Milestone D.** The design has one
+    `DropItems { target: NewComp }` command; that command does not exist yet,
+    so the UI builds the same result as one history transaction (import,
+    create, place) using a new core command, `AddAssetLayer` (a layer for an
+    asset already in the project; no format change). It is still one undo
+    step, covered by a test. When `DropItems` lands, this flow becomes a call
+    to it.
+  - Items are placed in the project's own asset order (the Project panel's
+    display order is not available to the command layer yet).
+- **Not in P-C:** the Tip of the Day (P-D). The layout already reserves its
+  space and hides it when short.

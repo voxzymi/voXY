@@ -11,6 +11,8 @@ mod compat;
 mod dialogs;
 mod ease_params;
 mod ease_ui;
+mod empty_state;
+mod footage;
 mod graph_editor;
 mod media;
 mod menu;

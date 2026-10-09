@@ -678,6 +678,10 @@ pub(crate) fn reveal_in_composition_menu(ui: &mut Ui, state: &mut EditorState) {
 fn empty_menu(ui: &mut Ui, state: &mut EditorState) {
     for (action, label) in [
         (Action::FileNewComposition, "New Composition"),
+        (
+            Action::FileNewCompositionFromFootage,
+            "New Composition From Footage…",
+        ),
         (Action::ProjectNewFolder, "New Folder"),
         (Action::FileImport, "Import…"),
         (Action::ProjectSelectAll, "Select All"),

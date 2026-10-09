@@ -66,6 +66,7 @@ pub struct ActionContext {
 pub enum Action {
     FileNewProject,
     FileNewComposition,
+    FileNewCompositionFromFootage,
     FileOpen,
     FileSave,
     FileSaveAs,
@@ -165,6 +166,7 @@ impl Action {
     pub const ALL: &'static [Action] = &[
         Action::FileNewProject,
         Action::FileNewComposition,
+        Action::FileNewCompositionFromFootage,
         Action::FileOpen,
         Action::FileSave,
         Action::FileSaveAs,
@@ -229,6 +231,13 @@ impl Action {
                     const { &[cmd(Key::N)] },
                 )
             },
+            Action::FileNewCompositionFromFootage => def(
+                "file.new_composition_from_footage",
+                "Composition From Footage…",
+                Nothing,
+                Global,
+                &[],
+            ),
             Action::FileOpen => ActionDef {
                 fires_while_typing: true,
                 ..def(

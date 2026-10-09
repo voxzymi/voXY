@@ -126,6 +126,7 @@ fn draw(state: &mut EditorState, frames: usize) {
         });
         out.textures_delta.clear();
         crate::comp_dialog::show(&ctx, state);
+        crate::footage::show_prompt(&ctx, state);
     }
 }
 

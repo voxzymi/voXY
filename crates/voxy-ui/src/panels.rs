@@ -112,6 +112,10 @@ impl TabViewer for Panels<'_> {
 
 impl Panels<'_> {
     fn viewport_ui(&mut self, ui: &mut Ui) {
+        let Some(comp_id) = self.state.comp_id() else {
+            crate::empty_state::show_viewport_message(ui);
+            return;
+        };
         let Some(viewport) = self.viewport.as_deref_mut() else {
             ui.centered_and_justified(|ui| ui.label("GPU viewport unavailable"));
             return;
@@ -119,10 +123,6 @@ impl Panels<'_> {
         let avail = ui.available_size();
         let ppp = ui.ctx().pixels_per_point();
         let (doc, revision) = self.state.view_document();
-        let Some(comp_id) = self.state.comp_id() else {
-            ui.centered_and_justified(|ui| ui.label("No composition is open."));
-            return;
-        };
         let shot = crate::viewport::Shot {
             doc: &doc,
             comp: comp_id,
@@ -150,7 +150,7 @@ impl Panels<'_> {
 
     fn timeline_ui(&mut self, ui: &mut Ui) {
         let Some(comp) = self.state.comp() else {
-            ui.label("No composition is open.");
+            crate::empty_state::show(ui, self.state);
             return;
         };
         ui.horizontal(|ui| {

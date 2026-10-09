@@ -156,6 +156,7 @@ impl VoxyApp {
                 ui.menu_button("New", |ui| {
                     self.item_labelled(ui, Action::FileNewProject, "Project");
                     self.item(ui, Action::FileNewComposition);
+                    self.item(ui, Action::FileNewCompositionFromFootage);
                     self.item(ui, Action::ProjectNewFolder);
                 });
                 self.item(ui, Action::FileOpen);
@@ -306,6 +307,7 @@ impl VoxyApp {
 
     fn dialogs(&mut self, ctx: &egui::Context) {
         crate::comp_dialog::show(ctx, &mut self.state);
+        crate::footage::show_prompt(ctx, &mut self.state);
         if let Some(action) = self.pending {
             let name = self.state.display_name();
             let mut choice = None;
