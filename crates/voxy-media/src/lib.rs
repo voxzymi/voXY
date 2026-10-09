@@ -7,10 +7,18 @@
 //!   build (see `LICENSING.md`).
 //! - [`timebase`]: exact conversion between stream time bases and flicks.
 //!
-//! Audio decode and `cpal` output arrive in Milestone 3b.
+//! - [`playback`]: audio output (cpal, or a timer-driven null output), the
+//!   master clock, and the feeder thread that renders timeline audio.
+//! - [`sync`]: choosing the video frame for the master clock (A/V sync).
+//! - [`audio`] (feature `ffmpeg`): sample-accurate audio decoding and
+//!   resampling.
 
 use std::path::Path;
 
+#[cfg(feature = "ffmpeg")]
+pub mod audio;
+pub mod playback;
+pub mod sync;
 pub mod timebase;
 #[cfg(feature = "ffmpeg")]
 pub mod video;

@@ -12,12 +12,18 @@ publish = false
 workspace = true
 
 [features]
-default = ["ffmpeg"]
-# Video decode through FFmpeg (needs FFmpeg development libraries; see README).
+default = ["ffmpeg", "audio-device"]
+# Video and audio decode through FFmpeg (needs FFmpeg development
+# libraries; see README).
 ffmpeg = ["dep:ffmpeg-next"]
+# Audio output through cpal (needs ALSA headers on Linux).
+audio-device = ["dep:cpal"]
 
 [dependencies]
 voxy-core.workspace = true
+cpal = { workspace = true, optional = true }
+crossbeam-channel.workspace = true
+rtrb.workspace = true
 ffmpeg-next = { workspace = true, optional = true }
 image.workspace = true
 thiserror.workspace = true

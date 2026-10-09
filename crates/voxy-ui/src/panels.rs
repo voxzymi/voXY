@@ -228,6 +228,14 @@ impl Panels<'_> {
         let last = (rate.time_to_frame(comp.duration) - 1).max(0);
         let mut frame = rate.time_to_frame(self.state.time).clamp(0, last);
         ui.horizontal(|ui| {
+            let label = if self.state.transport.is_playing() {
+                "Pause"
+            } else {
+                "Play"
+            };
+            if ui.button(label).on_hover_text("Space").clicked() {
+                self.state.toggle_playback();
+            }
             ui.label("Time");
             let slider = egui::Slider::new(&mut frame, 0..=last)
                 .suffix(" f")
@@ -236,7 +244,7 @@ impl Panels<'_> {
                 self.state.time = rate.frame_to_time(frame);
             }
             ui.weak(timecode(self.state.time, rate));
-            ui.weak("· Left/Right arrow keys step one frame");
+            ui.weak("· Space plays · Left/Right step one frame · Home to start");
         });
     }
 

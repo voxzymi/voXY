@@ -668,3 +668,47 @@ with the approved design.
   height-based default) and range. A higher-precision upload path for the
   linear compositor, and the decode thread with prefetch, come with
   playback (3b).
+
+## Implementation notes (Milestone 3b: audio output, master clock, A/V sync)
+
+- **Threads.**
+  - The device callback (real time) only copies from an `rtrb` lock-free
+    ring and publishes the clock anchor. It never allocates, locks or
+    blocks.
+  - The control channel to it is bounded (array-backed), so receiving never
+    frees memory.
+  - Old rings are sent back and dropped on the feeder thread.
+  - The feeder thread renders an `AudioSource`, which may decode, into the
+    ring.
+- **Master clock.** Each buffer publishes "timeline frame F is audible at
+  instant T" (T = now + the device's reported output latency) through a
+  seqlock.
+  - `PlaybackClock::time()` interpolates from it, so it follows the audio
+    device, including its drift. It is capped at 250 ms past the last
+    anchor and kept monotonic between seeks.
+  - `time_at_ns` is the pure version, used for tests and for scheduling
+    ahead.
+- **Underruns** output silence. The clock keeps running and the feeder skips
+  ahead by the missing frames, so audio realigns with the clock.
+- **Pause** holds the clock at what was audible (the queued position minus
+  latency). Play and seek hand the callback a fresh, pre-filled ring.
+- **No device.** A timer-driven null output runs the same callback code, and
+  `AudioEngine::start` falls back to it automatically. `manual()` lets
+  tests drive the callback as a simulated device.
+- **A/V sync.** `FrameScheduler`:
+  - never shows a frame ahead of the clock, and drops late frames instead of
+    drifting;
+  - `request(clock, decode_time)` tells the decoder which frame will be due
+    when it finishes, which keeps lag bounded by one decode;
+  - an offset shifts video against audio.
+- **Audio decode.** FFmpeg with resampling to interleaved stereo `f32` at the
+  engine rate.
+  - Seeks trim, or pad with silence, to the exact sample.
+  - Measured sample-exact at matching rates and for 44.1→48 kHz.
+  - `ffmpeg-next` sizes an empty output frame to the input sample count,
+    which truncates upsampled output, so output frames are allocated for the
+    rate ratio.
+- **App.** The transport starts the engine on first Play, drives the
+  playhead from the clock, loops at the composition end, and treats
+  scrubbing during playback as a seek. There are no audio layers yet, so it
+  plays silence through the device's clock.

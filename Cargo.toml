@@ -41,9 +41,11 @@ i_overlay = "9.0.1"
 # General
 anyhow = "1.0.104"
 # FFmpeg bindings: dynamically linked; voXY ships an LGPL build (LICENSING.md).
-ffmpeg-next = { version = "9.0.0", default-features = false, features = ["codec", "format", "software-scaling"] }
+ffmpeg-next = { version = "9.0.0", default-features = false, features = ["codec", "format", "software-scaling", "software-resampling"] }
 arc-swap = "1.9.2"
 bytemuck = { version = "1.25.2", features = ["derive"] }
+cpal = "0.18.2"
+crossbeam-channel = "0.5.17"
 glam = { version = "0.34.1", features = ["serde"] }
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
 pollster = "1.0.1"
@@ -51,6 +53,7 @@ quick-xml = "0.42.0"
 # Only the formats Alight Motion samples need; add more when a sample shows one.
 zip = { version = "9.0.0", default-features = false, features = ["deflate"] }
 rfd = "0.17.2"
+rtrb = "0.4.0"
 semver = "1.0.28"
 serde = { version = "1.0.229", features = ["derive", "rc"] }
 serde_json = { version = "1.0.151", features = ["float_roundtrip"] }

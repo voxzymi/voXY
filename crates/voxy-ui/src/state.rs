@@ -21,6 +21,7 @@ pub struct EditorState {
     pub status: Option<Status>,
     pub timeline: crate::timeline::TimelineView,
     pub graph: crate::graph_editor::GraphView,
+    pub transport: crate::transport::Transport,
 }
 
 impl EditorState {
@@ -33,6 +34,7 @@ impl EditorState {
             status: None,
             timeline: crate::timeline::TimelineView::default(),
             graph: crate::graph_editor::GraphView::default(),
+            transport: crate::transport::Transport::default(),
         }
     }
 
@@ -82,7 +84,17 @@ impl EditorState {
             )
     }
 
+    /// Starts or stops playback from the playhead.
+    pub fn toggle_playback(&mut self) {
+        let rate = self.history.current().root().frame_rate;
+        if let Some(t) = self.transport.toggle(self.time, rate) {
+            self.time = t;
+        }
+    }
+
     pub fn new_document(&mut self) {
+        let rate = self.history.current().root().frame_rate;
+        self.transport.pause(rate);
         self.history.reset(Self::untitled());
         self.project_path = None;
         self.selection = None;

@@ -7,7 +7,7 @@ CI fails if this file is stale. The policy that every license must satisfy is in
 The list covers every target platform, so it includes crates that are only
 compiled on Windows, macOS or Linux.
 
-395 crates.
+408 crates.
 
 ## By license
 
@@ -16,26 +16,27 @@ compiled on Windows, macOS or Linux.
 | `(MIT OR Apache-2.0) AND OFL-1.1 AND Ubuntu-font-1.0` | 1 |
 | `(MIT OR Apache-2.0) AND Unicode-3.0` | 1 |
 | `0BSD OR MIT OR Apache-2.0` | 1 |
-| `Apache-2.0` | 14 |
+| `Apache-2.0` | 15 |
 | `Apache-2.0 AND MIT` | 1 |
 | `Apache-2.0 OR GPL-2.0-only` | 1 |
-| `Apache-2.0 OR MIT` | 47 |
+| `Apache-2.0 OR MIT` | 48 |
 | `Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT` | 4 |
 | `BSD-2-Clause OR Apache-2.0 OR MIT` | 2 |
+| `BSD-2-Clause OR MIT OR Apache-2.0` | 1 |
 | `BSD-3-Clause` | 1 |
 | `BSD-3-Clause OR Apache-2.0` | 2 |
 | `BSD-3-Clause OR MIT OR Apache-2.0` | 2 |
 | `BSL-1.0` | 2 |
 | `ISC` | 1 |
-| `MIT` | 89 |
-| `MIT OR Apache-2.0` | 200 |
+| `MIT` | 90 |
+| `MIT OR Apache-2.0` | 205 |
 | `MIT OR Apache-2.0 OR LGPL-2.1-or-later` | 1 |
 | `MIT OR Apache-2.0 OR Zlib` | 6 |
 | `MIT OR Zlib OR Apache-2.0` | 1 |
 | `Unlicense OR MIT` | 7 |
 | `WTFPL` | 2 |
 | `Zlib` | 3 |
-| `Zlib OR Apache-2.0 OR MIT` | 6 |
+| `Zlib OR Apache-2.0 OR MIT` | 10 |
 
 ## Crates
 
@@ -52,6 +53,8 @@ compiled on Windows, macOS or Linux.
 | [`ahash`](https://github.com/tkaitchuck/ahash) | 0.8.12 | `MIT OR Apache-2.0` |
 | [`aho-corasick`](https://github.com/BurntSushi/aho-corasick) | 1.1.5 | `Unlicense OR MIT` |
 | [`allocator-api2`](https://github.com/zakarumych/allocator-api2) | 0.2.21 | `MIT OR Apache-2.0` |
+| [`alsa`](https://github.com/diwic/alsa-rs) | 0.11.0 | `Apache-2.0 OR MIT` |
+| [`alsa-sys`](https://github.com/diwic/alsa-sys) | 0.4.0 | `MIT` |
 | [`android-activity`](https://github.com/rust-mobile/android-activity) | 0.6.1 | `MIT OR Apache-2.0` |
 | [`android-properties`](https://github.com/miklelappo/android-properties) | 0.2.2 | `MIT` |
 | [`android_system_properties`](https://github.com/nical/android_system_properties) | 0.1.6 | `MIT OR Apache-2.0` |
@@ -104,10 +107,14 @@ compiled on Windows, macOS or Linux.
 | [`core-foundation-sys`](https://github.com/servo/core-foundation-rs) | 0.8.7 | `MIT OR Apache-2.0` |
 | [`core-graphics`](https://github.com/servo/core-foundation-rs) | 0.23.2 | `MIT OR Apache-2.0` |
 | [`core-graphics-types`](https://github.com/servo/core-foundation-rs) | 0.1.3 | `MIT OR Apache-2.0` |
+| [`coreaudio-rs`](https://github.com/RustAudio/coreaudio-rs.git) | 0.14.2 | `MIT OR Apache-2.0` |
+| [`cpal`](https://github.com/RustAudio/cpal) | 0.18.2 | `Apache-2.0` |
 | [`crc32fast`](https://github.com/srijs/rust-crc32fast) | 1.5.2 | `MIT OR Apache-2.0` |
+| [`crossbeam-channel`](https://github.com/crossbeam-rs/crossbeam) | 0.5.17 | `MIT OR Apache-2.0` |
 | [`crossbeam-utils`](https://github.com/crossbeam-rs/crossbeam) | 0.8.23 | `MIT OR Apache-2.0` |
 | [`crunchy`](https://github.com/eira-fransham/crunchy) | 0.2.4 | `MIT` |
 | [`cursor-icon`](https://github.com/rust-windowing/cursor-icon) | 1.2.0 | `MIT OR Apache-2.0 OR Zlib` |
+| [`dasp_sample`](https://github.com/rustaudio/sample.git) | 0.11.0 | `MIT OR Apache-2.0` |
 | [`dispatch`](http://github.com/SSheldon/rust-dispatch) | 0.2.0 | `MIT` |
 | [`dispatch2`](https://github.com/madsmtm/objc2) | 0.3.1 | `Zlib OR Apache-2.0 OR MIT` |
 | [`dlib`](https://github.com/elinorbgr/dlib) | 0.5.3 | `MIT` |
@@ -199,6 +206,7 @@ compiled on Windows, macOS or Linux.
 | [`litrs`](https://github.com/LukasKalbertodt/litrs) | 1.0.0 | `MIT OR Apache-2.0` |
 | [`lock_api`](https://github.com/Amanieu/parking_lot) | 0.4.14 | `MIT OR Apache-2.0` |
 | [`log`](https://github.com/rust-lang/log) | 0.4.34 | `MIT OR Apache-2.0` |
+| [`mach2`](https://github.com/JohnTitor/mach2) | 0.6.0 | `BSD-2-Clause OR MIT OR Apache-2.0` |
 | [`matchers`](https://github.com/hawkw/matchers) | 0.2.0 | `MIT` |
 | [`memchr`](https://github.com/BurntSushi/memchr) | 2.8.3 | `Unlicense OR MIT` |
 | [`memmap2`](https://github.com/RazrFalcon/memmap2-rs) | 0.9.11 | `MIT OR Apache-2.0` |
@@ -214,6 +222,7 @@ compiled on Windows, macOS or Linux.
 | [`nohash-hasher`](https://github.com/paritytech/nohash-hasher) | 0.2.0 | `Apache-2.0 OR MIT` |
 | [`nom`](https://github.com/Geal/nom) | 7.1.3 | `MIT` |
 | [`nu-ansi-term`](https://github.com/nushell/nu-ansi-term) | 0.50.3 | `MIT` |
+| [`num-derive`](https://github.com/rust-num/num-derive) | 0.4.2 | `MIT OR Apache-2.0` |
 | [`num-traits`](https://github.com/rust-num/num-traits) | 0.2.19 | `MIT OR Apache-2.0` |
 | [`num_cpus`](https://github.com/seanmonstar/num_cpus) | 1.17.0 | `MIT OR Apache-2.0` |
 | [`num_enum`](https://github.com/illicitonion/num_enum) | 0.7.6 | `BSD-3-Clause OR MIT OR Apache-2.0` |
@@ -221,8 +230,12 @@ compiled on Windows, macOS or Linux.
 | [`objc-sys`](https://github.com/madsmtm/objc2) | 0.3.5 | `MIT` |
 | [`objc2`](https://github.com/madsmtm/objc2) | 0.5.3, 0.6.5 | `MIT` |
 | [`objc2-app-kit`](https://github.com/madsmtm/objc2) | 0.2.2, 0.3.2 | `MIT` |
+| [`objc2-audio-toolbox`](https://github.com/madsmtm/objc2) | 0.3.2 | `Zlib OR Apache-2.0 OR MIT` |
+| [`objc2-avf-audio`](https://github.com/madsmtm/objc2) | 0.3.2 | `Zlib OR Apache-2.0 OR MIT` |
 | [`objc2-cloud-kit`](https://github.com/madsmtm/objc2) | 0.2.2 | `MIT` |
 | [`objc2-contacts`](https://github.com/madsmtm/objc2) | 0.2.2 | `MIT` |
+| [`objc2-core-audio`](https://github.com/madsmtm/objc2) | 0.3.2 | `Zlib OR Apache-2.0 OR MIT` |
+| [`objc2-core-audio-types`](https://github.com/madsmtm/objc2) | 0.3.2 | `Zlib OR Apache-2.0 OR MIT` |
 | [`objc2-core-data`](https://github.com/madsmtm/objc2) | 0.2.2 | `MIT` |
 | [`objc2-core-foundation`](https://github.com/madsmtm/objc2) | 0.3.2 | `Zlib OR Apache-2.0 OR MIT` |
 | [`objc2-core-graphics`](https://github.com/madsmtm/objc2) | 0.3.2 | `Zlib OR Apache-2.0 OR MIT` |
@@ -290,6 +303,7 @@ compiled on Windows, macOS or Linux.
 | [`regex-syntax`](https://github.com/rust-lang/regex) | 0.8.11 | `MIT OR Apache-2.0` |
 | [`renderdoc-sys`](https://github.com/ebkalderon/renderdoc-rs) | 1.1.0 | `MIT OR Apache-2.0` |
 | [`rfd`](https://github.com/PolyMeilex/rfd) | 0.17.2 | `MIT` |
+| [`rtrb`](https://github.com/mgeier/rtrb) | 0.4.0 | `MIT OR Apache-2.0` |
 | [`rustc-hash`](https://github.com/rust-lang-nursery/rustc-hash) | 1.1.0, 2.1.3 | `Apache-2.0 OR MIT` |
 | [`rustc_version`](https://github.com/djc/rustc-version-rs) | 0.4.1 | `MIT OR Apache-2.0` |
 | [`rustix`](https://github.com/bytecodealliance/rustix) | 0.38.44, 1.1.5 | `Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT` |

@@ -55,7 +55,8 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             mesa-vulkan-drivers libvulkan1 libxkbcommon-x11-0 libwayland-client0 \
             pkg-config clang libavcodec-dev libavformat-dev libavutil-dev \
-            libswscale-dev libswresample-dev libavfilter-dev libavdevice-dev
+            libswscale-dev libswresample-dev libavfilter-dev libavdevice-dev \
+            libasound2-dev
       - name: Install FFmpeg (macOS)
         if: runner.os == 'macOS'
         run: brew install ffmpeg pkg-config

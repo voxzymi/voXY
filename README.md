@@ -97,6 +97,14 @@ when loaded and saved. See [`docs/voxy-format.md`](docs/voxy-format.md).
 - golden-image tests for the renderer, run headless on lavapipe in CI;
 - CI on Windows, Linux, and macOS (both arm64 and x64).
 
+**Playback:**
+- Space plays and pauses; the playhead follows the **audio master clock**,
+  and video frames are scheduled against it.
+- Audio is output through `cpal`. Without an output device, a timer drives
+  the same clock.
+- Audio decoding (FFmpeg) is sample-accurate and resamples to the device
+  rate.
+
 **Alight Motion interoperability (groundwork):**
 - a lossless XML tree and zip/bare-file container: unedited files write back
   byte-for-byte;
@@ -140,7 +148,7 @@ voXY renders through Direct3D 12 or Vulkan.
 ```sh
 # build
 sudo apt install pkg-config clang libavcodec-dev libavformat-dev libavutil-dev \
-  libswscale-dev libswresample-dev libavfilter-dev libavdevice-dev
+  libswscale-dev libswresample-dev libavfilter-dev libavdevice-dev libasound2-dev
 # run
 sudo apt install libxkbcommon-x11-0 libwayland-client0 libvulkan1 mesa-vulkan-drivers
 ```

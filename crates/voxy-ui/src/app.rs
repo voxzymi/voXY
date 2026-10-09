@@ -4,8 +4,8 @@ use std::path::PathBuf;
 
 use egui::{Key, KeyboardShortcut, Modifiers, RichText, Ui};
 use egui_dock::{DockArea, DockState};
-use voxy_core::WorkingSpace;
 use voxy_core::command::SetWorkingSpace;
+use voxy_core::{Time, WorkingSpace};
 
 use crate::panels::{Panels, Tab, default_layout, working_space_label};
 use crate::state::EditorState;
@@ -125,6 +125,12 @@ impl VoxyApp {
         }
         if ctx.input(|i| i.key_pressed(Key::Escape)) {
             self.state.selection = None;
+        }
+        if ctx.input(|i| i.key_pressed(Key::Space)) {
+            self.state.toggle_playback();
+        }
+        if ctx.input(|i| i.key_pressed(Key::Home)) {
+            self.state.time = Time::ZERO;
         }
         // Count every press (and auto-repeat) this frame, not just whether a
         // key went down, so fast stepping never drops frames.
@@ -292,6 +298,10 @@ impl VoxyApp {
                     ),
                 );
             }
+            if let Some(label) = self.state.transport.output_label() {
+                ui.separator();
+                ui.weak(label);
+            }
             if let Some(s) = &self.state.status {
                 ui.separator();
                 if s.is_error {
@@ -366,6 +376,19 @@ impl eframe::App for VoxyApp {
 
         if self.pending.is_none() && !self.show_about {
             self.shortcuts(&ctx);
+        }
+
+        // Playback: the master clock moves the playhead.
+        let comp = self.state.history.current().root().clone();
+        if let Some(t) = self
+            .state
+            .transport
+            .tick(self.state.time, comp.duration, comp.frame_rate)
+        {
+            self.state.time = t;
+        }
+        if self.state.transport.is_playing() {
+            ctx.request_repaint();
         }
 
         egui::Panel::top("voxy-menu").show(ui, |ui| self.menu_bar(ui));
