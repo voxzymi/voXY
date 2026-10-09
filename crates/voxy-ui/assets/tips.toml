@@ -1,0 +1,156 @@
+# Tips shown on the empty-state screen (docs/design-project-panel.md §4.5).
+#
+# Rules (checked by a test in src/tips.rs):
+# - every tip describes a feature that exists in this build; tips for later
+#   milestones are added with those milestones;
+# - `{action:<id>}` becomes the action's menu label and its current shortcut,
+#   `{key:<id>}` only the shortcut, so a rebound key is always right;
+# - at most 160 characters after substitution; unique ids; no raw braces.
+
+[[tip]]
+id = "new-composition"
+text = "Press {key:file.new_composition} to create a composition from your project's default settings."
+
+[[tip]]
+id = "from-footage"
+text = "{action:file.new_composition_from_footage} makes a composition that matches your footage."
+
+[[tip]]
+id = "undo-redo"
+text = "{action:edit.undo} steps back one edit, even a whole drag. {key:edit.redo} brings it back."
+
+[[tip]]
+id = "autosave"
+text = "voXY autosaves as you work and offers to recover your project after a crash."
+
+[[tip]]
+id = "autosave-setting"
+text = "Autosave runs a minute after an edit. Change autosave_seconds in preferences.toml (0 turns it off)."
+
+[[tip]]
+id = "play"
+text = "{action:transport.play_pause} plays and pauses. {key:transport.step_forward} and {key:transport.step_back} move one frame at a time."
+
+[[tip]]
+id = "go-to-start"
+text = "{action:transport.start} jumps the playhead back to the start of the composition."
+
+[[tip]]
+id = "ruler"
+text = "Click or drag the timeline ruler to move the playhead. It snaps to whole frames."
+
+[[tip]]
+id = "timeline-zoom"
+text = "Hold Ctrl (Cmd on a Mac) and scroll over the timeline to zoom around the pointer. Scroll sideways to pan."
+
+[[tip]]
+id = "keyframe-select"
+text = "Click a keyframe to select it. Hold Shift or Ctrl to add more, then drag to move them together."
+
+[[tip]]
+id = "layer-bars"
+text = "Drag a layer's bar in the timeline to move it, or drag its ends to trim it."
+
+[[tip]]
+id = "value-and-speed"
+text = "The graph editor shows Value or Speed. Speed makes sudden jumps and overshoot easy to see."
+
+[[tip]]
+id = "parametric-easings"
+text = "Give a keyframe segment a Spring, Bounce, Oscillation, Steps or Stepped Ramp easing in the graph editor."
+
+[[tip]]
+id = "curve-handles"
+text = "Drag the yellow and white handles on a parametric curve to shape it. The values show while you drag."
+
+[[tip]]
+id = "reset-handle"
+text = "Double-click a curve handle to put its parameter back to the default."
+
+[[tip]]
+id = "copy-paste-easing"
+text = "{action:ease.copy} and {action:ease.paste} carry an easing from one keyframe segment to another."
+
+[[tip]]
+id = "apply-to-many"
+text = "Select several keyframes, then use the Keyframe menu to give them all an easing in one undo step."
+
+[[tip]]
+id = "easing-presets"
+text = "Save an easing under a name in the graph editor. It stays in your preset strip for every project."
+
+[[tip]]
+id = "steps-jumps"
+text = "A Steps easing can jump at the start, at the end, at both or at neither. Pick what suits your motion."
+
+[[tip]]
+id = "bounce"
+text = "A Bounce easing's Bounciness sets how much height it keeps after each hit. Low values settle quickly."
+
+[[tip]]
+id = "spring-overshoot"
+text = "A Spring easing shows its peak overshoot as a percentage: how far it swings past the end value."
+
+[[tip]]
+id = "project-search"
+text = "Type in the Project panel's search box to filter footage and compositions. The × next to it clears the search."
+
+[[tip]]
+id = "project-sort"
+text = "Click a column heading in the Project panel to sort by it. Sort by Type to group compositions together."
+
+[[tip]]
+id = "folders"
+text = "{key:project_panel.new_folder} makes a folder in the Project panel. Drag items onto it to tidy up."
+
+[[tip]]
+id = "rename"
+text = "Select an item in the Project panel and press {key:project_panel.rename} to rename it."
+
+[[tip]]
+id = "duplicate"
+text = "{action:project_panel.duplicate} copies the selected compositions, layers and all."
+
+[[tip]]
+id = "open-composition"
+text = "Double-click a composition in the Project panel to open it in the timeline and viewport."
+
+[[tip]]
+id = "import-without-comp"
+text = "{action:file.import} adds images and video to the Project panel without creating a composition."
+
+[[tip]]
+id = "drag-files-in"
+text = "Drag image and video files from your file manager straight into the Project panel to import them."
+
+[[tip]]
+id = "safe-remove"
+text = "Removing footage that layers use asks first, and it never deletes the file from your disk."
+
+[[tip]]
+id = "relink"
+text = "If footage shows as missing, right-click it and choose Relink… Every layer that uses it follows."
+
+[[tip]]
+id = "reveal-source"
+text = "Select a layer and use {action:reveal.source_in_project} to find its footage in the Project panel."
+
+[[tip]]
+id = "reveal-file"
+text = "{action:reveal.in_file_manager} shows the selected footage's file in your system's file manager."
+
+[[tip]]
+id = "comp-settings"
+text = "{action:composition.settings} changes the open composition's size, rate, duration and background."
+
+[[tip]]
+id = "comp-presets"
+text = "In Composition Settings, Save preset keeps your size, rate and duration for next time."
+
+[[tip]]
+id = "reset-layout"
+text = "Window > Reset Layout puts the panels back where they started."
+
+[[tip]]
+id = "new-project"
+text = "{key:file.new_project} starts a new, empty project. Nothing is created in it until you make a composition."

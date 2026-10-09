@@ -24,9 +24,15 @@ const STACK_BELOW: f32 = 560.0;
 const ASPECT: f32 = 0.7;
 const TILE_MIN: Vec2 = vec2(120.0, 84.0);
 /// Room the Tip of the Day needs under the tiles, and the height under which
-/// it is hidden.
+/// it is hidden. The design said "under 340", but the default layout's
+/// timeline pane is only about 220 points tall, where that would hide the tip
+/// for everyone. The rule is now: the tip shows when the smallest tiles and
+/// the tip both fit (180 points side by side, 276 stacked), and the tiles
+/// shrink to make room.
 const TIP_HEIGHT: f32 = 72.0;
-const TIP_MIN_HEIGHT: f32 = 340.0;
+/// Width the tip's text wraps at in the narrowest layout; every tip fits two
+/// lines at this width (a test measures them).
+pub const TIP_TEXT_WIDTH: f32 = 320.0;
 /// Under this height the tiles become two compact buttons.
 const COMPACT_BELOW: f32 = 200.0;
 /// Space kept around everything.
@@ -77,8 +83,15 @@ impl Layout {
 /// - A tile is `clamp(available / 2 - gap, 220, 320)` wide (stacked:
 ///   `clamp(available - 32, 160, 320)`) and 0.7 of that high.
 /// - Short areas shrink the tiles (never below 120 × 84), then hide the tip
-///   (under 340), then replace the tiles by two compact buttons (under 200).
+///   (when it cannot fit with them), then replace the tiles by two compact buttons (under 200).
+#[cfg(test)]
 pub fn empty_state_layout(width: f32, height: f32) -> Layout {
+    layout(width, height, true)
+}
+
+/// [`empty_state_layout`], with `want_tip` false when there is no tip to
+/// show (tips turned off): its space then goes to the tiles.
+fn layout(width: f32, height: f32, want_tip: bool) -> Layout {
     let arrangement = if width >= STACK_BELOW {
         Arrangement::Row
     } else {
@@ -104,7 +117,11 @@ pub fn empty_state_layout(width: f32, height: f32) -> Layout {
             show_tip: false,
         };
     }
-    let show_tip = height >= TIP_MIN_HEIGHT;
+    let smallest_tiles = match arrangement {
+        Arrangement::Row => TILE_MIN.y,
+        Arrangement::Column => TILE_MIN.y * 2.0 + gap,
+    };
+    let show_tip = want_tip && height >= smallest_tiles + 3.0 * MARGIN + TIP_HEIGHT;
     let mut w = match arrangement {
         Arrangement::Row => (width / 2.0 - gap).clamp(220.0, 320.0),
         Arrangement::Column => (width - 32.0).clamp(160.0, 320.0),
@@ -153,7 +170,12 @@ enum Icon {
 /// The timeline area while no composition is open.
 pub fn show(ui: &mut Ui, state: &mut EditorState) {
     let avail = ui.available_rect_before_wrap();
-    let layout = empty_state_layout(avail.width(), avail.height());
+    let tip = if state.prefs.show_tips {
+        state.tip_text(ui.ctx())
+    } else {
+        None
+    };
+    let layout = layout(avail.width(), avail.height(), tip.is_some());
     let content = layout.content_size();
     let origin = pos2(
         avail.center().x - content.x / 2.0,
@@ -179,6 +201,15 @@ pub fn show(ui: &mut Ui, state: &mut EditorState) {
         Icon::Footage,
         "Uses the footage selected in the Project panel. With nothing selected, opens a file picker.",
     );
+    if let (true, Some(text)) = (layout.show_tip, tip) {
+        let top = rects[0].bottom().max(rects[1].bottom()) + MARGIN;
+        let width = (avail.width() - 2.0 * MARGIN).min(content.x.max(TIP_TEXT_WIDTH + 40.0));
+        let area = Rect::from_min_size(
+            pos2(avail.center().x - width / 2.0, top),
+            vec2(width, TIP_HEIGHT),
+        );
+        tip_row(ui, state, area, &text);
+    }
     // Allocate the space so the parent knows it was used.
     ui.allocate_rect(avail, Sense::hover());
 
@@ -190,6 +221,43 @@ pub fn show(ui: &mut Ui, state: &mut EditorState) {
         state.new_comp_from_files(&dropped);
     } else if footage.clicked() {
         state.perform(Action::FileNewCompositionFromFootage);
+    }
+}
+
+/// The Tip of the Day: a lightbulb, a heading, the text and a "Next tip"
+/// button.
+fn tip_row(ui: &mut Ui, state: &mut EditorState, area: Rect, text: &str) {
+    ui.scope_builder(UiBuilder::new().max_rect(area), |ui| {
+        ui.horizontal_top(|ui| {
+            let (bulb, _) = ui.allocate_exact_size(vec2(24.0, 28.0), Sense::hover());
+            draw_bulb(
+                ui.painter(),
+                bulb,
+                Stroke::new(1.5, ui.visuals().weak_text_color()),
+            );
+            ui.vertical(|ui| {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Tip of the Day").strong());
+                    if ui.small_button("Next tip").clicked() {
+                        state.next_tip();
+                    }
+                });
+                ui.add(egui::Label::new(text).wrap());
+            });
+        });
+    });
+}
+
+/// A lightbulb in line art: a round glass and a base.
+fn draw_bulb(painter: &egui::Painter, rect: Rect, stroke: Stroke) {
+    let c = pos2(rect.center().x, rect.top() + rect.height() * 0.4);
+    let r = rect.width().min(rect.height()) * 0.32;
+    painter.circle_stroke(c, r, stroke);
+    for dy in [r + 3.0, r + 6.0] {
+        painter.line_segment(
+            [pos2(c.x - r * 0.5, c.y + dy), pos2(c.x + r * 0.5, c.y + dy)],
+            stroke,
+        );
     }
 }
 
@@ -439,8 +507,13 @@ mod tests {
 
     #[test]
     fn the_tip_hides_when_short_and_tiles_become_buttons_when_shorter() {
-        assert!(empty_state_layout(800.0, 340.0).show_tip);
-        assert!(!empty_state_layout(800.0, 339.0).show_tip);
+        // Side by side: 84 + 3 * 8 + 72 = 180 is the least that fits, and
+        // under 200 the tiles are compact buttons anyway.
+        assert!(empty_state_layout(800.0, 200.0).show_tip);
+        assert!(!empty_state_layout(800.0, 199.0).show_tip);
+        // Stacked needs two minimum tiles: 2 * 84 + 12 + 24 + 72 = 276.
+        assert!(empty_state_layout(359.0, 276.0).show_tip);
+        assert!(!empty_state_layout(359.0, 275.0).show_tip);
         assert!(!empty_state_layout(800.0, 200.0).compact);
         let c = empty_state_layout(800.0, 199.0);
         assert!(c.compact && !c.show_tip);
@@ -584,5 +657,49 @@ mod tests {
         let mut out = ctx.run_ui(input, |ui| show(ui, &mut state));
         out.textures_delta.clear();
         assert!(state.history.current().comps.is_empty() && state.status.is_none());
+    }
+
+    #[test]
+    fn the_tip_shows_next_tip_advances_and_it_can_be_turned_off() {
+        let (ctx, mut state) = fresh();
+        state.choose_startup_tip(1);
+        let first = state.tip.unwrap();
+        assert!(state.tip_text(&ctx).is_some_and(|t| !t.is_empty()));
+        state.next_tip();
+        assert_eq!(state.tip, crate::tips::next_tip(crate::tips::all(), first));
+        assert_eq!(
+            state.prefs.last_tip.as_deref(),
+            Some(crate::tips::all()[state.tip.unwrap()].id.as_str()),
+            "Next tip updates the remembered tip"
+        );
+        // Drawing with tips on and off must not panic, and off leaves the
+        // tiles bigger (the tip's space goes to them).
+        frame(&ctx, &mut state, vec![]);
+        state.prefs.show_tips = false;
+        frame(&ctx, &mut state, vec![]);
+        assert!(layout(800.0, 400.0, false).tile.y >= layout(800.0, 400.0, true).tile.y);
+    }
+
+    #[test]
+    fn the_startup_tip_differs_from_last_launchs_and_is_saved() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("prefs.toml");
+        let mut previous = None;
+        for seed in 0..40u64 {
+            let (_, mut state) = fresh();
+            state.prefs_path = Some(path.clone());
+            state.prefs = crate::prefs::Preferences::load_from(&path);
+            state.choose_startup_tip(seed.wrapping_mul(7919));
+            let id = crate::tips::all()[state.tip.unwrap()].id.clone();
+            assert_ne!(Some(&id), previous.as_ref(), "launch {seed}");
+            assert_eq!(
+                crate::prefs::Preferences::load_from(&path)
+                    .last_tip
+                    .as_ref(),
+                Some(&id),
+                "saved"
+            );
+            previous = Some(id);
+        }
     }
 }

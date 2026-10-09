@@ -57,6 +57,7 @@ impl VoxyApp {
         if let Some(path) = &state.prefs_path {
             state.prefs = crate::prefs::Preferences::load_from(path);
         }
+        state.choose_startup_tip(clock_seed());
         state.gpu_max_texture = viewport
             .as_ref()
             .map(ViewportRenderer::max_texture_dimension);
@@ -229,6 +230,11 @@ impl VoxyApp {
                     }
                 }
                 ui.separator();
+                let mut tips = self.state.prefs.show_tips;
+                if ui.checkbox(&mut tips, "Show Tips").changed() {
+                    self.state.prefs.show_tips = tips;
+                    self.state.save_prefs();
+                }
                 if ui.button("Reset Layout").clicked() {
                     self.dock = default_layout();
                     ui.close();
@@ -475,4 +481,11 @@ impl eframe::App for VoxyApp {
             self.state.history.end_interaction();
         }
     }
+}
+
+/// A seed from the clock, for picking the Tip of the Day (and nothing else).
+fn clock_seed() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos() as u64)
 }

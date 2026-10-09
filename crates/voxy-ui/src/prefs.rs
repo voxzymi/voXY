@@ -94,6 +94,11 @@ pub struct Preferences {
     /// seconds; `0` turns autosave off. There is no settings dialog yet:
     /// edit `preferences.toml`.
     pub autosave_seconds: u32,
+    /// Show the Tip of the Day on the empty-state screen (Window > Show
+    /// Tips).
+    pub show_tips: bool,
+    /// The `id` of the tip shown last, so the next launch picks another.
+    pub last_tip: Option<String>,
 }
 
 impl Default for Preferences {
@@ -103,6 +108,8 @@ impl Default for Preferences {
             easing_presets: Vec::new(),
             comp_dialog: DialogMemory::default(),
             autosave_seconds: DEFAULT_AUTOSAVE_SECONDS,
+            show_tips: true,
+            last_tip: None,
         }
     }
 }
@@ -432,5 +439,23 @@ mod tests {
         assert!(p.comp_dialog.lock_aspect);
         assert!(p.comp_dialog.keep_layers && p.comp_dialog.live_preview);
         assert_eq!(p.user_presets.len(), 0);
+    }
+
+    #[test]
+    fn tips_are_on_by_default_and_remembered() {
+        let p = Preferences::default();
+        assert!(p.show_tips && p.last_tip.is_none());
+        let old = Preferences::parse("autosave_seconds = 15");
+        assert!(
+            old.show_tips && old.last_tip.is_none(),
+            "older files get defaults"
+        );
+        let off = Preferences::parse("show_tips = false\nlast_tip = \"reset-layout\"");
+        assert!(!off.show_tips);
+        assert_eq!(off.last_tip.as_deref(), Some("reset-layout"));
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("p.toml");
+        off.save_to(&path).unwrap();
+        assert_eq!(Preferences::load_from(&path), off);
     }
 }

@@ -81,6 +81,8 @@ pub struct EditorState {
     pub dialog_tab: DialogTab,
     /// The "items differ" question of New Composition From Footage.
     pub footage_prompt: Option<crate::footage::Prompt>,
+    /// Index into [`crate::tips::all`] of the tip on the empty-state screen.
+    pub tip: Option<usize>,
     pub prefs: Preferences,
     /// The easing last copied with "Copy Easing" (or the graph editor's Copy
     /// button). Lives for the session.
@@ -126,6 +128,7 @@ impl EditorState {
             comp_dialog: None,
             dialog_tab: DialogTab::Basic,
             footage_prompt: None,
+            tip: None,
             prefs: Preferences::default(),
             ease_clipboard: None,
             recovery: None,
@@ -652,6 +655,53 @@ impl EditorState {
         if self.prefs.comp_dialog != memory {
             self.prefs.comp_dialog = memory;
             self.save_prefs();
+        }
+    }
+
+    /// Picks this launch's tip: random, and never the one shown last time.
+    /// `seed` comes from the clock; it is used for nothing else.
+    pub fn choose_startup_tip(&mut self, seed: u64) {
+        self.tip = crate::tips::pick_tip(crate::tips::all(), self.prefs.last_tip.as_deref(), seed);
+        self.remember_tip();
+    }
+
+    /// "Next tip": the following tip in file order.
+    pub fn next_tip(&mut self) {
+        let current = self.tip.unwrap_or(0);
+        self.tip = crate::tips::next_tip(crate::tips::all(), current);
+        self.remember_tip();
+    }
+
+    fn remember_tip(&mut self) {
+        let Some(tip) = self.tip.and_then(|i| crate::tips::all().get(i)) else {
+            return;
+        };
+        if self.prefs.last_tip.as_deref() != Some(tip.id.as_str()) {
+            self.prefs.last_tip = Some(tip.id.clone());
+            self.save_prefs();
+        }
+    }
+
+    /// The tip's text with labels and the current shortcuts filled in, or
+    /// `None` when there is no tip or it cannot be written (a bad tip is
+    /// logged and skipped rather than shown broken).
+    pub fn tip_text(&self, ctx: &egui::Context) -> Option<String> {
+        let tip = crate::tips::all().get(self.tip?)?;
+        let resolve = |id: &str| {
+            let action = Action::from_id(id)?;
+            let key = self
+                .keymap
+                .bindings(action)
+                .first()
+                .map(|s| ctx.format_shortcut(s));
+            Some((action.label().to_owned(), key))
+        };
+        match crate::tips::render(&tip.text, &resolve) {
+            Ok(text) => Some(text),
+            Err(e) => {
+                tracing::warn!("tip {:?} skipped: {e}", tip.id);
+                None
+            }
         }
     }
 
@@ -1786,13 +1836,17 @@ mod tests {
         let mut s = recovering(dir.path(), true);
         let project = dir.path().join("P.voxy");
         let auto = recovery::autosave_path(&project);
+        // The autosave must be strictly newer than the project file, which
+        // `recovering` just saved: leave a gap larger than the file system's
+        // timestamp granularity.
+        std::thread::sleep(Duration::from_millis(50));
         edit_something(&mut s);
         let t0 = Instant::now();
         s.autosave_tick(t0, false);
         s.autosave_tick(t0 + Duration::from_secs(10), false);
         let crashed_doc = Document::clone(s.history.current());
         // The window dies; a new one opens the project.
-        std::thread::sleep(Duration::from_millis(20));
+        std::thread::sleep(Duration::from_millis(50));
         let mut s2 = recovering(dir.path(), false);
         s2.pending_recovery = None;
         // (recovering() made a fresh composition; open_path replaces it.)
@@ -1825,7 +1879,7 @@ mod tests {
         let project = dir.path().join("P.voxy");
         persist::save(s.history.current(), &project).unwrap();
         let auto = recovery::autosave_path(&project);
-        std::thread::sleep(Duration::from_millis(20));
+        std::thread::sleep(Duration::from_millis(50));
         std::fs::write(&auto, "this is not a project").unwrap();
         s.open_path(&project);
         assert!(s.pending_recovery.is_some());

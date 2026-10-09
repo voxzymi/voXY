@@ -25,6 +25,7 @@ mod reveal;
 mod state;
 mod theme;
 mod timeline;
+mod tips;
 mod transport;
 mod viewport;
 

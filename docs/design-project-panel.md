@@ -452,7 +452,7 @@ What landed, and where it refines the design above.
 - **Empty-state screen** (`empty_state.rs`). Shows in the timeline area while
   no composition is open. `empty_state_layout(width, height)` is the pure
   layout of §4.4 (side by side from 560 points, stacked below, tiles shrink to
-  120 × 84, the tip space hides under 340, compact buttons under 200) and is
+  120 × 84, the tip hides when it cannot fit with the smallest tiles, which is 200 points side by side and 276 stacked (the design said under 340, but the default layout's timeline pane is only about 220 points tall), compact buttons under 200) and is
   tested for overlap and fit over a grid of sizes. The viewport shows only
   "No composition open" and the hint (Q3); the graph editor a weak notice.
   Tiles are painter-drawn line art, focusable, activated by click, Enter or
@@ -479,3 +479,28 @@ What landed, and where it refines the design above.
     display order is not available to the command layer yet).
 - **Not in P-C:** the Tip of the Day (P-D). The layout already reserves its
   space and hides it when short.
+
+## Implementation notes (P-D, part 1: Tip of the Day)
+
+- `crates/voxy-ui/assets/tips.toml` holds 36 original tips, embedded with
+  `include_str!` and parsed once (`tips.rs`). The `toml` crate was already a
+  dependency (preferences). `{action:<id>}` becomes the action's menu label
+  plus its current shortcut; `{key:<id>}` (added) is the shortcut alone, for
+  actions whose menu label reads badly in a sentence ("Composition", "Folder").
+- **Selection.** `pick_tip(tips, last, seed)` is pure: it draws from every tip
+  except the last one shown. The seed is the clock at launch and is used for
+  nothing else, so projects and renders are unaffected. "Next tip" moves to
+  the next tip in file order. Both write `last_tip` to the preferences.
+- **Preferences.** `show_tips` (default on) and `last_tip`, in
+  `preferences.toml`, never in a project. Window > Show Tips toggles the
+  first. Older preference files load with the defaults.
+- **Validator** (tests in `tips.rs`): at least 30 tips; unique, non-empty ids
+  and text; every placeholder resolves to a real action; no raw braces left;
+  every `{key:…}` action has a default shortcut; at most 160 characters after
+  substitution; at most two lines when laid out at 320 points in a headless
+  egui context. A tip must describe something that exists in this build.
+- **Placement.** Under the tiles on the empty-state screen, with a lightbulb,
+  "Tip of the Day" and a Next tip button; it hides when it cannot fit with the
+  smallest tiles. Tab order is New Composition, From Footage, Next tip.
+- **Still to do in P-D:** saving the dock layout, saved shortcut overrides and
+  the shortcut editor (see [`deferred.md`](deferred.md)).
