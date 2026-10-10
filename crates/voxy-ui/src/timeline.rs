@@ -466,6 +466,7 @@ fn bar_color(layer: &Layer, time: Time) -> Color32 {
         LayerKind::Video { .. } => Color32::from_rgb(70, 110, 190),
         LayerKind::Precomp { .. } => Color32::from_rgb(170, 120, 60),
         LayerKind::Placeholder { .. } => Color32::from_rgb(110, 110, 110),
+        LayerKind::Adjustment => Color32::from_rgb(150, 150, 175),
     }
 }
 

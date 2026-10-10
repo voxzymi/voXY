@@ -51,7 +51,7 @@ MyProject.assets/
 | 0.4.0 | Media pool and compositions: folders, the optional `main_comp` (replacing `root_comp`), project settings, composition pixel aspect and work area, `precomp` and `placeholder` layers, asset `content_hash`, `audio` and `folder`, and the `ui_state` envelope field. | `root_comp` is renamed `main_comp`. Everything else is new and optional: no folders, square pixels, no work area, default project settings. A 0.3.0 project opens as one main composition with its media at the top level. |
 | 0.5.0 | Composition Settings: optional composition fields `start_offset` (flicks), `drop_frame` and `preview_resolution` (`full`, `half`, `third`, `quarter`, `{"custom": n}`), and the same three in `meta.settings.new_comp`. `ui_state.comp_settings.tab`. | None needed: missing fields take their defaults (0, false, full). A 0.4.0 project opens unchanged. |
 | 0.6.0 | Parametric easings: a keyframe's `interp` may also be an object with one key: `spring`, `bounce`, `oscillation`, `steps` or `stepped_ramp`, whose value holds that easing's parameters (see `docs/design-graphs.md` §2 and §3 for names and ranges; missing parameters take their defaults; out-of-range values make the file invalid). | None needed: every 0.5.0 file is valid 0.6.0 content. **A project is written as 0.6.0 only if a keyframe uses one of these easings; otherwise it is still written as 0.5.0**, so projects that do not use the feature keep opening in older builds. Older builds refuse 0.6.0 files with the "newer than supported" message. |
-| 0.7.0 | Effects: the optional layer field `effects` (see [Effect](#effect)), and the parameter value types `layer`, `curve` and `asset`. | None needed: every 0.6.0 file is valid 0.7.0 content. **A project is written as 0.7.0 only if a layer has at least one effect**; otherwise 0.6.0 or 0.5.0 as above. Older builds refuse 0.7.0 files with the "newer than supported" message. |
+| 0.7.0 | Effects: the optional layer field `effects` (see [Effect](#effect)), and the parameter value types `layer`, `curve` and `asset`. | None needed: every 0.6.0 file is valid 0.7.0 content. Also the blend modes other than `normal` and the `adjustment` layer kind. **A project is written as 0.7.0 only if a layer has at least one effect, a blend mode other than `normal`, or is an adjustment layer**; otherwise 0.6.0 or 0.5.0 as above. Older builds refuse 0.7.0 files with the "newer than supported" message. |
 
 Before writing, voXY validates the document and refuses to write an invalid
 one. Saving is atomic: the file is written to a temporary file in the same
@@ -145,7 +145,7 @@ Items inside a folder have no stored order; the project panel sorts them.
 | `start_offset` | flicks | Source time at `in_point`. |
 | `parent` | ID | Optional. Must be a layer in the same composition. Cycles are invalid. |
 | `transform` | Transform | |
-| `blend_mode` | `"normal"` | More modes arrive in Milestone E-B. |
+| `blend_mode` | `"normal"`, or (0.7.0) `"multiply"`, `"screen"`, `"overlay"`, `"soft_light"`, `"hard_light"`, `"add"`, `"subtract"`, `"difference"`, `"color_dodge"`, `"color_burn"`, `"lighten"`, `"darken"`, `"hue"`, `"saturation"`, `"color"`, `"luminosity"` | Default `"normal"`. Formulas: `docs/design-effects-ofx.md` §3.7. |
 | `effects` | array of Effect | Optional (0.7.0). The effect stack: the first entry is applied first. Absent when empty. |
 | `flags` | `{ "visible", "locked" }` | |
 | `foreign` | object | Optional. |
@@ -158,6 +158,7 @@ Items inside a folder have no stored order; the project panel sorts them.
 { "type": "video", "asset": <ID> }
 { "type": "precomp", "comp": <ID>, "speed": 1.0, "looping": false,
   "time_remap": <Property precomp.time_remap, optional>, "collapse": false }
+{ "type": "adjustment" }
 { "type": "placeholder", "was": { "kind": "image" | "video" | "comp", "name": "…",
   "pixel_size": [w, h] (optional), "duration": <flicks> (optional) } }
 ```

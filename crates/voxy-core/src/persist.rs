@@ -11,6 +11,7 @@ use semver::Version;
 use serde::{Deserialize, Serialize};
 
 use crate::document::{Document, ValidationError};
+use crate::layer::{BlendMode, LayerKind};
 
 /// File extension of project files.
 pub const PROJECT_EXTENSION: &str = "voxy";
@@ -83,7 +84,8 @@ struct EnvelopeIn {
 /// The lowest format version that can represent `doc`:
 ///
 /// - 0.7.0 if any layer has effects (including placeholders for effects
-///   this build does not know);
+///   this build does not know), a blend mode other than Normal, or is an
+///   adjustment layer;
 /// - 0.6.0 if any keyframe uses a parametric easing (spring, bounce,
 ///   oscillation, steps, stepped ramp);
 /// - 0.5.0 otherwise.
@@ -92,10 +94,13 @@ struct EnvelopeIn {
 /// openable by older builds, which refuse (rather than misread) the files
 /// that need a newer version.
 pub fn required_version(doc: &Document) -> Version {
-    let effects = doc
-        .comps
-        .values()
-        .any(|comp| comp.layers.iter().any(|layer| !layer.effects.is_empty()));
+    let effects = doc.comps.values().any(|comp| {
+        comp.layers.iter().any(|layer| {
+            !layer.effects.is_empty()
+                || layer.blend_mode != BlendMode::Normal
+                || matches!(layer.kind, LayerKind::Adjustment)
+        })
+    });
     if effects {
         return FORMAT_VERSION;
     }
@@ -178,7 +183,8 @@ pub fn from_json_with_ui(json: &str) -> Result<(Document, Option<serde_json::Val
     //   in the project's new-composition defaults); no rewrite.
     // - 0.5.0 → 0.6.0: only adds the parametric `interp` values (`spring`,
     //   `bounce`, `oscillation`, `steps`, `stepped_ramp`); no rewrite.
-    // - 0.6.0 → 0.7.0: only adds the optional layer field `effects` and the
+    // - 0.6.0 → 0.7.0: only adds the optional layer field `effects`, blend
+    //   modes other than `normal`, the `adjustment` layer kind and the
     //   effect parameter value types `layer`, `curve` and `asset`; no
     //   rewrite.
     let env: EnvelopeIn = serde_json::from_str(json)?;

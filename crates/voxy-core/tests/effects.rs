@@ -323,3 +323,30 @@ fn effects_are_written_as_format_0_7_0_only_when_present() {
         Err(persist::LoadError::TooNew { .. })
     ));
 }
+
+#[test]
+fn blend_modes_and_adjustment_layers_need_format_0_7_0() {
+    let version = |d: &Document| {
+        let v: serde_json::Value =
+            serde_json::from_str(&persist::to_json(d).expect("save")).expect("json");
+        v["format_version"].as_str().expect("version").to_owned()
+    };
+    let (mut doc, layer) = doc_with_solid();
+    for mode in voxy_core::BlendMode::ALL {
+        doc.layer_mut(layer).unwrap().blend_mode = mode;
+        let want = if mode == voxy_core::BlendMode::Normal {
+            "0.5.0"
+        } else {
+            "0.7.0"
+        };
+        assert_eq!(version(&doc), want, "{mode:?}");
+        let back = persist::from_json(&persist::to_json(&doc).unwrap()).unwrap();
+        assert_eq!(back.find_layer(layer).unwrap().1.blend_mode, mode);
+    }
+    doc.layer_mut(layer).unwrap().blend_mode = voxy_core::BlendMode::Normal;
+    doc.layer_mut(layer).unwrap().kind = voxy_core::LayerKind::Adjustment;
+    assert_eq!(version(&doc), "0.7.0");
+    let json = persist::to_json(&doc).unwrap();
+    assert!(json.contains("\"type\": \"adjustment\""));
+    assert_eq!(persist::from_json(&json).unwrap(), doc);
+}

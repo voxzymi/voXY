@@ -76,6 +76,9 @@ pub enum EvaluatedContent {
     },
     /// A placeholder for a removed source, at its remembered size.
     Placeholder { size: Option<DVec2> },
+    /// An adjustment layer: it draws nothing itself, and its effects apply
+    /// to the layers below it (rendered from Milestone E-D).
+    Adjustment,
 }
 
 /// The deepest chain of nested compositions that is evaluated: the root and
@@ -212,6 +215,7 @@ fn content(doc: &Document, layer: &Layer, time: Time, scope: &mut Scope) -> Eval
                 nested,
             }
         }
+        LayerKind::Adjustment => EvaluatedContent::Adjustment,
         LayerKind::Placeholder { was } => EvaluatedContent::Placeholder {
             size: was
                 .pixel_size

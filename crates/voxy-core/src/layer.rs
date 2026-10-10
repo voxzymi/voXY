@@ -138,6 +138,10 @@ pub enum LayerKind {
         #[serde(default)]
         collapse: bool,
     },
+    /// Applies its effect stack to everything below it in the composition,
+    /// between its in and out points (format 0.7.0). It has no pixels of
+    /// its own; of its transform only opacity is used.
+    Adjustment,
     /// Stands in for a source that was removed from the project (format
     /// 0.4.0). Draws a neutral placeholder at the remembered size.
     Placeholder { was: PlaceholderInfo },
@@ -151,6 +155,7 @@ impl LayerKind {
             LayerKind::Video { .. } => "Video",
             LayerKind::Precomp { .. } => "Precomp",
             LayerKind::Placeholder { .. } => "Placeholder",
+            LayerKind::Adjustment => "Adjustment",
         }
     }
 
@@ -169,18 +174,80 @@ impl LayerKind {
                 Some(SourceRef::Asset(*asset))
             }
             LayerKind::Precomp { comp, .. } => Some(SourceRef::Comp(*comp)),
-            LayerKind::Solid { .. } | LayerKind::Placeholder { .. } => None,
+            LayerKind::Solid { .. } | LayerKind::Placeholder { .. } | LayerKind::Adjustment => None,
         }
     }
 }
 
-/// How a layer combines with what is below it. More modes arrive in
-/// Milestone 5.
+/// How a layer combines with what is below it. The formulas are in
+/// `docs/design-effects-ofx.md` §3.7 (W3C Compositing and Blending Level 1,
+/// plus add and subtract). Every mode except `Normal` is format 0.7.0.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BlendMode {
     #[default]
     Normal,
+    Multiply,
+    Screen,
+    Overlay,
+    SoftLight,
+    HardLight,
+    Add,
+    Subtract,
+    Difference,
+    ColorDodge,
+    ColorBurn,
+    Lighten,
+    Darken,
+    Hue,
+    Saturation,
+    Color,
+    Luminosity,
+}
+
+impl BlendMode {
+    /// Every mode, in menu order.
+    pub const ALL: [BlendMode; 17] = [
+        BlendMode::Normal,
+        BlendMode::Multiply,
+        BlendMode::Screen,
+        BlendMode::Overlay,
+        BlendMode::SoftLight,
+        BlendMode::HardLight,
+        BlendMode::Add,
+        BlendMode::Subtract,
+        BlendMode::Difference,
+        BlendMode::ColorDodge,
+        BlendMode::ColorBurn,
+        BlendMode::Lighten,
+        BlendMode::Darken,
+        BlendMode::Hue,
+        BlendMode::Saturation,
+        BlendMode::Color,
+        BlendMode::Luminosity,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            BlendMode::Normal => "Normal",
+            BlendMode::Multiply => "Multiply",
+            BlendMode::Screen => "Screen",
+            BlendMode::Overlay => "Overlay",
+            BlendMode::SoftLight => "Soft Light",
+            BlendMode::HardLight => "Hard Light",
+            BlendMode::Add => "Add",
+            BlendMode::Subtract => "Subtract",
+            BlendMode::Difference => "Difference",
+            BlendMode::ColorDodge => "Color Dodge",
+            BlendMode::ColorBurn => "Color Burn",
+            BlendMode::Lighten => "Lighten",
+            BlendMode::Darken => "Darken",
+            BlendMode::Hue => "Hue",
+            BlendMode::Saturation => "Saturation",
+            BlendMode::Color => "Color",
+            BlendMode::Luminosity => "Luminosity",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

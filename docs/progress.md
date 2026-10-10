@@ -57,7 +57,11 @@ at `743b053` (merge of #3).
       group 1 built-in schemas. Group 1 is gaussian, box and directional
       blur, brightness/contrast, exposure (linear light), invert, tint, and
       hue/saturation/lightness. Enum parameters clamp to their choices.
-   4. `BlendMode` variants and `LayerKind::Adjustment` (model only).
+   4. **Done:** the 17 `BlendMode` variants and `LayerKind::Adjustment`,
+      model only: both are saved and loaded, and both write format 0.7.0
+      (D7). The renderer still composites every mode as Normal until E-B,
+      and draws nothing for adjustment layers until E-D. No UI sets either
+      yet.
    5. Commands: add, remove, move, duplicate, enable, rename, matte,
       paste, set blend mode, new adjustment layer, and clearing layer
       references on delete.

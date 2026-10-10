@@ -201,6 +201,8 @@ impl Builder<'_> {
                     }
                     Nested::OutsideChild | Nested::Missing => continue,
                 },
+                // Draws nothing itself; its effects are applied from E-D.
+                EvaluatedContent::Adjustment => continue,
             };
             self.draws.push(DrawOp {
                 source,
