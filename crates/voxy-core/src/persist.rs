@@ -19,7 +19,10 @@ pub const PACKAGE_EXTENSION: &str = "voxyz";
 /// Value of the envelope's `format` field.
 pub const FORMAT_ID: &str = "voxy-project";
 /// The format version this build writes, and the newest it reads.
-pub const FORMAT_VERSION: Version = Version::new(0, 6, 0);
+pub const FORMAT_VERSION: Version = Version::new(0, 7, 0);
+/// The version written for a document whose newest feature is parametric
+/// easing.
+const PARAMETRIC_VERSION: Version = Version::new(0, 6, 0);
 /// The version written for a document that uses nothing newer than 0.5.0.
 const BASE_VERSION: Version = Version::new(0, 5, 0);
 /// Version of the `ui_state` section this build writes. The section is
@@ -77,12 +80,25 @@ struct EnvelopeIn {
     ui_state: Option<serde_json::Value>,
 }
 
-/// The lowest format version that can represent `doc`: 0.6.0 if any keyframe
-/// uses a parametric easing (spring, bounce, oscillation, steps, stepped
-/// ramp), 0.5.0 otherwise. Writing the lowest version keeps projects that do
-/// not use newer features openable by older builds, which refuse (rather
-/// than misread) the files that need 0.6.0.
+/// The lowest format version that can represent `doc`:
+///
+/// - 0.7.0 if any layer has effects (including placeholders for effects
+///   this build does not know);
+/// - 0.6.0 if any keyframe uses a parametric easing (spring, bounce,
+///   oscillation, steps, stepped ramp);
+/// - 0.5.0 otherwise.
+///
+/// Writing the lowest version keeps projects that do not use newer features
+/// openable by older builds, which refuse (rather than misread) the files
+/// that need a newer version.
 pub fn required_version(doc: &Document) -> Version {
+    let effects = doc
+        .comps
+        .values()
+        .any(|comp| comp.layers.iter().any(|layer| !layer.effects.is_empty()));
+    if effects {
+        return FORMAT_VERSION;
+    }
     let parametric = doc.comps.values().any(|comp| {
         comp.layers.iter().any(|layer| {
             layer.properties().iter().any(|p| {
@@ -92,7 +108,7 @@ pub fn required_version(doc: &Document) -> Version {
         })
     });
     if parametric {
-        FORMAT_VERSION
+        PARAMETRIC_VERSION
     } else {
         BASE_VERSION
     }
@@ -162,6 +178,9 @@ pub fn from_json_with_ui(json: &str) -> Result<(Document, Option<serde_json::Val
     //   in the project's new-composition defaults); no rewrite.
     // - 0.5.0 → 0.6.0: only adds the parametric `interp` values (`spring`,
     //   `bounce`, `oscillation`, `steps`, `stepped_ramp`); no rewrite.
+    // - 0.6.0 → 0.7.0: only adds the optional layer field `effects` and the
+    //   effect parameter value types `layer`, `curve` and `asset`; no
+    //   rewrite.
     let env: EnvelopeIn = serde_json::from_str(json)?;
     let mut project = env.project;
     if found_core < Version::new(0, 4, 0) {
@@ -295,7 +314,8 @@ mod tests {
     #[test]
     fn newer_versions_are_refused() {
         let current = format!("\"{}\"", required_version(&sample()));
-        let json = to_json(&sample()).unwrap().replace(&current, "\"0.7.0\"");
+        let newer = format!("\"{}\"", Version::new(0, FORMAT_VERSION.minor + 1, 0));
+        let json = to_json(&sample()).unwrap().replace(&current, &newer);
         assert!(matches!(from_json(&json), Err(LoadError::TooNew { .. })));
         let json = to_json(&sample()).unwrap().replace(&current, "\"banana\"");
         assert!(matches!(from_json(&json), Err(LoadError::BadVersion(_))));
@@ -355,7 +375,7 @@ mod tests {
         }
         .apply(&mut doc)
         .unwrap();
-        assert_eq!(required_version(&doc), FORMAT_VERSION);
+        assert_eq!(required_version(&doc), PARAMETRIC_VERSION);
         let json = to_json(&doc).unwrap();
         assert!(json.contains("\"format_version\": \"0.6.0\""));
         assert_eq!(from_json(&json).unwrap(), doc);

@@ -281,3 +281,45 @@ fn find_effects_mut(v: &mut serde_json::Value) -> Option<&mut serde_json::Value>
         _ => None,
     }
 }
+
+#[test]
+fn effects_are_written_as_format_0_7_0_only_when_present() {
+    let (mut doc, layer) = doc_with_solid();
+    let version = |d: &Document| {
+        let v: serde_json::Value =
+            serde_json::from_str(&persist::to_json(d).expect("save")).expect("json");
+        v["format_version"].as_str().expect("version").to_owned()
+    };
+    assert_eq!(version(&doc), "0.5.0");
+    let fx = add_effect(
+        &mut doc,
+        layer,
+        "voxy.blur.box",
+        &[("radius", Value::Scalar(2.0))],
+    );
+    assert_eq!(version(&doc), "0.7.0");
+    let json = persist::to_json(&doc).unwrap();
+    assert_eq!(persist::from_json(&json).unwrap().next_id(), doc.next_id());
+
+    // A placeholder counts as an effect too.
+    doc.layer_mut(layer)
+        .unwrap()
+        .effect_mut(fx)
+        .unwrap()
+        .mark_missing(MissingReason::UnknownType);
+    assert_eq!(version(&doc), "0.7.0");
+
+    // Removing the last effect goes back to the older version.
+    doc.layer_mut(layer).unwrap().effects.clear();
+    assert_eq!(version(&doc), "0.5.0");
+
+    // A file from a newer build is refused, not misread.
+    let newer = json.replace(
+        "\"format_version\": \"0.7.0\"",
+        "\"format_version\": \"0.8.0\"",
+    );
+    assert!(matches!(
+        persist::from_json(&newer),
+        Err(persist::LoadError::TooNew { .. })
+    ));
+}

@@ -1,6 +1,6 @@
 # The `.voxy` project format
 
-**Format version: 0.6.0** (parametric easings, Milestone H-A; written only when used, see below)
+**Format version: 0.7.0** (effects, Milestone E-A; written only when used, see below)
 
 A voXY project is a single UTF-8 JSON file with the extension `.voxy`. Media
 the project uses lives in a sibling folder named `<name>.assets/`:
@@ -51,6 +51,7 @@ MyProject.assets/
 | 0.4.0 | Media pool and compositions: folders, the optional `main_comp` (replacing `root_comp`), project settings, composition pixel aspect and work area, `precomp` and `placeholder` layers, asset `content_hash`, `audio` and `folder`, and the `ui_state` envelope field. | `root_comp` is renamed `main_comp`. Everything else is new and optional: no folders, square pixels, no work area, default project settings. A 0.3.0 project opens as one main composition with its media at the top level. |
 | 0.5.0 | Composition Settings: optional composition fields `start_offset` (flicks), `drop_frame` and `preview_resolution` (`full`, `half`, `third`, `quarter`, `{"custom": n}`), and the same three in `meta.settings.new_comp`. `ui_state.comp_settings.tab`. | None needed: missing fields take their defaults (0, false, full). A 0.4.0 project opens unchanged. |
 | 0.6.0 | Parametric easings: a keyframe's `interp` may also be an object with one key: `spring`, `bounce`, `oscillation`, `steps` or `stepped_ramp`, whose value holds that easing's parameters (see `docs/design-graphs.md` §2 and §3 for names and ranges; missing parameters take their defaults; out-of-range values make the file invalid). | None needed: every 0.5.0 file is valid 0.6.0 content. **A project is written as 0.6.0 only if a keyframe uses one of these easings; otherwise it is still written as 0.5.0**, so projects that do not use the feature keep opening in older builds. Older builds refuse 0.6.0 files with the "newer than supported" message. |
+| 0.7.0 | Effects: the optional layer field `effects` (see [Effect](#effect)), and the parameter value types `layer`, `curve` and `asset`. | None needed: every 0.6.0 file is valid 0.7.0 content. **A project is written as 0.7.0 only if a layer has at least one effect**; otherwise 0.6.0 or 0.5.0 as above. Older builds refuse 0.7.0 files with the "newer than supported" message. |
 
 Before writing, voXY validates the document and refuses to write an invalid
 one. Saving is atomic: the file is written to a temporary file in the same
@@ -144,7 +145,8 @@ Items inside a folder have no stored order; the project panel sorts them.
 | `start_offset` | flicks | Source time at `in_point`. |
 | `parent` | ID | Optional. Must be a layer in the same composition. Cycles are invalid. |
 | `transform` | Transform | |
-| `blend_mode` | `"normal"` | More modes arrive in Milestone 5. |
+| `blend_mode` | `"normal"` | More modes arrive in Milestone E-B. |
+| `effects` | array of Effect | Optional (0.7.0). The effect stack: the first entry is applied first. Absent when empty. |
 | `flags` | `{ "visible", "locked" }` | |
 | `foreign` | object | Optional. |
 
@@ -179,6 +181,39 @@ renders the child's layers directly into this composition (2D).
 
 A **placeholder** layer (0.4.0) stands in for a source removed from the
 project and draws a grey rectangle of `pixel_size` if known.
+
+### Effect
+
+Format 0.7.0. One entry in a layer's `effects` array:
+
+```json
+{
+  "id": 42, "type": "voxy.blur.gaussian", "version": 1,
+  "name": "Gaussian Blur", "enabled": true,
+  "params": [ { "key": "radius", "id": 43, "static": { "type": "scalar", "value": 12.0 } } ],
+  "matte": { "layer": 7, "channel": "alpha", "invert": false }
+}
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | ID | |
+| `type` | string | The effect definition: `voxy.<group>.<name>` for built-ins, `ofx:<pluginIdentifier>` for OpenFX plugins. |
+| `version` | integer | The definition's version (built-ins), or the plugin's major version (OpenFX). |
+| `name` | string | Shown in the Properties panel; the user can rename it. |
+| `enabled` | bool | Default `true`. |
+| `params` | array of Property | Optional. Parameters in definition order. Each `key` is the parameter's own name, unique within the effect; its full property key is `fx:<type>/<key>` (built-ins) or `<type>/<key>` (OpenFX). |
+| `matte` | `{ "layer", "channel": "alpha" \| "luma", "invert" }` | Optional. Limits where the effect applies. A matte layer that does not exist is ignored. |
+| `ofx` | `{ "plugin", "version": [major, minor], "context", "bundle" }` | Optional; OpenFX effects only. `context` is `filter`, `generator`, `transition` or `general`. `bundle` is a hint for the user. |
+
+Any other field is kept and written back unchanged.
+
+An effect this build cannot use (an unknown `type`, a newer `version`, or
+parameters it cannot read) loads as a **placeholder**: it renders as
+pass-through with a warning, its parameters are read-only, and it is saved
+exactly as it was loaded, except for the fields voXY owns (`id`, `name`,
+`enabled`). It still needs `id`, `type`, `version` and `name`; an effect
+without them makes the file invalid.
 
 ### Transform
 
@@ -245,8 +280,13 @@ or keyframed:
   | `color` | `{ "r", "g", "b", "a" }` |
   | `enum` | integer |
   | `string` | string |
+  | `layer` (0.7.0) | layer ID or `null` |
+  | `curve` (0.7.0) | `{ "points": [[x, y], …] }`: 2 to 64 points, `x` strictly increasing, `x` and `y` in `[0, 1]`. Anything else makes the file invalid. |
+  | `asset` (0.7.0) | asset ID or `null` |
 
 - Non-finite numbers are invalid.
+- `layer`, `curve` and `asset` values, like `bool`, `enum` and `string`,
+  hold between keyframes and are never interpolated.
 
 #### Keyframes
 

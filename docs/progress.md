@@ -47,9 +47,11 @@ at `743b053` (merge of #3).
       - Placeholders: an effect that cannot be read keeps its JSON
         verbatim, and its parameter IDs stay reserved.
       - Validation covers effect IDs and parameter keys.
-   2b. **Next:** format 0.7.0, written whenever a project contains
-       effects. It is pulled forward so that no build ever saves effects
-       under an older version number.
+   2b. **Done:** format 0.7.0, written only when a layer has effects,
+       pulled forward so that no build ever saves effects under an older
+       version number. It is documented in `docs/voxy-format.md`. Blend
+       modes and adjustment layers join the 0.7.0 rule when they are added
+       (D7).
    3. The registry and the built-in definitions for group 1 (schemas only).
    4. `BlendMode` variants and `LayerKind::Adjustment` (model only).
    5. Commands: add, remove, move, duplicate, enable, rename, matte,

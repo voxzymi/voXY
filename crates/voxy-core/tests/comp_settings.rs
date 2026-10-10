@@ -303,7 +303,10 @@ fn files_before_0_5_open_with_defaults_and_new_fields_round_trip() {
     // A newer file is still refused.
     let newer = json.replace(
         "\"format_version\": \"0.5.0\"",
-        "\"format_version\": \"0.7.0\"",
+        &format!(
+            "\"format_version\": \"0.{}.0\"",
+            persist::FORMAT_VERSION.minor + 1
+        ),
     );
     assert!(persist::from_json(&newer).is_err());
 }
