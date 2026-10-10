@@ -13,7 +13,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use voxy_core::glam::{DAffine2, DVec2};
-use voxy_core::{AssetId, EvaluatedComp, EvaluatedContent, LinearRgba, Nested, Time, WorkingSpace};
+use voxy_core::{
+    AssetId, EvaluatedComp, EvaluatedContent, EvaluatedEffect, LinearRgba, Nested, Time, Value,
+    WorkingSpace,
+};
+
+use crate::kernels::Kernel;
 
 /// Settings that differ between preview and export. Everything else is
 /// shared, so a full-quality preview frame equals the exported frame.
@@ -55,6 +60,132 @@ pub enum DrawSource {
     /// background, at the child's size times the preview scale), then drawn
     /// like an image through the layer's transform with `opacity`.
     Comp { plan: Arc<RenderPlan>, opacity: f32 },
+    /// A layer with effects: `chain` renders its source and effects in
+    /// layer-local space, and the result is drawn through the layer's
+    /// transform with `opacity` (design-effects-ofx.md §3.1).
+    Chain { chain: Arc<ChainPlan>, opacity: f32 },
+}
+
+impl DrawSource {
+    /// The same source drawn with its opacity multiplied by `factor`.
+    #[must_use]
+    pub fn with_opacity(&self, factor: f32) -> DrawSource {
+        match self {
+            DrawSource::Solid(c) => DrawSource::Solid(c.map(|v| v * factor)),
+            DrawSource::Image { asset, opacity } => DrawSource::Image {
+                asset: *asset,
+                opacity: opacity * factor,
+            },
+            DrawSource::Video {
+                asset,
+                time,
+                opacity,
+            } => DrawSource::Video {
+                asset: *asset,
+                time: *time,
+                opacity: opacity * factor,
+            },
+            DrawSource::Comp { plan, opacity } => DrawSource::Comp {
+                plan: Arc::clone(plan),
+                opacity: opacity * factor,
+            },
+            DrawSource::Chain { chain, opacity } => DrawSource::Chain {
+                chain: Arc::clone(chain),
+                opacity: opacity * factor,
+            },
+        }
+    }
+}
+
+/// One effect of a chain: the kernel that runs it and its parameters at the
+/// frame time.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EffectNode {
+    pub kernel: Kernel,
+    pub effect: EvaluatedEffect,
+}
+
+/// A layer's source and effect stack, rendered in layer-local pixels at the
+/// preview scale before the layer's transform applies.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChainPlan {
+    /// The layer's content at full opacity (never a `Chain`).
+    pub source: DrawSource,
+    /// Size of the source in layer pixels; `None` for images and video
+    /// means the decoded size.
+    pub source_size: Option<DVec2>,
+    /// In application order.
+    pub effects: Vec<EffectNode>,
+    /// Preview resolution scale.
+    pub scale: f64,
+    pub working_space: WorkingSpace,
+    /// [`ChainPlan::content_key`].
+    key: u64,
+}
+
+impl ChainPlan {
+    pub fn new(
+        source: DrawSource,
+        source_size: Option<DVec2>,
+        effects: Vec<EffectNode>,
+        scale: f64,
+        working_space: WorkingSpace,
+    ) -> Self {
+        let mut chain = ChainPlan {
+            source,
+            source_size,
+            effects,
+            scale,
+            working_space,
+            key: 0,
+        };
+        let mut h = Fnv::new();
+        chain.hash_into(&mut h);
+        chain.key = h.0;
+        chain
+    }
+
+    /// A stable hash of everything that decides the chain's pixels: the
+    /// source, every effect's type, version and evaluated parameters (as
+    /// exact bits), the scale and the working space (design §3.3). It does
+    /// not depend on where the layer is placed, so moving a static layer
+    /// with static effects reuses its rendered chain.
+    pub fn content_key(&self) -> u64 {
+        self.key
+    }
+
+    fn hash_into(&self, h: &mut Fnv) {
+        h.u32(0xC4A1);
+        hash_source(&self.source, h);
+        hash_size(self.source_size, h);
+        h.u64(self.effects.len() as u64);
+        for node in &self.effects {
+            let fx = &node.effect;
+            h.str(fx.type_id.as_str());
+            h.u32(fx.version);
+            h.u64(fx.params.len() as u64);
+            for (name, value) in &fx.params {
+                h.str(name);
+                h.value(value);
+            }
+            match fx.matte {
+                Some(m) => {
+                    h.u32(1);
+                    h.u64(m.layer.raw());
+                    h.u32(u32::from(m.invert) | (m.channel as u32) << 1);
+                }
+                None => h.u32(0),
+            }
+            if node.kernel.uses_frame() {
+                h.u64(fx.frame as u64);
+            }
+        }
+        h.f64(self.scale);
+        h.u32(match self.working_space {
+            WorkingSpace::Linear => 0,
+            WorkingSpace::SrgbCompat => 1,
+        });
+    }
 }
 
 /// One layer composited with premultiplied "over".
@@ -81,6 +212,11 @@ pub struct RenderPlan {
     /// circle (validation should make this unreachable). Counts the whole
     /// tree.
     pub skipped_precomps: usize,
+    /// Effects passed through because this build has no kernel for them yet
+    /// (whole tree).
+    pub unsupported_effects: usize,
+    /// Placeholder effects passed through (whole tree).
+    pub missing_effects: usize,
     /// [`RenderPlan::content_key`], computed once when the plan is built (a
     /// nested plan is hashed by its own key, so hashing is not repeated down
     /// the tree).
@@ -111,6 +247,8 @@ struct Builder<'a> {
     space: WorkingSpace,
     draws: Vec<DrawOp>,
     skipped: usize,
+    unsupported: usize,
+    missing: usize,
     /// Plans already built for a shared evaluated child (by its address), so
     /// a composition used by several layers is planned once.
     memo: &'a mut HashMap<usize, Arc<RenderPlan>>,
@@ -127,7 +265,22 @@ impl Builder<'_> {
             if effective <= 0.0 {
                 continue;
             }
-            let opacity = effective as f32;
+            self.missing += l.missing_effects;
+            let mut nodes = Vec::new();
+            for fx in &l.effects {
+                match Kernel::find(&fx.type_id, fx.version) {
+                    Some(kernel) => nodes.push(EffectNode {
+                        kernel,
+                        effect: fx.clone(),
+                    }),
+                    None => self.unsupported += 1,
+                }
+            }
+            let chain = !nodes.is_empty();
+            // With effects, the source is rendered at full opacity; the
+            // layer's opacity applies after them.
+            let layer_opacity = effective as f32;
+            let opacity = if chain { 1.0 } else { layer_opacity };
             let (source, local_size) = match &l.content {
                 EvaluatedContent::Solid { color, size } => {
                     if size.x <= 0.0 || size.y <= 0.0 {
@@ -168,7 +321,9 @@ impl Builder<'_> {
                     nested,
                     ..
                 } => match nested {
-                    Nested::Shown(child) if *collapse => {
+                    // Effects need the child as one picture, so a collapsed
+                    // precomp with effects renders offscreen like any other.
+                    Nested::Shown(child) if *collapse && !chain => {
                         // The child's layers join this plan, through the
                         // precomp layer's transform; its background is not
                         // drawn and content outside its bounds stays visible.
@@ -193,6 +348,8 @@ impl Builder<'_> {
                             built
                         };
                         self.skipped += plan.skipped_precomps;
+                        self.unsupported += plan.unsupported_effects;
+                        self.missing += plan.missing_effects;
                         (DrawSource::Comp { plan, opacity }, Some(*size))
                     }
                     Nested::TooDeep => {
@@ -203,6 +360,20 @@ impl Builder<'_> {
                 },
                 // Draws nothing itself; its effects are applied from E-D.
                 EvaluatedContent::Adjustment => continue,
+            };
+            let source = if chain {
+                DrawSource::Chain {
+                    chain: Arc::new(ChainPlan::new(
+                        source,
+                        local_size,
+                        nodes,
+                        self.settings.scale,
+                        space,
+                    )),
+                    opacity: layer_opacity,
+                }
+            } else {
+                source
             };
             self.draws.push(DrawOp {
                 source,
@@ -242,6 +413,8 @@ impl RenderPlan {
             space: eval.working_space,
             draws: Vec::new(),
             skipped: 0,
+            unsupported: 0,
+            missing: 0,
             memo,
         };
         b.layers(eval, output_from_comp, 1.0);
@@ -252,6 +425,8 @@ impl RenderPlan {
             clear,
             draws: b.draws,
             skipped_precomps: b.skipped,
+            unsupported_effects: b.unsupported,
+            missing_effects: b.missing,
             key: 0,
         };
         plan.key = plan.compute_key();
@@ -269,13 +444,7 @@ impl RenderPlan {
 
     fn collect_assets(&self, out: &mut Vec<AssetId>) {
         for d in &self.draws {
-            match &d.source {
-                DrawSource::Image { asset, .. } | DrawSource::Video { asset, .. } => {
-                    out.push(*asset);
-                }
-                DrawSource::Comp { plan, .. } => plan.collect_assets(out),
-                DrawSource::Solid(_) => {}
-            }
+            collect_source_assets(&d.source, out);
         }
     }
 
@@ -308,47 +477,70 @@ impl RenderPlan {
         }
         h.u64(self.draws.len() as u64);
         for d in &self.draws {
-            match &d.source {
-                DrawSource::Solid(c) => {
-                    h.u32(1);
-                    for v in c {
-                        h.f32(*v);
-                    }
-                }
-                DrawSource::Image { asset, opacity } => {
-                    h.u32(2);
-                    h.u64(asset.raw());
-                    h.f32(*opacity);
-                }
-                DrawSource::Video {
-                    asset,
-                    time,
-                    opacity,
-                } => {
-                    h.u32(3);
-                    h.u64(asset.raw());
-                    h.u64(time.flicks() as u64);
-                    h.f32(*opacity);
-                }
-                DrawSource::Comp { plan, opacity } => {
-                    h.u32(4);
-                    h.f32(*opacity);
-                    h.u64(plan.key);
-                }
-            }
-            match d.local_size {
-                Some(s) => {
-                    h.u32(1);
-                    h.f64(s.x);
-                    h.f64(s.y);
-                }
-                None => h.u32(0),
-            }
+            hash_source(&d.source, h);
+            hash_size(d.local_size, h);
             let m = d.output_from_local;
             for v in m.to_cols_array() {
                 h.f64(v);
             }
         }
+    }
+}
+
+fn collect_source_assets(source: &DrawSource, out: &mut Vec<AssetId>) {
+    match source {
+        DrawSource::Image { asset, .. } | DrawSource::Video { asset, .. } => out.push(*asset),
+        DrawSource::Comp { plan, .. } => plan.collect_assets(out),
+        DrawSource::Chain { chain, .. } => collect_source_assets(&chain.source, out),
+        DrawSource::Solid(_) => {}
+    }
+}
+
+/// Hashes a draw source; nested plans and chains by their stored keys.
+fn hash_source(source: &DrawSource, h: &mut Fnv) {
+    match source {
+        DrawSource::Solid(c) => {
+            h.u32(1);
+            for v in c {
+                h.f32(*v);
+            }
+        }
+        DrawSource::Image { asset, opacity } => {
+            h.u32(2);
+            h.u64(asset.raw());
+            h.f32(*opacity);
+        }
+        DrawSource::Video {
+            asset,
+            time,
+            opacity,
+        } => {
+            h.u32(3);
+            h.u64(asset.raw());
+            h.u64(time.flicks() as u64);
+            h.f32(*opacity);
+        }
+        DrawSource::Comp { plan, opacity } => {
+            h.u32(4);
+            h.f32(*opacity);
+            h.u64(plan.key);
+        }
+        DrawSource::Chain { chain, opacity } => {
+            h.u32(5);
+            h.f32(*opacity);
+            h.u64(chain.key);
+        }
+    }
+}
+
+fn hash_size(size: Option<DVec2>, h: &mut Fnv) {
+    match size {
+        Some(s) => {
+            h.u32(1);
+            h.f64(s.x);
+            h.f64(s.y);
+        }
+        None => h.u32(0),
     }
 }
 
@@ -381,6 +573,71 @@ impl Fnv {
 
     fn f64(&mut self, v: f64) {
         self.u64(v.to_bits());
+    }
+
+    /// Length-prefixed, so `("ab", "c")` and `("a", "bc")` differ.
+    fn str(&mut self, s: &str) {
+        self.u64(s.len() as u64);
+        self.bytes(s.as_bytes());
+    }
+
+    /// A value with its kind, every float as exact bits.
+    fn value(&mut self, v: &Value) {
+        match v {
+            Value::Bool(b) => {
+                self.u32(1);
+                self.u32(u32::from(*b));
+            }
+            Value::Int(i) => {
+                self.u32(2);
+                self.u64(*i as u64);
+            }
+            Value::Scalar(x) => {
+                self.u32(3);
+                self.f64(*x);
+            }
+            Value::Vec2(p) => {
+                self.u32(4);
+                self.f64(p.x);
+                self.f64(p.y);
+            }
+            Value::Vec3(p) => {
+                self.u32(5);
+                self.f64(p.x);
+                self.f64(p.y);
+                self.f64(p.z);
+            }
+            Value::Color(c) => {
+                self.u32(6);
+                for x in c.to_array() {
+                    self.f32(x);
+                }
+            }
+            Value::Enum(e) => {
+                self.u32(7);
+                self.u32(*e);
+            }
+            Value::String(s) => {
+                self.u32(8);
+                self.str(s);
+            }
+            Value::Layer(l) => {
+                self.u32(9);
+                self.u64(l.map_or(u64::MAX, voxy_core::LayerId::raw));
+            }
+            Value::Curve(c) => {
+                self.u32(10);
+                self.u64(c.points().len() as u64);
+                for p in c.points() {
+                    self.f64(p.x);
+                    self.f64(p.y);
+                }
+            }
+            Value::Asset(a) => {
+                self.u32(11);
+                self.u64(a.map_or(u64::MAX, voxy_core::AssetId::raw));
+            }
+        }
     }
 }
 

@@ -13,6 +13,7 @@
 
 mod compositor;
 mod gpu;
+pub mod kernels;
 mod plan;
 
 pub use compositor::{
@@ -20,7 +21,9 @@ pub use compositor::{
     RgbaImage, VideoFrames, VideoUploadStats, WORKING_FORMAT,
 };
 pub use gpu::{GpuContext, GpuError};
-pub use plan::{DrawOp, DrawSource, RenderPlan, RenderSettings, working_premultiplied};
+pub use plan::{
+    ChainPlan, DrawOp, DrawSource, EffectNode, RenderPlan, RenderSettings, working_premultiplied,
+};
 
 pub use wgpu;
 

@@ -1,0 +1,149 @@
+//! E-B: planning layers with effects (no GPU needed).
+
+#![allow(clippy::unwrap_used)]
+
+use voxy_core::command::{AddEffect, AddSolidLayer, Command, SetProperty};
+use voxy_core::registry::{builtins, ids};
+use voxy_core::{
+    CompId, CompSettings, Document, EffectTypeId, LayerId, LinearRgba, MissingReason, Time, Value,
+    evaluate,
+};
+use voxy_render::kernels::{Kernel, Rect, chain_rod, chain_roi};
+use voxy_render::{DrawSource, RenderPlan, RenderSettings};
+
+fn doc() -> (Document, CompId, LayerId) {
+    let mut doc = Document::with_comp(
+        "Plan",
+        CompSettings {
+            width: 100,
+            height: 50,
+            ..CompSettings::default()
+        },
+    );
+    let comp = doc.main_comp.unwrap();
+    AddSolidLayer {
+        comp,
+        name: None,
+        color: LinearRgba::new(1.0, 0.5, 0.0, 1.0),
+        index: 0,
+    }
+    .apply(&mut doc)
+    .unwrap();
+    let layer = doc.main().unwrap().layers[0].id;
+    (doc, comp, layer)
+}
+
+fn add(doc: &mut Document, layer: LayerId, id: &str) {
+    AddEffect {
+        layer,
+        index: None,
+        def: builtins().latest(&EffectTypeId::new(id)).unwrap().clone(),
+    }
+    .apply(doc)
+    .unwrap();
+}
+
+fn set(doc: &mut Document, prop: voxy_core::PropId, value: Value) {
+    SetProperty {
+        prop,
+        time: Time::ZERO,
+        value,
+    }
+    .apply(doc)
+    .unwrap();
+}
+
+fn plan(doc: &Document, comp: CompId, t: Time, scale: f64) -> RenderPlan {
+    RenderPlan::build(&evaluate(doc, comp, t).unwrap(), &RenderSettings { scale })
+}
+
+fn chain_key(p: &RenderPlan) -> u64 {
+    match &p.draws[0].source {
+        DrawSource::Chain { chain, .. } => chain.content_key(),
+        other => panic!("not a chain: {other:?}"),
+    }
+}
+
+#[test]
+fn a_layer_with_effects_becomes_a_chain() {
+    let (mut doc, comp, layer) = doc();
+    let opacity = doc.main().unwrap().layers[0].transform.opacity.id;
+    set(&mut doc, opacity, Value::Scalar(0.5));
+    add(&mut doc, layer, ids::INVERT);
+    let p = plan(&doc, comp, Time::ZERO, 1.0);
+    assert_eq!(p.draws.len(), 1);
+    let DrawSource::Chain { chain, opacity } = &p.draws[0].source else {
+        panic!("expected a chain");
+    };
+    // Effects see the source at full opacity; opacity applies afterwards.
+    assert_eq!(*opacity, 0.5);
+    assert_eq!(chain.source, DrawSource::Solid([1.0, 0.5, 0.0, 1.0]));
+    assert_eq!(chain.effects.len(), 1);
+    assert_eq!(chain.effects[0].kernel, Kernel::Invert);
+    assert_eq!((p.unsupported_effects, p.missing_effects), (0, 0));
+}
+
+#[test]
+fn effects_without_kernels_and_placeholders_pass_through() {
+    let (mut doc, comp, layer) = doc();
+    // No kernel for the gaussian blur yet (E-B step 3).
+    add(&mut doc, layer, ids::GAUSSIAN_BLUR);
+    add(&mut doc, layer, ids::TINT);
+    doc.layer_mut(layer).unwrap().effects[1].mark_missing(MissingReason::UnknownType);
+    let p = plan(&doc, comp, Time::ZERO, 1.0);
+    assert!(matches!(p.draws[0].source, DrawSource::Solid(_)));
+    assert_eq!((p.unsupported_effects, p.missing_effects), (1, 1));
+}
+
+#[test]
+fn chain_keys_follow_content_not_placement_or_time() {
+    let (mut doc, comp, layer) = doc();
+    add(&mut doc, layer, ids::INVERT);
+    let base = chain_key(&plan(&doc, comp, Time::ZERO, 1.0));
+    // Static: the same at another frame.
+    assert_eq!(chain_key(&plan(&doc, comp, Time::from_secs(2), 1.0)), base);
+    // Moving the layer does not change what the chain renders.
+    let pos = doc.main().unwrap().layers[0].transform.position.id;
+    set(
+        &mut doc,
+        pos,
+        Value::Vec2(voxy_core::glam::DVec2::new(10.0, 3.0)),
+    );
+    assert_eq!(chain_key(&plan(&doc, comp, Time::ZERO, 1.0)), base);
+    // The preview scale does.
+    assert_ne!(chain_key(&plan(&doc, comp, Time::ZERO, 0.5)), base);
+    // So does every parameter.
+    let mix = doc.main().unwrap().layers[0].effects[0]
+        .param("mix")
+        .unwrap()
+        .id;
+    set(&mut doc, mix, Value::Scalar(0.25));
+    let mixed = chain_key(&plan(&doc, comp, Time::ZERO, 1.0));
+    assert_ne!(mixed, base);
+    let channel = doc.main().unwrap().layers[0].effects[0]
+        .param("channel")
+        .unwrap()
+        .id;
+    set(&mut doc, channel, Value::Enum(3));
+    assert_ne!(chain_key(&plan(&doc, comp, Time::ZERO, 1.0)), mixed);
+    // And the source.
+    let color = match &doc.main().unwrap().layers[0].kind {
+        voxy_core::LayerKind::Solid { color, .. } => color.id,
+        _ => unreachable!(),
+    };
+    let before = chain_key(&plan(&doc, comp, Time::ZERO, 1.0));
+    set(&mut doc, color, Value::Color(LinearRgba::WHITE));
+    assert_ne!(chain_key(&plan(&doc, comp, Time::ZERO, 1.0)), before);
+}
+
+#[test]
+fn per_pixel_kernels_keep_regions() {
+    let (mut doc, comp, layer) = doc();
+    add(&mut doc, layer, ids::INVERT);
+    let eval = evaluate(&doc, comp, Time::ZERO).unwrap();
+    let fx = &eval.layers[0].effects[0];
+    let r = Rect::of_size(voxy_core::glam::DVec2::new(100.0, 50.0));
+    let chain = [(Kernel::Invert, fx), (Kernel::Invert, fx)];
+    assert_eq!(chain_rod(&chain, r, 1.0), r);
+    assert_eq!(chain_roi(&chain, r, 1.0), r);
+}

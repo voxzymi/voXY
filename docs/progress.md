@@ -102,8 +102,18 @@ at `743b053` (merge of #3).
         non-placeholder effects with parameters at the frame time, plus an
         exact frame number for seeds. Placeholders are counted in
         `missing_effects`.
-      - 1b: the plan chain on the CPU (kernel table in `voxy-render`, RoD
-        and ROI, content keys), with unit tests.
+      - 1b **done:** `voxy_render::kernels` holds the CPU-side rules of
+        each kernel (RoD and ROI, pure `f64`). The plan wraps layers with
+        supported effects in `DrawSource::Chain` (source at full opacity,
+        layer opacity after the effects). Chain content keys hash the
+        source, every effect's type, version and evaluated parameters as
+        exact bits, the scale and the working space, but not placement,
+        and the frame only for seeded kernels. Effects without a kernel,
+        and placeholders, pass through and are counted in the render
+        report. The compositor still passes chains through.
+        - Refinement of design §1.3: region rules live with the kernels in
+          `voxy-render` (still GPU-free), because images and video know
+          their size only when decoded.
       - 1c: GPU execution (layer-local targets, chain cache) with the first
         kernel (invert) and a golden.
    2. The blend modes (ping-pong shader), with CPU reference tests.
@@ -148,6 +158,12 @@ at `743b053` (merge of #3).
 ## Open questions waiting on the owner
 
 - None.
+
+## Toolchain
+
+- CI uses the current stable Rust (1.99 since 2026-09-28), and so does
+  local work now. Clippy 1.99 added `assert_is_empty`, and the new tests
+  follow it.
 
 ## Verified only on Linux
 

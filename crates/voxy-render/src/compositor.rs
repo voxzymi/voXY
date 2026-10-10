@@ -8,7 +8,7 @@ use voxy_core::glam::{DAffine2, DMat2, DVec2};
 use voxy_core::{AssetId, AssetTable, Time, WorkingSpace};
 use voxy_media::VideoFrame;
 
-use crate::plan::{DrawSource, RenderPlan};
+use crate::plan::{DrawOp, DrawSource, RenderPlan};
 
 /// Supplies decoded video frames to the compositor.
 ///
@@ -82,6 +82,11 @@ pub struct RenderReport {
     pub pending_video: Vec<AssetId>,
     /// Precomp layers left out because the nesting was too deep or circular.
     pub skipped_precomps: usize,
+    /// Effects drawn as pass-through because this build has no kernel for
+    /// them yet.
+    pub unsupported_effects: usize,
+    /// Placeholder effects (not installed) drawn as pass-through.
+    pub missing_effects: usize,
 }
 
 /// GPU upload counters for video frames.
@@ -631,6 +636,8 @@ impl Compositor {
         }
         self.working = Some(working);
         report.skipped_precomps += plan.skipped_precomps;
+        report.unsupported_effects += plan.unsupported_effects;
+        report.missing_effects += plan.missing_effects;
         self.trim_nested();
         report
     }
@@ -651,11 +658,14 @@ impl Compositor {
         depth: usize,
         report: &mut RenderReport,
     ) {
+        // Effect chains run as pass-through until their kernels execute
+        // (Milestone E-B 1c): the chain's source is drawn directly.
+        let draws_in: Vec<DrawOp> = plan.draws.iter().map(pass_through).collect();
         // Nested compositions first: each is rendered and submitted on its
         // own, so its per-draw uniforms are written (and used) before this
         // plan's are.
-        let mut nested_keys: Vec<Option<u64>> = vec![None; plan.draws.len()];
-        for (i, draw) in plan.draws.iter().enumerate() {
+        let mut nested_keys: Vec<Option<u64>> = vec![None; draws_in.len()];
+        for (i, draw) in draws_in.iter().enumerate() {
             if let DrawSource::Comp { plan: child, .. } = &draw.source {
                 nested_keys[i] =
                     self.render_nested(device, queue, assets, video, child, depth + 1, report);
@@ -663,8 +673,8 @@ impl Compositor {
         }
 
         // Load and prepare any images and video frames this frame needs.
-        let mut video_slots = vec![None; plan.draws.len()];
-        for (i, draw) in plan.draws.iter().enumerate() {
+        let mut video_slots = vec![None; draws_in.len()];
+        for (i, draw) in draws_in.iter().enumerate() {
             match &draw.source {
                 DrawSource::Image { asset, .. } => {
                     let asset = *asset;
@@ -683,7 +693,8 @@ impl Compositor {
                         report.pending_video.push(asset);
                     }
                 }
-                DrawSource::Solid(_) | DrawSource::Comp { .. } => {}
+                // Flattened by `pass_through` above.
+                DrawSource::Solid(_) | DrawSource::Comp { .. } | DrawSource::Chain { .. } => {}
             }
         }
 
@@ -695,9 +706,9 @@ impl Compositor {
             )),
             DVec2::new(-1.0, 1.0),
         );
-        let mut draws = Vec::with_capacity(plan.draws.len());
+        let mut draws = Vec::with_capacity(draws_in.len());
         let mut uniform_bytes = Vec::new();
-        for (i, draw) in plan.draws.iter().enumerate() {
+        for (i, draw) in draws_in.iter().enumerate() {
             let (color, mode, size, bind) = match &draw.source {
                 DrawSource::Solid(c) => (*c, 0, draw.local_size, None),
                 DrawSource::Image { asset, opacity } => {
@@ -741,6 +752,8 @@ impl Compositor {
                         Some(Bind::Nested(key)),
                     )
                 }
+                // Flattened by `pass_through` above.
+                DrawSource::Chain { .. } => continue,
             };
             let Some(size) = size else { continue };
             let m = clip_from_output * draw.output_from_local;
@@ -1415,4 +1428,17 @@ fn read_buffer(
         height: h,
         pixels,
     })
+}
+
+/// `draw` with an effect chain replaced by its source at the layer's
+/// opacity.
+fn pass_through(draw: &DrawOp) -> DrawOp {
+    match &draw.source {
+        DrawSource::Chain { chain, opacity } => DrawOp {
+            source: chain.source.with_opacity(*opacity),
+            local_size: draw.local_size,
+            output_from_local: draw.output_from_local,
+        },
+        _ => draw.clone(),
+    }
 }
