@@ -169,8 +169,10 @@ fn with_effects() -> EditorState {
     let l = doc.layer_mut(layer).unwrap();
     l.effects[1].enabled = false;
     l.effects[2].mark_missing(voxy_core::MissingReason::UnknownType);
+    let preset = vec![l.effects[0].clone()];
     s.history.reset(doc);
     s.selection = Some(layer);
+    s.save_effect_preset("Audit preset", preset);
     s
 }
 

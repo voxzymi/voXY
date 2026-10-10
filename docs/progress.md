@@ -217,8 +217,20 @@ at `743b053` (merge of #3).
         Presets panel.
       - Tests: the full action sequence is one undo step per edit, and the
         audit runs every action with effects and a selected placeholder.
-   4. Effect presets (`effect_presets.toml`, tolerant loader, save from the
-      menu, apply from the panel).
+   4. **Done:** effect presets (`effect_presets.rs`).
+      - Stored in `effect_presets.toml` in the per-user config directory,
+        each preset holding its effects as project-file JSON (TOML cannot
+        hold `null`).
+      - Tolerant loader: a bad preset or file is dropped alone. Writes are
+        atomic.
+      - Save from the Effect Controls right-click menu (one effect, or the
+        whole stack).
+      - The Effects & Presets panel lists presets (filtered by the search)
+        to double-click, apply or delete.
+      - Applying resolves against the session registry, so the effects get
+        real descriptors. It leaves out, and reports, effects that are not
+        installed, and pastes in one undo step.
+      - Core: `registry::resolve_effect` for effects outside a document.
    5. Solo and the before/after split (preview-only render settings).
    6. On-canvas gizmos for point parameters.
    Stop after E-C if the owner says so.

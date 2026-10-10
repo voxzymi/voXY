@@ -57,6 +57,10 @@ impl VoxyApp {
             tracing::error!("eframe did not provide a wgpu render state; the viewport is disabled");
         }
         let mut state = EditorState::new(EditorState::untitled());
+        state.effect_presets_path = crate::effect_presets::default_path();
+        if let Some(path) = &state.effect_presets_path {
+            state.effect_presets = crate::effect_presets::load_from(path);
+        }
         state.prefs_path = crate::prefs::default_path();
         if let Some(path) = &state.prefs_path {
             state.prefs = crate::prefs::Preferences::load_from(path);

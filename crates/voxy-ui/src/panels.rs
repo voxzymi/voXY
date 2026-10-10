@@ -426,6 +426,29 @@ impl Panels<'_> {
                 });
                 ui.close();
             }
+            ui.separator();
+            ui.add_enabled_ui(!fx.is_placeholder(), |ui| {
+                ui.label(RichText::new("Save as preset").weak());
+                ui.horizontal(|ui| {
+                    let key = egui::Id::new(("preset-name", fx.id));
+                    let mut name = ui
+                        .data_mut(|d| d.get_temp::<String>(key))
+                        .unwrap_or_else(|| fx.name.clone());
+                    ui.text_edit_singleline(&mut name);
+                    ui.data_mut(|d| d.insert_temp(key, name.clone()));
+                    if ui.button("Save").clicked() {
+                        self.state.save_effect_preset(&name, vec![fx.clone()]);
+                        ui.close();
+                    }
+                });
+                if ui.button("Save Whole Stack as Preset").clicked() {
+                    let all = self.state.selected_layer_effects();
+                    let all: Vec<_> = all.into_iter().filter(|e| !e.is_placeholder()).collect();
+                    self.state
+                        .save_effect_preset(&format!("{} stack", fx.name), all);
+                    ui.close();
+                }
+            });
         });
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if ui

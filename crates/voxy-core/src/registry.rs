@@ -328,6 +328,19 @@ pub fn resolve_effects(doc: &mut Document, reg: &EffectRegistry) -> Vec<String> 
     warnings
 }
 
+/// [`resolve_effects`] for one effect outside a document (a preset or the
+/// clipboard): parameters it lacks get IDs from `alloc`. Returns warnings;
+/// the effect may come out as a placeholder.
+pub fn resolve_effect(
+    fx: &mut EffectInstance,
+    reg: &EffectRegistry,
+    alloc: &mut dyn FnMut() -> u64,
+) -> Vec<String> {
+    let mut warnings = Vec::new();
+    resolve_one(fx, reg, alloc, &mut warnings);
+    warnings
+}
+
 fn resolve_one(
     fx: &mut EffectInstance,
     reg: &EffectRegistry,

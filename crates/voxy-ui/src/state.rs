@@ -97,6 +97,10 @@ pub struct EditorState {
     /// The effect last clicked in Effect Controls (on the selected layer);
     /// the effect actions act on it.
     pub selected_effect: Option<voxy_core::EffectId>,
+    /// Saved effect presets (`effect_presets.toml`).
+    pub effect_presets: Vec<crate::effect_presets::EffectPreset>,
+    /// Where effect presets are saved; `None` keeps them in memory (tests).
+    pub effect_presets_path: Option<PathBuf>,
     /// The effect last applied, for Apply Last Effect.
     pub last_effect: Option<std::sync::Arc<voxy_core::registry::EffectDef>>,
     /// The easing last copied with "Copy Easing" (or the graph editor's Copy
@@ -151,6 +155,8 @@ impl EditorState {
             effect_clipboard: Vec::new(),
             effects_panel: crate::effects_panel::EffectsPanel::default(),
             selected_effect: None,
+            effect_presets: Vec::new(),
+            effect_presets_path: None,
             last_effect: None,
             ease_clipboard: None,
             recovery: None,
@@ -1075,6 +1081,58 @@ impl EditorState {
     pub fn save_shortcuts(&mut self) {
         self.prefs.shortcuts = self.keymap.to_saved();
         self.save_prefs();
+    }
+
+    /// Saves `effects` as the effect preset called `name`, replacing one of
+    /// the same name, and writes the presets file.
+    pub fn save_effect_preset(&mut self, name: &str, effects: Vec<voxy_core::EffectInstance>) {
+        if !crate::effect_presets::upsert(&mut self.effect_presets, name, effects) {
+            self.info("A preset needs a name and at least one effect.");
+            return;
+        }
+        self.write_effect_presets();
+        self.info(format!("Saved effect preset “{}”", name.trim()));
+    }
+
+    pub fn remove_effect_preset(&mut self, name: &str) {
+        self.effect_presets.retain(|p| p.name != name);
+        self.write_effect_presets();
+    }
+
+    fn write_effect_presets(&mut self) {
+        if let Some(path) = self.effect_presets_path.clone()
+            && let Err(e) = crate::effect_presets::save_to(&self.effect_presets, &path)
+        {
+            self.error(format!("Could not save effect presets: {e}"));
+        }
+    }
+
+    /// Applies the preset called `name` to the selected layer, at the end of
+    /// its stack, in one undo step. Effects this session cannot use are left
+    /// out and reported.
+    pub fn apply_effect_preset(&mut self, name: &str) {
+        let Some(preset) = self.effect_presets.iter().find(|p| p.name == name).cloned() else {
+            return;
+        };
+        let Some(layer) = self
+            .selection
+            .filter(|l| self.history.current().find_layer(*l).is_some())
+        else {
+            self.info("Select a layer to apply a preset to.");
+            return;
+        };
+        let (items, warnings) = crate::effect_presets::resolved(&preset, &self.effects);
+        if !warnings.is_empty() {
+            self.info(warnings.join(" "));
+        }
+        if items.is_empty() {
+            return;
+        }
+        self.execute_reported(voxy_core::command::PasteEffects {
+            layers: vec![layer],
+            index: None,
+            items,
+        });
     }
 
     pub fn save_prefs(&mut self) {

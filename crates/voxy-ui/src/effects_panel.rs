@@ -95,13 +95,52 @@ pub fn show(ui: &mut Ui, state: &mut EditorState) {
     ui.separator();
     let search = state.effects_panel.search.clone();
     let groups = listing(state, &search);
-    if groups.is_empty() {
-        ui.weak("No effects match.");
+    let presets: Vec<String> = state
+        .effect_presets
+        .iter()
+        .filter(|p| {
+            let hay = p.name.to_lowercase();
+            search
+                .split_whitespace()
+                .all(|w| hay.contains(&w.to_lowercase()))
+        })
+        .map(|p| p.name.clone())
+        .collect();
+    if groups.is_empty() && presets.is_empty() {
+        ui.weak("No effects or presets match.");
         return;
     }
     egui::ScrollArea::vertical()
         .auto_shrink(false)
         .show(ui, |ui| {
+            if !presets.is_empty() {
+                let id = ui.make_persistent_id("effects-presets");
+                egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, true)
+                    .show_header(ui, |ui| {
+                        preset_icon(ui);
+                        ui.strong("Presets");
+                    })
+                    .body(|ui| {
+                        for name in presets {
+                            let r = ui
+                                .add(egui::Label::new(&name).sense(Sense::click()))
+                                .on_hover_text("Double-click to apply to the selected layer.");
+                            if r.double_clicked() {
+                                state.apply_effect_preset(&name);
+                            }
+                            r.context_menu(|ui| {
+                                if ui.button("Apply to Selected Layer").clicked() {
+                                    state.apply_effect_preset(&name);
+                                    ui.close();
+                                }
+                                if ui.button("Delete Preset").clicked() {
+                                    state.remove_effect_preset(&name);
+                                    ui.close();
+                                }
+                            });
+                        }
+                    });
+            }
             for (category, defs) in groups {
                 let id = ui.make_persistent_id(("effects-category", category.label()));
                 egui::collapsing_header::CollapsingState::load_with_default_open(
@@ -176,6 +215,23 @@ fn released_at(ui: &Ui) -> Option<Pos2> {
 
 fn take(ui: &Ui) -> Option<EffectDrag> {
     DragAndDrop::take_payload::<EffectDrag>(ui.ctx()).map(|p| (*p).clone())
+}
+
+/// The presets group's glyph: two stacked cards.
+fn preset_icon(ui: &mut Ui) {
+    let size = ui.spacing().interact_size.y * 0.8;
+    let (rect, _) = ui.allocate_exact_size(vec2(size, size), Sense::hover());
+    let painter = ui.painter_at(rect);
+    let stroke = Stroke::new(1.4, ui.visuals().text_color());
+    let card = Rect::from_center_size(rect.center(), vec2(size * 0.55, size * 0.4));
+    for k in [-0.12, 0.12] {
+        painter.rect_stroke(
+            card.translate(vec2(size * k, -size * k)),
+            1.5,
+            stroke,
+            egui::StrokeKind::Middle,
+        );
+    }
 }
 
 /// A small painted glyph per category (original artwork, no icon font).
@@ -380,5 +436,39 @@ mod tests {
             assert!(s.history.undo());
         }
         assert_eq!(effects(&s).iter().map(|e| e.id).collect::<Vec<_>>(), ids);
+    }
+
+    #[test]
+    fn presets_save_from_one_layer_and_apply_to_another_in_one_step() {
+        let (mut s, first) = state_with_layer();
+        let comp = s.comp_id().expect("comp");
+        s.execute(AddSolidLayer {
+            comp,
+            name: None,
+            color: LinearRgba::WHITE,
+            index: 0,
+        });
+        let second = s.history.current().comp(comp).expect("comp").layers[0].id;
+        let blur = listing(&s, "gaussian")[0].1[0].clone();
+        apply(&mut s, first, blur);
+        s.selection = Some(first);
+        let stack = s.selected_layer_effects();
+        s.save_effect_preset("Dreamy", stack.clone());
+        assert_eq!(s.effect_presets.len(), 1);
+
+        s.selection = Some(second);
+        s.apply_effect_preset("Dreamy");
+        let got = s.selected_layer_effects();
+        assert_eq!(got.len(), 1);
+        assert_ne!(got[0].id, stack[0].id, "fresh IDs");
+        assert_eq!(
+            got[0].params[0].value_at(voxy_core::Time::ZERO),
+            stack[0].params[0].value_at(voxy_core::Time::ZERO)
+        );
+        assert!(s.history.undo());
+        assert_eq!(s.selected_layer_effects().len(), 0);
+
+        s.remove_effect_preset("Dreamy");
+        assert_eq!(s.effect_presets.len(), 0);
     }
 }
