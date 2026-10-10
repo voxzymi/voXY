@@ -80,6 +80,8 @@ pub struct RenderReport {
     pub missing_assets: Vec<AssetId>,
     /// Video assets with no frame available yet; their layers were skipped.
     pub pending_video: Vec<AssetId>,
+    /// Precomp layers left out because the nesting was too deep or circular.
+    pub skipped_precomps: usize,
 }
 
 /// GPU upload counters for video frames.
@@ -92,6 +94,37 @@ pub struct VideoUploadStats {
     /// Texture pairs created (an upload into an existing slot of the same
     /// size creates none).
     pub allocations: u64,
+}
+
+/// Counters for nested compositions rendered offscreen.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NestedStats {
+    /// Offscreen renders done.
+    pub renders: u64,
+    /// Draws that found their picture already rendered (same content key).
+    pub reused: u64,
+    /// Offscreen textures created (a render into a recycled one creates none).
+    pub allocations: u64,
+}
+
+/// The memory the cache of rendered nested compositions may hold.
+const NESTED_BUDGET_BYTES: u64 = 512 * 1024 * 1024;
+
+/// How deep `composite` recurses (the plan builder never exceeds
+/// `voxy_core::MAX_NESTING`; this guards plans built by other means).
+const MAX_RENDER_DEPTH: usize = 16;
+
+/// A nested composition's rendered picture.
+struct NestedEntry {
+    size: (u32, u32),
+    /// The frame counter when it was last drawn.
+    used: u64,
+    /// `false` if something it needs (an image, a video frame) was missing,
+    /// so it must be rendered again next time.
+    complete: bool,
+    view: wgpu::TextureView,
+    bind_group: wgpu::BindGroup,
+    _texture: wgpu::Texture,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -130,6 +163,7 @@ struct ImageEntry {
 enum Bind {
     Image(AssetId),
     Video(usize),
+    Nested(u64),
 }
 
 /// One prepared video frame on the GPU.
@@ -184,6 +218,9 @@ pub struct Compositor {
     video: Vec<VideoSlot>,
     frame_counter: u64,
     video_stats: VideoUploadStats,
+    /// Rendered nested compositions by plan content key.
+    nested: HashMap<u64, NestedEntry>,
+    nested_stats: NestedStats,
 }
 
 impl std::fmt::Debug for Compositor {
@@ -422,11 +459,17 @@ impl Compositor {
             video: Vec::new(),
             frame_counter: 0,
             video_stats: VideoUploadStats::default(),
+            nested: HashMap::new(),
+            nested_stats: NestedStats::default(),
         }
     }
 
     pub fn video_stats(&self) -> VideoUploadStats {
         self.video_stats
+    }
+
+    pub fn nested_stats(&self) -> NestedStats {
+        self.nested_stats
     }
 
     /// Sets the directory relative asset paths resolve against (the folder
@@ -436,6 +479,7 @@ impl Compositor {
             self.asset_root = root;
             self.images.clear();
             self.failed.clear();
+            self.nested.clear();
         }
     }
 
@@ -534,12 +578,89 @@ impl Compositor {
         let mut report = RenderReport::default();
         self.frame_counter += 1;
         self.ensure_working(device, (plan.width, plan.height));
+        // Out of `self` while compositing, so the recursion can borrow it.
+        let working = self.working.take().expect("ensured");
+        self.composite(
+            device,
+            queue,
+            encoder,
+            assets,
+            video,
+            plan,
+            &working.view,
+            0,
+            &mut report,
+        );
+        queue.write_buffer(
+            &self.output_flags,
+            0,
+            bytemuck::bytes_of(&FlagsUniform {
+                flags: [
+                    space_flag(plan.working_space),
+                    u32::from(alpha == OutputAlpha::Premultiplied),
+                    0,
+                    0,
+                ],
+            }),
+        );
+
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("voxy-output"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: target,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+            pass.set_pipeline(&self.output_pipeline);
+            pass.set_bind_group(0, &working.output_bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+        self.working = Some(working);
+        report.skipped_precomps = plan.skipped_precomps;
+        self.trim_nested();
+        report
+    }
+
+    /// Draws `plan` into `target` (cleared to the plan's clear colour):
+    /// first any nested compositions, each rendered offscreen, then the
+    /// layers. Problems are added to `report`.
+    #[allow(clippy::too_many_arguments)]
+    fn composite(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        assets: &AssetTable,
+        video: &dyn VideoFrames,
+        plan: &RenderPlan,
+        target: &wgpu::TextureView,
+        depth: usize,
+        report: &mut RenderReport,
+    ) {
+        // Nested compositions first: each is rendered and submitted on its
+        // own, so its per-draw uniforms are written (and used) before this
+        // plan's are.
+        let mut nested_keys: Vec<Option<u64>> = vec![None; plan.draws.len()];
+        for (i, draw) in plan.draws.iter().enumerate() {
+            if let DrawSource::Comp { plan: child, .. } = &draw.source {
+                nested_keys[i] =
+                    self.render_nested(device, queue, assets, video, child, depth + 1, report);
+            }
+        }
 
         // Load and prepare any images and video frames this frame needs.
         let mut video_slots = vec![None; plan.draws.len()];
         for (i, draw) in plan.draws.iter().enumerate() {
-            match draw.source {
+            match &draw.source {
                 DrawSource::Image { asset, .. } => {
+                    let asset = *asset;
                     if !self.ensure_image(device, queue, encoder, assets, asset, plan.working_space)
                         && !report.missing_assets.contains(&asset)
                     {
@@ -547,6 +668,7 @@ impl Compositor {
                     }
                 }
                 DrawSource::Video { asset, time, .. } => {
+                    let (asset, time) = (*asset, *time);
                     video_slots[i] = video.frame(asset, time).and_then(|frame| {
                         self.ensure_video(device, queue, encoder, &frame, plan.working_space)
                     });
@@ -554,7 +676,7 @@ impl Compositor {
                         report.pending_video.push(asset);
                     }
                 }
-                DrawSource::Solid(_) => {}
+                DrawSource::Solid(_) | DrawSource::Comp { .. } => {}
             }
         }
 
@@ -569,17 +691,17 @@ impl Compositor {
         let mut draws = Vec::with_capacity(plan.draws.len());
         let mut uniform_bytes = Vec::new();
         for (i, draw) in plan.draws.iter().enumerate() {
-            let (color, mode, size, bind) = match draw.source {
-                DrawSource::Solid(c) => (c, 0, draw.local_size, None),
+            let (color, mode, size, bind) = match &draw.source {
+                DrawSource::Solid(c) => (*c, 0, draw.local_size, None),
                 DrawSource::Image { asset, opacity } => {
-                    let Some(entry) = self.images.get(&asset) else {
+                    let Some(entry) = self.images.get(asset) else {
                         continue;
                     };
                     (
-                        [opacity, 0.0, 0.0, 0.0],
+                        [*opacity, 0.0, 0.0, 0.0],
                         1,
                         draw.local_size.or(Some(entry.size)),
-                        Some(Bind::Image(asset)),
+                        Some(Bind::Image(*asset)),
                     )
                 }
                 DrawSource::Video { opacity, .. } => {
@@ -588,11 +710,28 @@ impl Compositor {
                     };
                     let (w, h) = self.video[slot].size;
                     (
-                        [opacity, 0.0, 0.0, 0.0],
+                        [*opacity, 0.0, 0.0, 0.0],
                         1,
                         draw.local_size
                             .or(Some(DVec2::new(f64::from(w), f64::from(h)))),
                         Some(Bind::Video(slot)),
+                    )
+                }
+                DrawSource::Comp {
+                    opacity,
+                    plan: child,
+                } => {
+                    let Some(key) = nested_keys[i] else {
+                        continue;
+                    };
+                    // The picture is the child's own size (times the preview
+                    // scale); the quad is the child's size in layer pixels.
+                    let _ = child;
+                    (
+                        [*opacity, 0.0, 0.0, 0.0],
+                        1,
+                        draw.local_size,
+                        Some(Bind::Nested(key)),
                     )
                 }
             };
@@ -626,26 +765,12 @@ impl Compositor {
             let (buffer, _, _) = self.layer_uniforms.as_ref().expect("ensured");
             queue.write_buffer(buffer, 0, &uniform_bytes);
         }
-        queue.write_buffer(
-            &self.output_flags,
-            0,
-            bytemuck::bytes_of(&FlagsUniform {
-                flags: [
-                    space_flag(plan.working_space),
-                    u32::from(alpha == OutputAlpha::Premultiplied),
-                    0,
-                    0,
-                ],
-            }),
-        );
-
-        let working = self.working.as_ref().expect("ensured");
         {
             let [r, g, b, a] = plan.clear;
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("voxy-composite"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &working.view,
+                    view: target,
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
@@ -664,6 +789,10 @@ impl Compositor {
                             .get(a)
                             .map_or(&self.blank_image, |e| &e.bind_group),
                         Some(Bind::Video(slot)) => &self.video[*slot].bind_group,
+                        Some(Bind::Nested(key)) => self
+                            .nested
+                            .get(key)
+                            .map_or(&self.blank_image, |e| &e.bind_group),
                         None => &self.blank_image,
                     };
                     pass.set_bind_group(0, uniforms, &[*offset]);
@@ -672,25 +801,152 @@ impl Compositor {
                 }
             }
         }
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("voxy-output"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: target,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                ..Default::default()
-            });
-            pass.set_pipeline(&self.output_pipeline);
-            pass.set_bind_group(0, &working.output_bind_group, &[]);
-            pass.draw(0..3, 0..1);
+    }
+
+    /// Renders a nested composition's plan offscreen (or finds it already
+    /// rendered) and returns its cache key, or `None` if it cannot be drawn.
+    /// Rendered pictures are shared by every draw with the same content key.
+    #[allow(clippy::too_many_arguments)]
+    fn render_nested(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        assets: &AssetTable,
+        video: &dyn VideoFrames,
+        plan: &RenderPlan,
+        depth: usize,
+        report: &mut RenderReport,
+    ) -> Option<u64> {
+        if depth > MAX_RENDER_DEPTH {
+            report.skipped_precomps += 1;
+            return None;
         }
-        report
+        let size = (plan.width, plan.height);
+        let max = device.limits().max_texture_dimension_2d;
+        if size.0 == 0 || size.1 == 0 || size.0 > max || size.1 > max {
+            tracing::warn!(
+                "a nested composition of {}x{} is outside this GPU's limits",
+                size.0,
+                size.1
+            );
+            return None;
+        }
+        let key = plan.content_key();
+        if let Some(e) = self.nested.get_mut(&key)
+            && e.complete
+            && e.size == size
+        {
+            e.used = self.frame_counter;
+            self.nested_stats.reused += 1;
+            return Some(key);
+        }
+        let mut entry = self.take_nested_target(device, key, size);
+        let mut sub = RenderReport::default();
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("voxy-nested"),
+        });
+        self.composite(
+            device,
+            queue,
+            &mut encoder,
+            assets,
+            video,
+            plan,
+            &entry.view,
+            depth,
+            &mut sub,
+        );
+        queue.submit([encoder.finish()]);
+        self.nested_stats.renders += 1;
+        entry.used = self.frame_counter;
+        entry.complete = sub.missing_assets.is_empty()
+            && sub.pending_video.is_empty()
+            && sub.skipped_precomps == 0;
+        for a in sub.missing_assets {
+            if !report.missing_assets.contains(&a) {
+                report.missing_assets.push(a);
+            }
+        }
+        for a in sub.pending_video {
+            if !report.pending_video.contains(&a) {
+                report.pending_video.push(a);
+            }
+        }
+        report.skipped_precomps += sub.skipped_precomps;
+        self.nested.insert(key, entry);
+        Some(key)
+    }
+
+    /// An offscreen target of `size` for `key`: the entry already there, or a
+    /// recycled one of the same size that was not drawn this frame, or a new
+    /// texture.
+    fn take_nested_target(
+        &mut self,
+        device: &wgpu::Device,
+        key: u64,
+        size: (u32, u32),
+    ) -> NestedEntry {
+        if let Some(e) = self.nested.remove(&key)
+            && e.size == size
+        {
+            return e;
+        }
+        let now = self.frame_counter;
+        let stale = self
+            .nested
+            .iter()
+            .filter(|(_, e)| e.size == size && e.used < now)
+            .min_by_key(|(_, e)| e.used)
+            .map(|(k, _)| *k);
+        if let Some(k) = stale
+            && let Some(e) = self.nested.remove(&k)
+        {
+            return e;
+        }
+        self.nested_stats.allocations += 1;
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("voxy-nested"),
+            size: wgpu::Extent3d {
+                width: size.0,
+                height: size.1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: WORKING_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let bind_group = self.image_bind_group(device, &view);
+        NestedEntry {
+            size,
+            used: 0,
+            complete: false,
+            view,
+            bind_group,
+            _texture: texture,
+        }
+    }
+
+    /// Drops the least recently drawn nested pictures (never one drawn this
+    /// frame) until the cache fits its budget.
+    fn trim_nested(&mut self) {
+        let bytes = |e: &NestedEntry| u64::from(e.size.0) * u64::from(e.size.1) * 8;
+        let mut total: u64 = self.nested.values().map(bytes).sum();
+        while total > NESTED_BUDGET_BYTES {
+            let oldest = self
+                .nested
+                .iter()
+                .filter(|(_, e)| e.used < self.frame_counter)
+                .min_by_key(|(_, e)| e.used)
+                .map(|(k, _)| *k);
+            let Some(k) = oldest else { break };
+            if let Some(e) = self.nested.remove(&k) {
+                total -= bytes(&e);
+            }
+        }
     }
 
     fn ensure_working(&mut self, device: &wgpu::Device, size: (u32, u32)) {

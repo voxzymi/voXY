@@ -845,3 +845,41 @@ What landed in `voxy-core`, and where it refines the design above.
   composition from it (as the From Footage tile does).
 - The Project panel's "Move item" label only appears over the Project panel;
   over the timeline and viewport those panels show what the drop will do.
+
+## Implementation notes (Milestone E, rendering)
+
+- **Evaluate recurses.** `EvaluatedContent::Precomp` now carries `collapse`
+  and `nested: Nested`: `Shown(child at child_time)`, `OutsideChild` (the
+  child time is outside the child's duration: nothing is drawn, as in §7.2),
+  `TooDeep` (a cycle that slipped past validation, or more than
+  `MAX_NESTING` = 16 levels in the chain) or `Missing`. Nothing recurses
+  forever.
+- **Plan.** `DrawSource::Comp { plan, opacity }` holds the child's own
+  `RenderPlan`: the child's size times the preview scale, **transparent
+  background** (a nested composition's background colour never shows),
+  drawn through the precomp layer's transform. **Collapse transformations**
+  inline the child's layers into the parent's plan through the precomp
+  layer's matrix, multiplying opacities; no offscreen picture, and content
+  outside the child's bounds stays visible. `RenderPlan::content_key()` is a
+  64-bit FNV-1a over everything that decides the pixels (sizes, working
+  space, clear colour, every draw with exact `f64`/`f32` bits, video frame
+  identity, nested plans), so two times that resolve identically share one
+  picture and any change to settings changes the key.
+- **Compositor.** A `Comp` draw is rendered into a pooled `Rgba16Float`
+  texture (its own submit, so per-draw uniforms never collide) and then drawn
+  like an image. Pictures are cached by content key up to 512 MiB, least
+  recently drawn first, never one used this frame; textures of the same size
+  are recycled. **A picture that was missing something (an image, a video
+  frame) is not cached**, so a frame that arrives later is picked up. Missing
+  assets and pending video inside a child are reported on the frame's
+  `RenderReport`; `skipped_precomps` counts layers cut for depth or cycles.
+- **Tested** with pixel checks on the GPU (llvmpipe here; skipped without an
+  adapter unless `VOXY_REQUIRE_GPU=1`): centered placement, background never
+  drawn, nested equals direct for a simple scene, preview scale, mapped child
+  time, collapse on/off, caching and no stale picture, texture recycling,
+  missing images, depth limit, determinism. The existing golden images have no
+  precomps and did not change.
+- **Not yet:** audio from precomps (needs audio layers), the viewport-only
+  parent backdrop (§7.5), and region-of-interest clipping (the plan keeps the
+  child's bounds so it can be added without an API change). Tabs and
+  navigation (§7) are the next part of this milestone.

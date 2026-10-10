@@ -61,19 +61,53 @@ pub enum EvaluatedContent {
         size: Option<DVec2>,
     },
     /// A nested composition at `child_time` (see [`Layer::child_time`]),
-    /// drawn at its own size from the layer-local origin. Rendering it
-    /// arrives with precomp rendering (Milestone E).
+    /// drawn at its own size from the layer-local origin.
     Precomp {
         comp: CompId,
         child_time: Time,
         size: DVec2,
+        /// "Collapse transformations": the child's layers are drawn as if
+        /// they were part of the parent, instead of through an offscreen
+        /// picture of the child.
+        collapse: bool,
+        /// The child, evaluated at `child_time`.
+        nested: Nested,
     },
     /// A placeholder for a removed source, at its remembered size.
     Placeholder { size: Option<DVec2> },
 }
 
+/// The deepest chain of nested compositions that is evaluated: the root and
+/// 15 levels of precomps. A longer chain (or a cycle that slipped past
+/// validation) draws nothing for the layer that would go deeper.
+pub const MAX_NESTING: usize = 16;
+
+/// What a precomp layer's child evaluated to.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Nested {
+    /// The child at the layer's child time.
+    Shown(Box<EvaluatedComp>),
+    /// The child time is outside the child's duration: nothing to show.
+    OutsideChild,
+    /// Too deep, or the composition contains itself: nothing is drawn.
+    TooDeep,
+    /// The composition no longer exists.
+    Missing,
+}
+
 /// Evaluates `comp` at `time`. Returns `None` if the composition is missing.
 pub fn evaluate(doc: &Document, comp: CompId, time: Time) -> Option<EvaluatedComp> {
+    evaluate_in(doc, comp, time, &mut vec![comp])
+}
+
+/// [`evaluate`] with the chain of compositions being evaluated, outermost
+/// first.
+fn evaluate_in(
+    doc: &Document,
+    comp: CompId,
+    time: Time,
+    chain: &mut Vec<CompId>,
+) -> Option<EvaluatedComp> {
     let c = doc.comp(comp)?;
     let background = c
         .background
@@ -88,7 +122,7 @@ pub fn evaluate(doc: &Document, comp: CompId, time: Time) -> Option<EvaluatedCom
         .filter(|l| l.is_active_at(time))
         .map(|l| EvaluatedLayer {
             id: l.id,
-            content: content(doc, l, time),
+            content: content(doc, l, time, chain),
             world: worlds.world(l.id),
             opacity: scalar(&l.transform.opacity, time, 1.0).clamp(0.0, 1.0),
             blend: l.blend_mode,
@@ -105,7 +139,7 @@ pub fn evaluate(doc: &Document, comp: CompId, time: Time) -> Option<EvaluatedCom
     })
 }
 
-fn content(doc: &Document, layer: &Layer, time: Time) -> EvaluatedContent {
+fn content(doc: &Document, layer: &Layer, time: Time, chain: &mut Vec<CompId>) -> EvaluatedContent {
     let assets = &doc.assets;
     match &layer.kind {
         LayerKind::Solid { color, size } => EvaluatedContent::Solid {
@@ -121,15 +155,31 @@ fn content(doc: &Document, layer: &Layer, time: Time) -> EvaluatedContent {
             source_time: layer.source_time(time),
             size: asset_size(assets, *asset),
         },
-        LayerKind::Precomp { comp, .. } => {
+        LayerKind::Precomp { comp, collapse, .. } => {
             let child = doc.comp(*comp);
             let duration = child.map_or(Time::ZERO, |c| c.duration);
+            let child_time = layer.child_time(time, duration).unwrap_or(Time::ZERO);
+            let nested = match child {
+                None => Nested::Missing,
+                Some(_) if chain.contains(comp) || chain.len() >= MAX_NESTING => Nested::TooDeep,
+                Some(_) if child_time < Time::ZERO || child_time >= duration => {
+                    Nested::OutsideChild
+                }
+                Some(_) => {
+                    chain.push(*comp);
+                    let eval = evaluate_in(doc, *comp, child_time, chain);
+                    chain.pop();
+                    eval.map_or(Nested::Missing, |e| Nested::Shown(Box::new(e)))
+                }
+            };
             EvaluatedContent::Precomp {
                 comp: *comp,
-                child_time: layer.child_time(time, duration).unwrap_or(Time::ZERO),
+                child_time,
                 size: child.map_or(DVec2::ZERO, |c| {
                     DVec2::new(f64::from(c.width), f64::from(c.height))
                 }),
+                collapse: *collapse,
+                nested,
             }
         }
         LayerKind::Placeholder { was } => EvaluatedContent::Placeholder {

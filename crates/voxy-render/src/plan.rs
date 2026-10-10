@@ -2,14 +2,17 @@
 //!
 //! This is the `build_graph` stage of the pipeline (design proposal §4.1). In
 //! Milestone 1 the graph is a single chain: clear → one composite per layer →
-//! output transform. Effects, masks, mattes and precomps (Milestones 4–5) turn
-//! it into a DAG with per-node content hashes for caching.
+//! output transform. A nested composition is a sub-plan rendered offscreen
+//! (a tree of plans, each with a content hash for caching); effects, masks
+//! and mattes (Milestones 4–5) will add more node kinds.
 //!
 //! Planning is pure CPU work in `f64`, rounded to `f32` only at the end, so it
 //! is deterministic and testable without a GPU.
 
+use std::sync::Arc;
+
 use voxy_core::glam::{DAffine2, DVec2};
-use voxy_core::{AssetId, EvaluatedComp, EvaluatedContent, LinearRgba, Time, WorkingSpace};
+use voxy_core::{AssetId, EvaluatedComp, EvaluatedContent, LinearRgba, Nested, Time, WorkingSpace};
 
 /// Settings that differ between preview and export. Everything else is
 /// shared, so a full-quality preview frame equals the exported frame.
@@ -34,7 +37,7 @@ impl RenderSettings {
 }
 
 /// What a draw fills its quad with.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum DrawSource {
     /// Premultiplied color, already encoded for the working space, with
     /// layer opacity applied.
@@ -47,6 +50,10 @@ pub enum DrawSource {
         time: Time,
         opacity: f32,
     },
+    /// A nested composition: `plan` is rendered offscreen (transparent
+    /// background, at the child's size times the preview scale), then drawn
+    /// like an image through the layer's transform with `opacity`.
+    Comp { plan: Arc<RenderPlan>, opacity: f32 },
 }
 
 /// One layer composited with premultiplied "over".
@@ -69,6 +76,10 @@ pub struct RenderPlan {
     pub clear: [f64; 4],
     /// Paint order: first is bottom.
     pub draws: Vec<DrawOp>,
+    /// Precomp layers left out because the nesting was too deep or went in a
+    /// circle (validation should make this unreachable). Counts the whole
+    /// tree.
+    pub skipped_precomps: usize,
 }
 
 /// Fill of a placeholder layer (a removed source): mid grey.
@@ -89,72 +100,239 @@ pub fn working_premultiplied(color: LinearRgba, space: WorkingSpace) -> [f32; 4]
     [r * a, g * a, b * a, a]
 }
 
+/// Collects the draws of one plan.
+struct Builder {
+    settings: RenderSettings,
+    space: WorkingSpace,
+    draws: Vec<DrawOp>,
+    skipped: usize,
+}
+
+impl Builder {
+    /// Adds the draws for `eval`'s layers. `base` maps `eval`'s composition
+    /// pixels to output pixels; `inherited` is the opacity of collapsed
+    /// precomp layers above (1.0 at the top).
+    fn layers(&mut self, eval: &EvaluatedComp, base: DAffine2, inherited: f64) {
+        let space = self.space;
+        for l in &eval.layers {
+            let effective = l.opacity * inherited;
+            if effective <= 0.0 {
+                continue;
+            }
+            let opacity = effective as f32;
+            let (source, local_size) = match &l.content {
+                EvaluatedContent::Solid { color, size } => {
+                    if size.x <= 0.0 || size.y <= 0.0 {
+                        continue;
+                    }
+                    let c = working_premultiplied(*color, space).map(|v| v * opacity);
+                    (DrawSource::Solid(c), Some(*size))
+                }
+                EvaluatedContent::Image { asset, size } => (
+                    DrawSource::Image {
+                        asset: *asset,
+                        opacity,
+                    },
+                    *size,
+                ),
+                EvaluatedContent::Video {
+                    asset,
+                    source_time,
+                    size,
+                } => (
+                    DrawSource::Video {
+                        asset: *asset,
+                        time: *source_time,
+                        opacity,
+                    },
+                    *size,
+                ),
+                EvaluatedContent::Placeholder { size } => {
+                    let Some(size) = (*size).filter(|s| s.x > 0.0 && s.y > 0.0) else {
+                        continue;
+                    };
+                    let c = working_premultiplied(PLACEHOLDER_COLOR, space).map(|v| v * opacity);
+                    (DrawSource::Solid(c), Some(size))
+                }
+                EvaluatedContent::Precomp {
+                    size,
+                    collapse,
+                    nested,
+                    ..
+                } => match nested {
+                    Nested::Shown(child) if *collapse => {
+                        // The child's layers join this plan, through the
+                        // precomp layer's transform; its background is not
+                        // drawn and content outside its bounds stays visible.
+                        self.layers(child, base * l.world, effective);
+                        continue;
+                    }
+                    Nested::Shown(child) => {
+                        if size.x <= 0.0 || size.y <= 0.0 {
+                            continue;
+                        }
+                        let plan = RenderPlan::nested(child, self.settings);
+                        self.skipped += plan.skipped_precomps;
+                        (
+                            DrawSource::Comp {
+                                plan: Arc::new(plan),
+                                opacity,
+                            },
+                            Some(*size),
+                        )
+                    }
+                    Nested::TooDeep => {
+                        self.skipped += 1;
+                        continue;
+                    }
+                    Nested::OutsideChild | Nested::Missing => continue,
+                },
+            };
+            self.draws.push(DrawOp {
+                source,
+                local_size,
+                output_from_local: base * l.world,
+            });
+        }
+    }
+}
+
 impl RenderPlan {
     pub fn build(eval: &EvaluatedComp, settings: &RenderSettings) -> RenderPlan {
+        Self::build_with(
+            eval,
+            *settings,
+            working_premultiplied(eval.background, eval.working_space).map(f64::from),
+        )
+    }
+
+    /// A nested composition's plan: transparent where the child draws
+    /// nothing. As in After Effects, a composition's background colour shows
+    /// only when it is viewed or exported directly, never when nested.
+    fn nested(eval: &EvaluatedComp, settings: RenderSettings) -> RenderPlan {
+        Self::build_with(eval, settings, [0.0; 4])
+    }
+
+    fn build_with(eval: &EvaluatedComp, settings: RenderSettings, clear: [f64; 4]) -> RenderPlan {
         let (width, height) = settings.output_size(eval.width, eval.height);
         let output_from_comp = DAffine2::from_scale(DVec2::new(
             f64::from(width) / f64::from(eval.width),
             f64::from(height) / f64::from(eval.height),
         ));
-        let space = eval.working_space;
-        let clear = working_premultiplied(eval.background, space).map(f64::from);
-        let draws = eval
-            .layers
-            .iter()
-            .filter(|l| l.opacity > 0.0)
-            .filter_map(|l| {
-                let opacity = l.opacity as f32;
-                let (source, local_size) = match &l.content {
-                    EvaluatedContent::Solid { color, size } => {
-                        if size.x <= 0.0 || size.y <= 0.0 {
-                            return None;
-                        }
-                        let c = working_premultiplied(*color, space).map(|v| v * opacity);
-                        (DrawSource::Solid(c), Some(*size))
-                    }
-                    EvaluatedContent::Image { asset, size } => (
-                        DrawSource::Image {
-                            asset: *asset,
-                            opacity,
-                        },
-                        *size,
-                    ),
-                    EvaluatedContent::Video {
-                        asset,
-                        source_time,
-                        size,
-                    } => (
-                        DrawSource::Video {
-                            asset: *asset,
-                            time: *source_time,
-                            opacity,
-                        },
-                        *size,
-                    ),
-                    EvaluatedContent::Placeholder { size } => {
-                        let size = (*size).filter(|s| s.x > 0.0 && s.y > 0.0)?;
-                        let c =
-                            working_premultiplied(PLACEHOLDER_COLOR, space).map(|v| v * opacity);
-                        (DrawSource::Solid(c), Some(size))
-                    }
-                    // Nested compositions render with Milestone E
-                    // (docs/deferred.md); until then they draw nothing.
-                    EvaluatedContent::Precomp { .. } => return None,
-                };
-                Some(DrawOp {
-                    source,
-                    local_size,
-                    output_from_local: output_from_comp * l.world,
-                })
-            })
-            .collect();
+        let mut b = Builder {
+            settings,
+            space: eval.working_space,
+            draws: Vec::new(),
+            skipped: 0,
+        };
+        b.layers(eval, output_from_comp, 1.0);
         RenderPlan {
             width,
             height,
-            working_space: space,
+            working_space: eval.working_space,
             clear,
-            draws,
+            draws: b.draws,
+            skipped_precomps: b.skipped,
         }
+    }
+
+    /// A stable 64-bit hash of everything that decides this plan's pixels:
+    /// size, working space, clear colour and every draw (sources, matrices,
+    /// colours as exact bits, video frame identity), including nested plans.
+    /// Two plans with equal keys render identically, so a nested composition
+    /// that resolves the same at two times shares one cached picture, and any
+    /// change to settings changes the key (no stale frame is possible).
+    pub fn content_key(&self) -> u64 {
+        let mut h = Fnv::new();
+        self.hash_into(&mut h);
+        h.0
+    }
+
+    fn hash_into(&self, h: &mut Fnv) {
+        h.u32(self.width);
+        h.u32(self.height);
+        h.u32(match self.working_space {
+            WorkingSpace::Linear => 0,
+            WorkingSpace::SrgbCompat => 1,
+        });
+        for c in self.clear {
+            h.f64(c);
+        }
+        h.u64(self.draws.len() as u64);
+        for d in &self.draws {
+            match &d.source {
+                DrawSource::Solid(c) => {
+                    h.u32(1);
+                    for v in c {
+                        h.f32(*v);
+                    }
+                }
+                DrawSource::Image { asset, opacity } => {
+                    h.u32(2);
+                    h.u64(asset.raw());
+                    h.f32(*opacity);
+                }
+                DrawSource::Video {
+                    asset,
+                    time,
+                    opacity,
+                } => {
+                    h.u32(3);
+                    h.u64(asset.raw());
+                    h.u64(time.flicks() as u64);
+                    h.f32(*opacity);
+                }
+                DrawSource::Comp { plan, opacity } => {
+                    h.u32(4);
+                    h.f32(*opacity);
+                    plan.hash_into(h);
+                }
+            }
+            match d.local_size {
+                Some(s) => {
+                    h.u32(1);
+                    h.f64(s.x);
+                    h.f64(s.y);
+                }
+                None => h.u32(0),
+            }
+            let m = d.output_from_local;
+            for v in m.to_cols_array() {
+                h.f64(v);
+            }
+        }
+    }
+}
+
+/// 64-bit FNV-1a over canonical little-endian bytes.
+struct Fnv(u64);
+
+impl Fnv {
+    fn new() -> Self {
+        Fnv(0xcbf2_9ce4_8422_2325)
+    }
+
+    fn bytes(&mut self, b: &[u8]) {
+        for &x in b {
+            self.0 ^= u64::from(x);
+            self.0 = self.0.wrapping_mul(0x0100_0000_01b3);
+        }
+    }
+
+    fn u32(&mut self, v: u32) {
+        self.bytes(&v.to_le_bytes());
+    }
+
+    fn u64(&mut self, v: u64) {
+        self.bytes(&v.to_le_bytes());
+    }
+
+    fn f32(&mut self, v: f32) {
+        self.u32(v.to_bits());
+    }
+
+    fn f64(&mut self, v: f64) {
+        self.u64(v.to_bits());
     }
 }
 
@@ -242,7 +420,7 @@ mod tests {
     }
 
     #[test]
-    fn placeholders_draw_grey_and_precomps_wait_for_milestone_e() {
+    fn placeholders_draw_grey_and_a_precomp_becomes_a_nested_plan() {
         use voxy_core::PoolItem;
         use voxy_core::command::{
             AddImageLayer, AddSourceLayer, CreateComposition, RemoveItems, RemoveMode,
@@ -281,7 +459,19 @@ mod tests {
         .unwrap();
         let eval = evaluate(&doc, comp, Time::ZERO).unwrap();
         let plan = RenderPlan::build(&eval, &RenderSettings::default());
-        assert_eq!(plan.draws.len(), 1, "the precomp draws nothing yet");
+        assert_eq!(plan.draws.len(), 2, "the placeholder and the precomp");
+        // The precomp layer was added last, so it is on top.
+        let DrawSource::Comp {
+            plan: nested,
+            opacity,
+        } = &plan.draws[1].source
+        else {
+            panic!("{:?}", plan.draws[1].source)
+        };
+        assert_eq!(*opacity, 1.0);
+        assert_eq!((nested.width, nested.height), (1920, 1080));
+        assert_eq!(nested.clear, [0.0; 4], "a nested comp is transparent");
+        assert_eq!(plan.draws[1].local_size, Some(DVec2::new(1920.0, 1080.0)));
         let grey = working_premultiplied(PLACEHOLDER_COLOR, WorkingSpace::Linear);
         assert_eq!(plan.draws[0].source, DrawSource::Solid(grey));
         assert_eq!(plan.draws[0].local_size, Some(DVec2::new(40.0, 20.0)));

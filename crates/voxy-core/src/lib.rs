@@ -45,7 +45,8 @@ pub use document::{
 };
 pub use easing::{CubicEase, EaseHandle, EasePreset};
 pub use evaluate::{
-    EvaluatedComp, EvaluatedContent, EvaluatedLayer, evaluate, layer_world, local_matrix,
+    EvaluatedComp, EvaluatedContent, EvaluatedLayer, MAX_NESTING, Nested, evaluate, layer_world,
+    local_matrix,
 };
 pub use history::{History, SharedDocument};
 pub use id::{AssetId, CompId, FolderId, LayerId, PropId};

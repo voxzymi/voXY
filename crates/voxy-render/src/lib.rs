@@ -16,8 +16,8 @@ mod gpu;
 mod plan;
 
 pub use compositor::{
-    Compositor, NoVideo, OUTPUT_FORMAT, OutputAlpha, RenderError, RenderReport, RgbaImage,
-    VideoFrames, VideoUploadStats, WORKING_FORMAT,
+    Compositor, NestedStats, NoVideo, OUTPUT_FORMAT, OutputAlpha, RenderError, RenderReport,
+    RgbaImage, VideoFrames, VideoUploadStats, WORKING_FORMAT,
 };
 pub use gpu::{GpuContext, GpuError};
 pub use plan::{DrawOp, DrawSource, RenderPlan, RenderSettings, working_premultiplied};
