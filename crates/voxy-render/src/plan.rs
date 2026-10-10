@@ -176,9 +176,8 @@ impl ChainPlan {
                 }
                 None => h.u32(0),
             }
-            if node.kernel.uses_frame() {
-                h.u64(fx.frame as u64);
-            }
+            // Zero unless the kernel uses it (see the planner).
+            h.u64(fx.frame as u64);
         }
         h.f64(self.scale);
         h.u32(match self.working_space {
@@ -269,10 +268,15 @@ impl Builder<'_> {
             let mut nodes = Vec::new();
             for fx in &l.effects {
                 match Kernel::find(&fx.type_id, fx.version) {
-                    Some(kernel) => nodes.push(EffectNode {
-                        kernel,
-                        effect: fx.clone(),
-                    }),
+                    Some(kernel) => {
+                        let mut effect = fx.clone();
+                        // A kernel without seeds must not tell frames apart,
+                        // or a static chain would never be reused.
+                        if !kernel.uses_frame() {
+                            effect.frame = 0;
+                        }
+                        nodes.push(EffectNode { kernel, effect });
+                    }
                     None => self.unsupported += 1,
                 }
             }

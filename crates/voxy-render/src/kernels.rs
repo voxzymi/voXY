@@ -12,7 +12,26 @@
 
 use voxy_core::glam::DVec2;
 use voxy_core::registry::ids;
-use voxy_core::{EffectTypeId, EvaluatedEffect};
+use voxy_core::{EffectTypeId, EvaluatedEffect, Value};
+
+/// A kernel's parameters as the shader reads them (`EffectUniform` in
+/// `shaders/effects/common.wgsl`, after its `frame` header).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct KernelParams {
+    pub p: [[f32; 4]; 4],
+    pub i: [u32; 4],
+}
+
+fn scalar(fx: &EvaluatedEffect, name: &str, default: f64) -> f64 {
+    fx.scalar(name).filter(|v| v.is_finite()).unwrap_or(default)
+}
+
+fn choice(fx: &EvaluatedEffect, name: &str) -> u32 {
+    match fx.param(name) {
+        Some(Value::Enum(e)) => *e,
+        _ => 0,
+    }
+}
 
 /// An axis-aligned rectangle, `min` inclusive, `max` exclusive.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -93,6 +112,21 @@ impl Kernel {
         match self {
             Kernel::Invert => ids::INVERT,
         }
+    }
+
+    /// The shader parameters for `fx`. `texel_scale` is texels per layer
+    /// pixel (the preview scale, possibly reduced to fit the GPU), by which
+    /// pixel parameters are multiplied.
+    pub fn params(self, fx: &EvaluatedEffect, texel_scale: f64) -> KernelParams {
+        let _ = texel_scale;
+        let mut k = KernelParams::default();
+        match self {
+            Kernel::Invert => {
+                k.p[0][0] = scalar(fx, "mix", 0.0).clamp(0.0, 1.0) as f32;
+                k.i[0] = choice(fx, "channel").min(4);
+            }
+        }
+        k
     }
 
     /// Region of definition: how far the output can reach, given the input

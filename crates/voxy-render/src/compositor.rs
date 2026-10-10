@@ -1,5 +1,9 @@
 //! The wgpu compositor: executes a [`RenderPlan`].
 
+mod chain;
+
+pub use chain::ChainStats;
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -8,7 +12,8 @@ use voxy_core::glam::{DAffine2, DMat2, DVec2};
 use voxy_core::{AssetId, AssetTable, Time, WorkingSpace};
 use voxy_media::VideoFrame;
 
-use crate::plan::{DrawOp, DrawSource, RenderPlan};
+use crate::kernels::Kernel;
+use crate::plan::{DrawSource, RenderPlan};
 
 /// Supplies decoded video frames to the compositor.
 ///
@@ -176,6 +181,7 @@ enum Bind {
     Image(AssetId),
     Video(usize),
     Nested(u64),
+    Chain(u64),
 }
 
 /// One prepared video frame on the GPU.
@@ -233,6 +239,14 @@ pub struct Compositor {
     /// Rendered nested compositions by plan content key.
     nested: HashMap<u64, NestedEntry>,
     nested_stats: NestedStats,
+    /// Rendered effect chains by chain content key.
+    chains: HashMap<u64, chain::ChainEntry>,
+    chain_stats: ChainStats,
+    effect_pipelines: HashMap<Kernel, wgpu::RenderPipeline>,
+    effect_uniform_layout: wgpu::BindGroupLayout,
+    effect_input_layout: wgpu::BindGroupLayout,
+    effect_uniforms: Option<(wgpu::Buffer, wgpu::BindGroup, u64)>,
+    effect_stride: u64,
 }
 
 impl std::fmt::Debug for Compositor {
@@ -443,6 +457,40 @@ impl Compositor {
         let align = u64::from(device.limits().min_uniform_buffer_offset_alignment);
         let size = std::mem::size_of::<LayerUniform>() as u64;
         let uniform_stride = size.div_ceil(align) * align;
+        let effect_size = std::mem::size_of::<chain::EffectUniform>() as u64;
+        let effect_stride = effect_size.div_ceil(align) * align;
+
+        let effect_uniform_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("voxy-effect-uniform"),
+                entries: &[uniform_entry(0, wgpu::ShaderStages::FRAGMENT, true)],
+            });
+        let effect_input_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("voxy-effect-input"),
+                entries: &[texture_entry(0)],
+            });
+        let effect_pipelines = Kernel::ALL
+            .iter()
+            .map(|&k| {
+                let body = format!(
+                    "{}\n{}",
+                    include_str!("shaders/effects/common.wgsl"),
+                    chain::kernel_shader(k)
+                );
+                let label = format!("voxy-effect-{}", k.type_id());
+                let module = shader(device, &label, &body, true);
+                let p = pipeline(
+                    device,
+                    &label,
+                    &module,
+                    &[Some(&effect_uniform_layout), Some(&effect_input_layout)],
+                    WORKING_FORMAT,
+                    None,
+                );
+                (k, p)
+            })
+            .collect();
 
         let output_flags = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("voxy-output-flags"),
@@ -473,6 +521,13 @@ impl Compositor {
             video_stats: VideoUploadStats::default(),
             nested: HashMap::new(),
             nested_stats: NestedStats::default(),
+            chains: HashMap::new(),
+            chain_stats: ChainStats::default(),
+            effect_pipelines,
+            effect_uniform_layout,
+            effect_input_layout,
+            effect_uniforms: None,
+            effect_stride,
         }
     }
 
@@ -492,6 +547,7 @@ impl Compositor {
             self.images.clear();
             self.failed.clear();
             self.nested.clear();
+            self.chains.clear();
         }
     }
 
@@ -639,6 +695,7 @@ impl Compositor {
         report.unsupported_effects += plan.unsupported_effects;
         report.missing_effects += plan.missing_effects;
         self.trim_nested();
+        self.trim_chains();
         report
     }
 
@@ -658,23 +715,28 @@ impl Compositor {
         depth: usize,
         report: &mut RenderReport,
     ) {
-        // Effect chains run as pass-through until their kernels execute
-        // (Milestone E-B 1c): the chain's source is drawn directly.
-        let draws_in: Vec<DrawOp> = plan.draws.iter().map(pass_through).collect();
         // Nested compositions first: each is rendered and submitted on its
         // own, so its per-draw uniforms are written (and used) before this
         // plan's are.
-        let mut nested_keys: Vec<Option<u64>> = vec![None; draws_in.len()];
-        for (i, draw) in draws_in.iter().enumerate() {
-            if let DrawSource::Comp { plan: child, .. } = &draw.source {
-                nested_keys[i] =
-                    self.render_nested(device, queue, assets, video, child, depth + 1, report);
+        let mut nested_keys: Vec<Option<u64>> = vec![None; plan.draws.len()];
+        for (i, draw) in plan.draws.iter().enumerate() {
+            match &draw.source {
+                DrawSource::Comp { plan: child, .. } => {
+                    nested_keys[i] =
+                        self.render_nested(device, queue, assets, video, child, depth + 1, report);
+                }
+                // A chain is rendered (and its source prepared) on its own.
+                DrawSource::Chain { chain, .. } => {
+                    nested_keys[i] =
+                        self.render_chain(device, queue, assets, video, chain, depth, report);
+                }
+                _ => {}
             }
         }
 
         // Load and prepare any images and video frames this frame needs.
-        let mut video_slots = vec![None; draws_in.len()];
-        for (i, draw) in draws_in.iter().enumerate() {
+        let mut video_slots = vec![None; plan.draws.len()];
+        for (i, draw) in plan.draws.iter().enumerate() {
             match &draw.source {
                 DrawSource::Image { asset, .. } => {
                     let asset = *asset;
@@ -693,7 +755,6 @@ impl Compositor {
                         report.pending_video.push(asset);
                     }
                 }
-                // Flattened by `pass_through` above.
                 DrawSource::Solid(_) | DrawSource::Comp { .. } | DrawSource::Chain { .. } => {}
             }
         }
@@ -706,9 +767,9 @@ impl Compositor {
             )),
             DVec2::new(-1.0, 1.0),
         );
-        let mut draws = Vec::with_capacity(draws_in.len());
+        let mut draws = Vec::with_capacity(plan.draws.len());
         let mut uniform_bytes = Vec::new();
-        for (i, draw) in draws_in.iter().enumerate() {
+        for (i, draw) in plan.draws.iter().enumerate() {
             let (color, mode, size, bind) = match &draw.source {
                 DrawSource::Solid(c) => (*c, 0, draw.local_size, None),
                 DrawSource::Image { asset, opacity } => {
@@ -752,11 +813,31 @@ impl Compositor {
                         Some(Bind::Nested(key)),
                     )
                 }
-                // Flattened by `pass_through` above.
-                DrawSource::Chain { .. } => continue,
+                DrawSource::Chain { opacity, .. } => {
+                    let Some(key) = nested_keys[i] else {
+                        continue;
+                    };
+                    let Some(entry) = self.chains.get(&key) else {
+                        continue;
+                    };
+                    // The quad covers the chain's region, in layer pixels.
+                    let rod = entry.rod;
+                    (
+                        [*opacity, 0.0, 0.0, 0.0],
+                        1,
+                        Some(rod.size()),
+                        Some(Bind::Chain(key)),
+                    )
+                }
             };
             let Some(size) = size else { continue };
-            let m = clip_from_output * draw.output_from_local;
+            let origin = match (&draw.source, nested_keys[i]) {
+                (DrawSource::Chain { .. }, Some(key)) => {
+                    self.chains.get(&key).map_or(DVec2::ZERO, |e| e.rod.min)
+                }
+                _ => DVec2::ZERO,
+            };
+            let m = clip_from_output * draw.output_from_local * DAffine2::from_translation(origin);
             let u = LayerUniform {
                 col0: [
                     m.matrix2.x_axis.x as f32,
@@ -813,6 +894,10 @@ impl Compositor {
                             .nested
                             .get(key)
                             .map_or(&self.blank_image, |e| &e.bind_group),
+                        Some(Bind::Chain(key)) => self
+                            .chains
+                            .get(key)
+                            .map_or(&self.blank_image, chain::ChainEntry::draw_group),
                         None => &self.blank_image,
                     };
                     pass.set_bind_group(0, uniforms, &[*offset]);
@@ -1428,17 +1513,4 @@ fn read_buffer(
         height: h,
         pixels,
     })
-}
-
-/// `draw` with an effect chain replaced by its source at the layer's
-/// opacity.
-fn pass_through(draw: &DrawOp) -> DrawOp {
-    match &draw.source {
-        DrawSource::Chain { chain, opacity } => DrawOp {
-            source: chain.source.with_opacity(*opacity),
-            local_size: draw.local_size,
-            output_from_local: draw.output_from_local,
-        },
-        _ => draw.clone(),
-    }
 }

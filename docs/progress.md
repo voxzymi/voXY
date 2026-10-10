@@ -114,8 +114,23 @@ at `743b053` (merge of #3).
         - Refinement of design §1.3: region rules live with the kernels in
           `voxy-render` (still GPU-free), because images and video know
           their size only when decoded.
-      - 1c: GPU execution (layer-local targets, chain cache) with the first
-        kernel (invert) and a golden.
+      - 1c **done:** the compositor runs chains (`compositor/chain.rs`).
+        The source is rendered into a layer-local buffer covering the
+        chain's RoD at the preview scale (reduced, with a warning, if it
+        would not fit the GPU). Effects run as full-buffer passes,
+        ping-ponging between two textures. Results are cached by content
+        key (512 MiB budget, LRU) and drawn through the layer's transform.
+        - First kernel: invert, with goldens `effect_invert_linear` and
+          `effect_invert_srgb_compat`.
+        - Tests: inverting twice, a fully blended effect and a disabled
+          effect all match the plain layer exactly. Static chains render
+          once, moving a layer reuses them, and parameter and resolution
+          changes re-render.
+        - Fixed while testing: frames are zeroed for unseeded kernels, so
+          static chains hit the cache.
+        - The golden harness helpers moved to `tests/common/mod.rs`; the
+          existing goldens are unchanged.
+        - `docs/effects.md` started.
    2. The blend modes (ping-pong shader), with CPU reference tests.
    3. The blurs (gaussian, box, directional), with goldens and the ROI test.
    4. The colour basics (brightness/contrast, exposure, invert, tint,
@@ -167,4 +182,11 @@ at `743b053` (merge of #3).
 
 ## Verified only on Linux
 
-- Nothing yet.
+- GPU golden and chain tests (`voxy-render`): lavapipe locally and on Linux
+  CI. Other platforms skip them without an adapter, as before.
+
+## Fixed along the way (outside the effects scope)
+
+- `recovery::Session` IDs could collide on macOS (microsecond clock), which
+  made `two_sessions_never_share_a_file` fail on macOS arm64 CI. IDs now
+  include a per-process counter.

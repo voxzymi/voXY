@@ -17,8 +17,8 @@ pub mod kernels;
 mod plan;
 
 pub use compositor::{
-    Compositor, NestedStats, NoVideo, OUTPUT_FORMAT, OutputAlpha, RenderError, RenderReport,
-    RgbaImage, VideoFrames, VideoUploadStats, WORKING_FORMAT,
+    ChainStats, Compositor, NestedStats, NoVideo, OUTPUT_FORMAT, OutputAlpha, RenderError,
+    RenderReport, RgbaImage, VideoFrames, VideoUploadStats, WORKING_FORMAT,
 };
 pub use gpu::{GpuContext, GpuError};
 pub use plan::{
