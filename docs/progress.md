@@ -162,8 +162,22 @@ at `743b053` (merge of #3).
         combination of min, default and max, in both spaces and at two
         scales.
       - Five goldens.
-   5. Determinism and cache tests, and `docs/effects.md` for group 1.
-3. E-C, then E-D, then O-A to O-D.
+   5. **Done:** determinism and cache-key tests.
+      - Every group 1 kernel stacked, with a blend mode on top, renders
+        identically in fresh compositors, in both working spaces, and
+        identically across frames.
+      - Changing any parameter of any kernel, the version or the scale
+        changes the chain key.
+      - Effects apply to image and precomp sources; a collapsed precomp
+        with effects renders through its chain.
+      - `docs/effects.md` covers group 1 and the blend modes.
+
+   **E-B complete.** `cargo clippy -D warnings` (Rust 1.99) is clean, and
+   all 594 workspace tests pass on Linux.
+3. E-C: the Effects & Presets panel, Effect Controls in the Properties
+   panel, keyframing of effect parameters, on-canvas gizmos, effect presets
+   and actions. Stop after E-C if the owner says so.
+4. E-D, then O-A to O-D.
 
 ## Approved decisions
 

@@ -483,3 +483,211 @@ mod color {
         assert_eq!(pixel(&img, 30, 30), [255, 255, 255, 255]);
     }
 }
+
+mod sources_and_determinism {
+    use super::*;
+    use voxy_core::SourceRef;
+    use voxy_core::command::{AddImageLayer, AddSourceLayer, CreateComposition};
+
+    fn image_file(dir: &std::path::Path) -> std::path::PathBuf {
+        let path = dir.join("ramp.png");
+        image::RgbaImage::from_fn(16, 8, |x, y| {
+            image::Rgba([
+                (x * 16) as u8,
+                255 - (x * 16) as u8,
+                90,
+                (32 * y + 31) as u8,
+            ])
+        })
+        .save(&path)
+        .unwrap();
+        path
+    }
+
+    /// Every group 1 kernel on one layer stack, and blend modes on top.
+    fn everything(space: WorkingSpace) -> Document {
+        let (mut doc, layers) = scene(space);
+        for id in [
+            ids::GAUSSIAN_BLUR,
+            ids::HUE_SATURATION,
+            ids::BRIGHTNESS_CONTRAST,
+            ids::DIRECTIONAL_BLUR,
+        ] {
+            add_effect(&mut doc, layers[0], id);
+        }
+        set_param(&mut doc, layers[0], 1, "hue", Value::Scalar(40.0));
+        set_param(&mut doc, layers[0], 2, "contrast", Value::Scalar(0.3));
+        for id in [ids::BOX_BLUR, ids::EXPOSURE, ids::TINT, ids::INVERT] {
+            add_effect(&mut doc, layers[1], id);
+        }
+        set_param(&mut doc, layers[1], 1, "exposure", Value::Scalar(0.7));
+        doc.layer_mut(layers[1]).unwrap().blend_mode = voxy_core::BlendMode::Overlay;
+        doc
+    }
+
+    #[test]
+    fn a_full_stack_renders_identically_every_time() {
+        let Some(gpu) = gpu() else { return };
+        for space in [WorkingSpace::Linear, WorkingSpace::SrgbCompat] {
+            let doc = everything(space);
+            let a = render(
+                &gpu,
+                &mut Compositor::new(&gpu.device),
+                &doc,
+                Time::ZERO,
+                1.0,
+            );
+            let mut c = Compositor::new(&gpu.device);
+            let b = render(&gpu, &mut c, &doc, Time::ZERO, 1.0);
+            // Cached on the second render of the same compositor.
+            let c2 = render(&gpu, &mut c, &doc, Time::from_secs(1), 1.0);
+            assert_eq!(a, b, "{space:?}");
+            assert_eq!(b, c2, "{space:?}: static, so every frame is the same");
+        }
+    }
+
+    #[test]
+    fn effects_apply_to_images_and_precomps() {
+        let Some(gpu) = gpu() else { return };
+        let dir = tempfile::tempdir().unwrap();
+        let mut doc = Document::with_comp(
+            "Sources",
+            CompSettings {
+                width: 64,
+                height: 48,
+                ..CompSettings::default()
+            },
+        );
+        let main = doc.main_comp.unwrap();
+        AddImageLayer {
+            comp: main,
+            path: image_file(dir.path()).to_string_lossy().into_owned(),
+            pixel_size: [16, 8],
+            index: 0,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let image_layer = doc.main().unwrap().layers[0].id;
+
+        // A child composition with a solid, used as a precomp.
+        let mut report = voxy_core::CommandReport::default();
+        CreateComposition {
+            settings: CompSettings {
+                width: 20,
+                height: 20,
+                background: LinearRgba::WHITE,
+                ..CompSettings::default()
+            },
+            folder: None,
+        }
+        .apply_reported(&mut doc, &mut report)
+        .unwrap();
+        let child = report.created_comps[0];
+        AddSolidLayer {
+            comp: child,
+            name: None,
+            color: LinearRgba::new(0.9, 0.2, 0.1, 1.0),
+            index: 0,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        AddSourceLayer {
+            comp: main,
+            source: SourceRef::Comp(child),
+            index: 0,
+            in_point: Time::ZERO,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let precomp = doc.main().unwrap().layers[0].id;
+
+        let mut c = Compositor::new(&gpu.device);
+        c.set_asset_root(Some(dir.path().to_path_buf()));
+        let plain = render(&gpu, &mut c, &doc, Time::ZERO, 1.0);
+        let mut fx = doc.clone();
+        add_effect(&mut fx, image_layer, ids::INVERT);
+        add_effect(&mut fx, precomp, ids::GAUSSIAN_BLUR);
+        let with = render(&gpu, &mut c, &fx, Time::ZERO, 1.0);
+        assert_ne!(with, plain);
+        let stats = c.chain_stats();
+        assert_eq!(stats.renders, 2, "{stats:?}");
+
+        // A collapsed precomp with effects still renders through its chain
+        // (collapse needs the child as one picture to apply effects to).
+        if let voxy_core::LayerKind::Precomp { collapse, .. } =
+            &mut fx.layer_mut(precomp).unwrap().kind
+        {
+            *collapse = true;
+        }
+        let collapsed = render(&gpu, &mut c, &fx, Time::ZERO, 1.0);
+        assert_eq!(collapsed, with);
+    }
+}
+
+mod keys {
+    use std::sync::Arc;
+
+    use voxy_core::{EffectId, EffectTypeId, EvaluatedEffect, Value, WorkingSpace};
+    use voxy_render::kernels::Kernel;
+    use voxy_render::{ChainPlan, DrawSource, EffectNode};
+
+    fn chain(kernel: Kernel, version: u32, params: Vec<(Arc<str>, Value)>, scale: f64) -> u64 {
+        ChainPlan::new(
+            DrawSource::Solid([1.0, 0.5, 0.25, 1.0]),
+            Some(voxy_core::glam::DVec2::new(10.0, 10.0)),
+            vec![EffectNode {
+                kernel,
+                effect: EvaluatedEffect {
+                    id: EffectId(1),
+                    type_id: EffectTypeId::new(kernel.type_id()),
+                    version,
+                    params,
+                    matte: None,
+                    frame: 0,
+                },
+            }],
+            scale,
+            WorkingSpace::Linear,
+        )
+        .content_key()
+    }
+
+    /// Changing any parameter, the effect version or the resolution gives a
+    /// different chain key, so no stale frame can be shown (design §3.3).
+    #[test]
+    fn every_parameter_version_and_scale_changes_the_key() {
+        let reg = voxy_core::registry::builtins();
+        for kernel in Kernel::ALL {
+            let def = reg.latest(&EffectTypeId::new(kernel.type_id())).unwrap();
+            let base: Vec<(Arc<str>, Value)> = def
+                .params
+                .iter()
+                .map(|p| (p.name.clone(), p.desc.default.clone()))
+                .collect();
+            let key = chain(kernel, 1, base.clone(), 1.0);
+            assert_ne!(
+                chain(kernel, 2, base.clone(), 1.0),
+                key,
+                "{kernel:?} version"
+            );
+            assert_ne!(chain(kernel, 1, base.clone(), 0.5), key, "{kernel:?} scale");
+            for i in 0..base.len() {
+                let mut changed = base.clone();
+                changed[i].1 = match &changed[i].1 {
+                    Value::Scalar(v) => Value::Scalar(v + 0.125),
+                    Value::Int(v) => Value::Int(v + 1),
+                    Value::Enum(v) => Value::Enum(v + 1),
+                    Value::Bool(b) => Value::Bool(!b),
+                    Value::Color(c) => Value::Color(voxy_core::LinearRgba::new(c.r, c.g, 0.5, c.a)),
+                    other => other.clone(),
+                };
+                assert_ne!(
+                    chain(kernel, 1, changed, 1.0),
+                    key,
+                    "{kernel:?} parameter {}",
+                    base[i].0
+                );
+            }
+        }
+    }
+}
