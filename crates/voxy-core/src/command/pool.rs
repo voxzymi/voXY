@@ -76,9 +76,14 @@ fn check_folder(doc: &Document, folder: Option<FolderId>) -> Result<(), CommandE
 pub(crate) fn renumber_layer(doc: &mut Document, layer: &Layer) -> Layer {
     let mut copy = layer.clone();
     copy.id = doc.alloc_id();
+    let mut effects = std::mem::take(&mut copy.effects);
     for p in copy.properties_mut() {
         p.id = doc.alloc_id();
     }
+    for fx in &mut effects {
+        fx.renumber(&mut || doc.alloc_id());
+    }
+    copy.effects = effects;
     copy
 }
 
@@ -511,6 +516,7 @@ impl Command for RemoveItems {
                         .collect();
                     c.layers.retain(|l| !removed.contains(&l.id));
                     unparent_children(&mut c.layers, &removed);
+                    super::effects::clear_layer_refs(&mut c.layers, &removed);
                 }
             }
         }
@@ -598,6 +604,7 @@ impl Command for DuplicateComposition {
             })
             .collect();
         remap_parents(&mut layers, &map);
+        super::effects::remap_layer_refs(&mut layers, &map);
         copy.layers = layers.into_iter().map(Arc::new).collect();
         let id = copy.id;
         Arc::make_mut(&mut doc.comps).insert(id, Arc::new(copy));

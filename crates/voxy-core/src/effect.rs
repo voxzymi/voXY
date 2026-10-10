@@ -210,6 +210,37 @@ impl EffectInstance {
             )
     }
 
+    /// Gives the effect and every ID it uses fresh values from `alloc`, also
+    /// inside a placeholder's preserved JSON, so a copy never shares an ID
+    /// with its original.
+    pub fn renumber(&mut self, alloc: &mut dyn FnMut() -> u64) {
+        self.id = EffectId(alloc());
+        let mut map = std::collections::HashMap::new();
+        for p in &mut self.params {
+            let new = PropId(alloc());
+            map.insert(p.id.raw(), new.raw());
+            p.id = new;
+        }
+        if let Some(ph) = &mut self.placeholder {
+            for id in &mut ph.reserved {
+                let new = PropId(alloc());
+                map.insert(id.raw(), new.raw());
+                *id = new;
+            }
+            let raw = Arc::make_mut(&mut ph.raw);
+            raw.insert("id".into(), self.id.raw().into());
+            if let Some(params) = raw.get_mut("params").and_then(|p| p.as_array_mut()) {
+                for p in params {
+                    if let Some(slot) = p.get_mut("id")
+                        && let Some(new) = slot.as_u64().and_then(|old| map.get(&old))
+                    {
+                        *slot = (*new).into();
+                    }
+                }
+            }
+        }
+    }
+
     /// Turns this effect into a placeholder for `reason`, keeping its data
     /// (as it would be saved) verbatim.
     pub fn mark_missing(&mut self, reason: MissingReason) {

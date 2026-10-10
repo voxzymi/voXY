@@ -161,6 +161,10 @@ fn move_attributes(
         parent.duration,
         transform,
     );
+    // Effect mattes and layer references cannot cross compositions.
+    let kept_ids: Vec<LayerId> = kept.iter().map(|l| l.id).collect();
+    super::effects::clear_layer_refs(&mut inside, &kept_ids);
+    super::effects::clear_layer_refs(&mut kept, ids);
     kept.insert(top, Arc::new(precomp));
     comp_mut(doc, child)?.layers = inside;
     comp_mut(doc, parent.id)?.layers = kept;
@@ -396,6 +400,7 @@ impl Command for UnprecomposeLayer {
             }
         }
         remap_parents(&mut copies, &map);
+        super::effects::remap_layer_refs(&mut copies, &map);
 
         // The precomp layer's own transform, kept through a transform layer.
         let identity = p.parent.is_none()

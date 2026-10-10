@@ -62,9 +62,20 @@ at `743b053` (merge of #3).
       (D7). The renderer still composites every mode as Normal until E-B,
       and draws nothing for adjustment layers until E-D. No UI sets either
       yet.
-   5. Commands: add, remove, move, duplicate, enable, rename, matte,
-      paste, set blend mode, new adjustment layer, and clearing layer
-      references on delete.
+   5. **Done:** the commands (`voxy_core::command`), each one undo step:
+      - `AddEffect`, `RemoveEffects`, `MoveEffect` and `DuplicateEffects`;
+      - `SetEffectsEnabled`, `RenameEffect` and `SetEffectMatte` (the matte
+        must be another layer in the same composition);
+      - `PasteEffects`, onto several layers at once. Copies get new IDs,
+        and references that leave the composition are cleared and
+        reported;
+      - `SetBlendMode` and `AddAdjustmentLayer`.
+
+      Deleting layers (directly, or by removing their source) clears
+      mattes and layer references to them. Copied layers (Duplicate
+      Composition, Unprecompose) renumber their effects, including IDs
+      inside a placeholder's preserved JSON, and remap references to the
+      copies. Precompose clears references that would cross compositions.
    6. Persistence: format 0.7.0 when used, placeholders kept verbatim, and
       migrations.
    7. Tests: undo proptest, round trips, placeholders.

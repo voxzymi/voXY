@@ -1,11 +1,13 @@
 //! Commands: every edit to a document is one.
 
 mod dropping;
+mod effects;
 mod pool;
 mod precomp;
 mod settings;
 
 pub use dropping::*;
+pub use effects::*;
 pub use pool::*;
 pub use precomp::*;
 pub use settings::*;
@@ -54,6 +56,7 @@ pub struct CommandReport {
     pub created_comps: Vec<CompId>,
     pub created_layers: Vec<LayerId>,
     pub created_folders: Vec<crate::FolderId>,
+    pub created_effects: Vec<crate::EffectId>,
     /// Things the user should know: data that could not be preserved
     /// exactly, mismatches, counts of adjusted keyframes.
     pub warnings: Vec<String>,
@@ -292,6 +295,7 @@ impl Command for RemoveLayers {
                 .ok_or_else(|| CommandError::NotFound(id.to_string()))?;
             let c = comp_mut(doc, comp)?;
             c.layers.retain(|l| l.id != id);
+            effects::clear_layer_refs(&mut c.layers, &[id]);
             let children: Vec<LayerId> = c
                 .layers
                 .iter()
