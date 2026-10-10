@@ -174,9 +174,36 @@ at `743b053` (merge of #3).
 
    **E-B complete.** `cargo clippy -D warnings` (Rust 1.99) is clean, and
    all 594 workspace tests pass on Linux.
-3. E-C: the Effects & Presets panel, Effect Controls in the Properties
-   panel, keyframing of effect parameters, on-canvas gizmos, effect presets
-   and actions. Stop after E-C if the owner says so.
+3. E-C (in progress):
+   1. **Done:** Effect Controls in the Properties panel.
+      - One collapsible section per effect. The header has an enable
+        toggle, the name (warning colour for placeholders), ▲/▼ to reorder,
+        reset and remove.
+      - Right-click the name for rename, copy, paste below, duplicate,
+        reset and remove. "Add Effect" menu by category, and Paste.
+      - Parameters reuse the keyframe controls (stopwatch, diamond, arrows,
+        easing menu). New widgets for ints, enums (labelled choices), layer
+        references (the other layers of the composition) and colours
+        without alpha.
+      - Placeholders show why they are unavailable, with read-only values.
+      - Core: `ResetEffect` (all parameters back to static defaults, one
+        undo step).
+      - Opening and recovering projects resolve effects against the
+        session's registry (`EditorState::effects`), and load warnings go to
+        the status bar.
+      - Effect parameters already appear in the timeline lanes and the
+        graph editor, because they are layer properties.
+      - Audit: every panel draws with all effects, a keyframed parameter, a
+        disabled effect and a placeholder.
+   2. Next: the Effects & Presets panel (search, categories, double-click
+      or drag to apply).
+   3. Actions in the action table (copy, paste, duplicate, remove,
+      enable, move, reset, open the panel).
+   4. Effect presets (`effect_presets.toml`, tolerant loader, save from the
+      menu, apply from the panel).
+   5. Solo and the before/after split (preview-only render settings).
+   6. On-canvas gizmos for point parameters.
+   Stop after E-C if the owner says so.
 4. E-D, then O-A to O-D.
 
 ## Approved decisions

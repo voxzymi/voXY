@@ -378,3 +378,39 @@ fn blend_modes_and_adjustment_layers_are_commands() {
         BlendMode::Normal
     );
 }
+
+#[test]
+fn reset_puts_every_parameter_back_in_one_step() {
+    use voxy_core::command::{ResetEffect, SetAnimated, SetProperty};
+    let Fixture { mut h, a, .. } = fixture();
+    let fx = add(&mut h, a, ids::GAUSSIAN_BLUR);
+    let fresh = h
+        .current()
+        .find_layer(a)
+        .unwrap()
+        .1
+        .effect(fx)
+        .unwrap()
+        .clone();
+    let radius = fresh.param("radius").unwrap().id;
+    h.execute(SetAnimated {
+        prop: radius,
+        time: Time::ZERO,
+        animated: true,
+    })
+    .unwrap();
+    h.execute(SetProperty {
+        prop: radius,
+        time: Time::from_secs(1),
+        value: Value::Scalar(40.0),
+    })
+    .unwrap();
+    let edited = h.current().clone();
+    h.execute(ResetEffect { layer: a, id: fx }).unwrap();
+    assert_eq!(
+        h.current().find_layer(a).unwrap().1.effect(fx).unwrap(),
+        &fresh
+    );
+    assert!(h.undo());
+    assert_eq!(**h.current(), *edited);
+}

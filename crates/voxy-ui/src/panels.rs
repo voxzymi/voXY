@@ -3,12 +3,15 @@
 use egui::{Id, RichText, Ui, WidgetText};
 use egui_dock::TabViewer;
 use voxy_core::command::{
-    AddKeyframe, ApplyEasePreset, RemoveKeyframes, RenameLayer, SetAnimated, SetInterpolation,
-    SetProperty, SetWorkingSpace,
+    AddEffect, AddKeyframe, ApplyEasePreset, DuplicateEffects, MoveEffect, PasteEffects,
+    RemoveEffects, RemoveKeyframes, RenameEffect, RenameLayer, ResetEffect, SetAnimated,
+    SetEffectsEnabled, SetInterpolation, SetProperty, SetWorkingSpace,
 };
 use voxy_core::glam::DVec2;
+use voxy_core::registry::{EffectParamDef, ParamVisibility};
 use voxy_core::{
-    EasePreset, FrameRate, Interp, LayerKind, LinearRgba, Property, Time, Unit, Value, WorkingSpace,
+    EasePreset, EffectInstance, FrameRate, Interp, Layer, LayerId, LayerKind, LinearRgba, Property,
+    Time, Unit, Value, WorkingSpace,
 };
 
 use crate::state::EditorState;
@@ -221,7 +224,7 @@ impl Panels<'_> {
                     .striped(true)
                     .show(ui, |ui| {
                         for p in layer.transform.properties() {
-                            self.property_row(ui, p);
+                            self.property_row(ui, p, None, &[]);
                         }
                     });
                 if let LayerKind::Solid { color, size } = &layer.kind {
@@ -231,8 +234,8 @@ impl Panels<'_> {
                         .num_columns(2)
                         .striped(true)
                         .show(ui, |ui| {
-                            self.property_row(ui, color);
-                            self.property_row(ui, size);
+                            self.property_row(ui, color, None, &[]);
+                            self.property_row(ui, size, None, &[]);
                         });
                 }
                 if let Some(asset) = layer.kind.asset()
@@ -242,7 +245,257 @@ impl Panels<'_> {
                     ui.label(RichText::new("Source").strong());
                     ui.label(&a.path);
                 }
+                self.effects_ui(ui, layer, &doc);
             });
+    }
+
+    /// Effect Controls: one collapsible section per effect, in stack order.
+    fn effects_ui(&mut self, ui: &mut Ui, layer: &Layer, doc: &voxy_core::Document) {
+        ui.separator();
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Effects").strong());
+            self.add_effect_menu(ui, layer.id);
+            let paste = !self.state.effect_clipboard.is_empty();
+            if ui
+                .add_enabled(paste, egui::Button::new("Paste").small())
+                .on_hover_text("Paste the copied effects at the end of the stack")
+                .clicked()
+            {
+                self.paste_effects(layer.id, None);
+            }
+        });
+        if layer.effects.is_empty() {
+            ui.weak("No effects. Add one with Add Effect.");
+            return;
+        }
+        // Layers a layer-reference parameter can point at.
+        let others: Vec<(LayerId, String)> = doc
+            .find_layer(layer.id)
+            .and_then(|(comp, _)| doc.comp(comp))
+            .map(|c| {
+                c.layers
+                    .iter()
+                    .filter(|l| l.id != layer.id)
+                    .map(|l| (l.id, l.name.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let count = layer.effects.len();
+        for (i, fx) in layer.effects.iter().enumerate() {
+            let def = self.state.effects.get(&fx.type_id, fx.version).cloned();
+            let id = ui.make_persistent_id(("effect-controls", fx.id));
+            egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, true)
+                .show_header(ui, |ui| self.effect_header(ui, layer.id, fx, i, count))
+                .body(|ui| {
+                    if let Some(ph) = &fx.placeholder {
+                        ui.colored_label(
+                            ui.visuals().warn_fg_color,
+                            format!(
+                                "Not available: {}. It is kept as it is and has no effect.",
+                                ph.reason
+                            ),
+                        );
+                    }
+                    egui::Grid::new(("effect-params", fx.id))
+                        .num_columns(2)
+                        .striped(true)
+                        .show(ui, |ui| {
+                            for p in &fx.params {
+                                let pd = def.as_ref().and_then(|d| d.param(fx.param_name(p)));
+                                if pd.is_some_and(|pd| {
+                                    pd.flags.visibility == ParamVisibility::Hidden
+                                }) {
+                                    continue;
+                                }
+                                if fx.is_placeholder()
+                                    || pd.is_some_and(|pd| {
+                                        pd.flags.visibility == ParamVisibility::ReadOnly
+                                    })
+                                {
+                                    ui.label(p.desc.label.as_ref());
+                                    ui.weak(crate::timeline::value_text(
+                                        &p.value_at(self.state.time),
+                                    ));
+                                    ui.end_row();
+                                } else {
+                                    self.property_row(ui, p, pd, &others);
+                                }
+                            }
+                        });
+                });
+        }
+    }
+
+    /// The header of one effect's section: enable toggle, name, reorder,
+    /// reset and remove, and the right-click menu.
+    fn effect_header(
+        &mut self,
+        ui: &mut Ui,
+        layer: LayerId,
+        fx: &EffectInstance,
+        index: usize,
+        count: usize,
+    ) {
+        let mut enabled = fx.enabled;
+        if ui
+            .checkbox(&mut enabled, "")
+            .on_hover_text(if fx.enabled {
+                "Turn this effect off"
+            } else {
+                "Turn this effect on"
+            })
+            .changed()
+        {
+            self.state.execute(SetEffectsEnabled {
+                layer,
+                ids: vec![fx.id],
+                enabled,
+            });
+        }
+        let mut name = RichText::new(&fx.name);
+        if !fx.enabled {
+            name = name.weak();
+        }
+        if fx.is_placeholder() {
+            name = name.color(ui.visuals().warn_fg_color);
+        }
+        let label = ui.label(name);
+        label.context_menu(|ui| {
+            let mut rename = fx.name.clone();
+            ui.horizontal(|ui| {
+                ui.label("Name");
+                if ui.text_edit_singleline(&mut rename).lost_focus() && rename != fx.name {
+                    self.state.execute(RenameEffect {
+                        layer,
+                        id: fx.id,
+                        name: rename.clone(),
+                    });
+                }
+            });
+            ui.separator();
+            if ui.button("Copy").clicked() {
+                self.state.effect_clipboard = vec![fx.clone()];
+                ui.close();
+            }
+            if ui
+                .add_enabled(
+                    !self.state.effect_clipboard.is_empty(),
+                    egui::Button::new("Paste Below"),
+                )
+                .clicked()
+            {
+                self.paste_effects(layer, Some(index + 1));
+                ui.close();
+            }
+            if ui
+                .add_enabled(!fx.is_placeholder(), egui::Button::new("Duplicate"))
+                .clicked()
+            {
+                self.state.execute(DuplicateEffects {
+                    layer,
+                    ids: vec![fx.id],
+                });
+                ui.close();
+            }
+            if ui
+                .add_enabled(!fx.is_placeholder(), egui::Button::new("Reset"))
+                .clicked()
+            {
+                self.state.execute(ResetEffect { layer, id: fx.id });
+                ui.close();
+            }
+            if ui.button("Remove").clicked() {
+                self.state.execute(RemoveEffects {
+                    layer,
+                    ids: vec![fx.id],
+                });
+                ui.close();
+            }
+        });
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui
+                .small_button("✕")
+                .on_hover_text("Remove effect")
+                .clicked()
+            {
+                self.state.execute(RemoveEffects {
+                    layer,
+                    ids: vec![fx.id],
+                });
+            }
+            if ui
+                .add_enabled(!fx.is_placeholder(), egui::Button::new("⟲").small())
+                .on_hover_text("Reset all parameters")
+                .clicked()
+            {
+                self.state.execute(ResetEffect { layer, id: fx.id });
+            }
+            if ui
+                .add_enabled(index + 1 < count, egui::Button::new("▼").small())
+                .on_hover_text("Apply later")
+                .clicked()
+            {
+                self.state.execute(MoveEffect {
+                    layer,
+                    id: fx.id,
+                    to_index: index + 1,
+                });
+            }
+            if ui
+                .add_enabled(index > 0, egui::Button::new("▲").small())
+                .on_hover_text("Apply earlier")
+                .clicked()
+            {
+                self.state.execute(MoveEffect {
+                    layer,
+                    id: fx.id,
+                    to_index: index - 1,
+                });
+            }
+        });
+    }
+
+    /// "Add Effect": every effect in the registry, by category.
+    fn add_effect_menu(&mut self, ui: &mut Ui, layer: LayerId) {
+        let registry = self.state.effects.clone();
+        let mut by_category: std::collections::BTreeMap<_, Vec<_>> =
+            std::collections::BTreeMap::default();
+        for def in registry.latest_all() {
+            by_category
+                .entry(def.category.clone())
+                .or_default()
+                .push(def.clone());
+        }
+        ui.menu_button("Add Effect", |ui| {
+            for (category, mut defs) in by_category {
+                defs.sort_by(|a, b| a.name.cmp(&b.name));
+                ui.menu_button(category.label(), |ui| {
+                    for def in defs {
+                        if ui
+                            .button(def.name.as_ref())
+                            .on_hover_text(def.description.as_ref())
+                            .clicked()
+                        {
+                            self.state.execute(AddEffect {
+                                layer,
+                                index: None,
+                                def,
+                            });
+                            ui.close();
+                        }
+                    }
+                });
+            }
+        });
+    }
+
+    fn paste_effects(&mut self, layer: LayerId, index: Option<usize>) {
+        let items = self.state.effect_clipboard.clone();
+        self.state.execute_reported(PasteEffects {
+            layers: vec![layer],
+            index,
+            items,
+        });
     }
 
     fn composition_ui(&mut self, ui: &mut Ui, doc: &voxy_core::Document) {
@@ -262,7 +515,7 @@ impl Panels<'_> {
                     ui.label("Duration");
                     ui.label(format!("{:.3} s", comp.duration.as_secs_f64()));
                     ui.end_row();
-                    self.property_row(ui, &comp.background);
+                    self.property_row(ui, &comp.background, None, &[]);
                 }
                 ui.label("Working space");
                 let mut space = doc.meta.working_space;
@@ -311,17 +564,29 @@ impl Panels<'_> {
     }
 
     /// One editable grid row for a property: keyframe controls and label,
-    /// then the value editor.
-    fn property_row(&mut self, ui: &mut Ui, p: &Property) {
+    /// then the value editor. `param` adds an effect parameter's choices and
+    /// display flags; `layers` are the targets a layer reference can name.
+    fn property_row(
+        &mut self,
+        ui: &mut Ui,
+        p: &Property,
+        param: Option<&EffectParamDef>,
+        layers: &[(LayerId, String)],
+    ) {
         let time = self.state.time;
-        ui.horizontal(|ui| {
+        let value = p.value_at(time);
+        let label = ui.horizontal(|ui| {
             if p.desc.animatable {
                 self.keyframe_controls(ui, p, time);
             }
-            ui.label(p.desc.label.as_ref());
+            ui.label(p.desc.label.as_ref())
         });
-        let value = p.value_at(time);
-        let new = ui.horizontal(|ui| edit_value(ui, p, &value)).inner;
+        if let Some(hint) = param.and_then(|pd| pd.hint.as_deref()) {
+            label.inner.on_hover_text(hint);
+        }
+        let new = ui
+            .horizontal(|ui| edit_value(ui, p, &value, param, layers))
+            .inner;
         if let Some(v) = new
             && v != value
         {
@@ -450,7 +715,13 @@ pub fn working_space_label(space: WorkingSpace) -> &'static str {
 
 /// Edits a value according to its descriptor; returns the new value if the
 /// user changed it this frame.
-fn edit_value(ui: &mut Ui, p: &Property, value: &Value) -> Option<Value> {
+fn edit_value(
+    ui: &mut Ui,
+    p: &Property,
+    value: &Value,
+    param: Option<&EffectParamDef>,
+    layers: &[(LayerId, String)],
+) -> Option<Value> {
     let (factor, suffix) = match p.desc.unit {
         Unit::Factor | Unit::Normalized => (100.0, " %"),
         Unit::Degrees => (1.0, "°"),
@@ -478,6 +749,12 @@ fn edit_value(ui: &mut Ui, p: &Property, value: &Value) -> Option<Value> {
             (x.is_some() || y.is_some())
                 .then(|| Value::Vec2(DVec2::new(x.unwrap_or(v.x), y.unwrap_or(v.y))))
         }
+        Value::Color(c) if param.is_some_and(|pd| pd.flags.hide_alpha) => {
+            let mut rgb = [c.r, c.g, c.b];
+            ui.color_edit_button_rgb(&mut rgb)
+                .changed()
+                .then(|| Value::Color(LinearRgba::new(rgb[0], rgb[1], rgb[2], c.a)))
+        }
         Value::Color(c) => {
             let mut rgba = c.to_array();
             ui.color_edit_button_rgba_unmultiplied(&mut rgba)
@@ -487,6 +764,52 @@ fn edit_value(ui: &mut Ui, p: &Property, value: &Value) -> Option<Value> {
         Value::Bool(b) => {
             let mut b = *b;
             ui.checkbox(&mut b, "").changed().then_some(Value::Bool(b))
+        }
+        Value::Int(i) => {
+            let mut v = *i;
+            let mut w = egui::DragValue::new(&mut v).suffix(suffix).speed(0.1);
+            if let Some((lo, hi)) = p.desc.range {
+                w = w.range(lo as i64..=hi as i64);
+            }
+            ui.add(w).changed().then_some(Value::Int(v))
+        }
+        Value::Enum(e) => {
+            let labels = param.and_then(|pd| pd.choices.clone());
+            let name = |i: u32| {
+                labels
+                    .as_ref()
+                    .and_then(|l| l.get(i as usize).map(std::string::ToString::to_string))
+                    .unwrap_or_else(|| i.to_string())
+            };
+            let mut chosen = *e;
+            egui::ComboBox::from_id_salt(("enum", p.id))
+                .selected_text(name(*e))
+                .show_ui(ui, |ui| {
+                    let n = labels.as_ref().map_or(0, |l| l.len() as u32);
+                    for i in 0..n {
+                        ui.selectable_value(&mut chosen, i, name(i));
+                    }
+                });
+            (chosen != *e).then_some(Value::Enum(chosen))
+        }
+        Value::Layer(target) => {
+            let label = |t: Option<LayerId>| match t {
+                None => "None".to_owned(),
+                Some(id) => layers
+                    .iter()
+                    .find(|(l, _)| *l == id)
+                    .map_or_else(|| "(missing layer)".to_owned(), |(_, n)| n.clone()),
+            };
+            let mut chosen = *target;
+            egui::ComboBox::from_id_salt(("layer", p.id))
+                .selected_text(label(*target))
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut chosen, None, "None");
+                    for (id, name) in layers {
+                        ui.selectable_value(&mut chosen, Some(*id), name);
+                    }
+                });
+            (chosen != *target).then_some(Value::Layer(chosen))
         }
         other => {
             ui.weak(format!("{other:?}"));

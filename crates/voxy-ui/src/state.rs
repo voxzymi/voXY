@@ -87,6 +87,11 @@ pub struct EditorState {
     /// The Keyboard Shortcuts dialog, while it is open.
     pub shortcut_editor: Option<crate::shortcut_editor::Editor>,
     pub prefs: Preferences,
+    /// Every effect this session can apply: the built-ins (and, from O-A,
+    /// installed OpenFX plugins). Projects resolve against it on load.
+    pub effects: std::sync::Arc<voxy_core::registry::EffectRegistry>,
+    /// Effects last copied (Copy Effect), for pasting onto other layers.
+    pub effect_clipboard: Vec<voxy_core::EffectInstance>,
     /// The easing last copied with "Copy Easing" (or the graph editor's Copy
     /// button). Lives for the session.
     pub ease_clipboard: Option<SegmentEase>,
@@ -135,6 +140,8 @@ impl EditorState {
             tip: None,
             shortcut_editor: None,
             prefs: Preferences::default(),
+            effects: std::sync::Arc::new(voxy_core::registry::builtins().clone()),
+            effect_clipboard: Vec::new(),
             ease_clipboard: None,
             recovery: None,
             pending_recovery: None,
@@ -601,8 +608,12 @@ impl EditorState {
     }
 
     pub fn open_path(&mut self, path: &Path) {
-        match persist::load_with_ui(path) {
-            Ok((doc, ui_state)) => {
+        match persist::load_resolved(path, &self.effects) {
+            Ok(persist::Loaded {
+                doc,
+                ui_state,
+                warnings,
+            }) => {
                 self.discard_autosave();
                 self.history.reset(doc);
                 self.project_path = Some(path.to_path_buf());
@@ -614,7 +625,11 @@ impl EditorState {
                     self.restore_ui_state(&state);
                 }
                 self.project.forget_missing(self.history.current());
-                self.info(format!("Opened {}", path.display()));
+                if warnings.is_empty() {
+                    self.info(format!("Opened {}", path.display()));
+                } else {
+                    self.info(format!("Opened {}. {}", path.display(), warnings.join(" ")));
+                }
             }
             Err(e) => self.error(format!("Could not open {}: {e}", path.display())),
         }
@@ -1748,8 +1763,8 @@ impl EditorState {
         let Some(offer) = self.pending_recovery.take() else {
             return;
         };
-        match persist::load_with_ui(&offer.autosave) {
-            Ok((doc, ui_state)) => {
+        match persist::load_resolved(&offer.autosave, &self.effects) {
+            Ok(persist::Loaded { doc, ui_state, .. }) => {
                 self.history.reset_unsaved(doc);
                 self.project_path.clone_from(&offer.project);
                 self.reset_view();

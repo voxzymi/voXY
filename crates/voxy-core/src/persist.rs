@@ -272,6 +272,15 @@ pub fn load_with_ui(path: &Path) -> Result<(Document, Option<serde_json::Value>)
     from_json_with_ui(&fs::read_to_string(path)?)
 }
 
+/// [`load_with_ui`] with effects resolved against `registry` (built-ins plus
+/// installed plugins), returning the load warnings too.
+pub fn load_resolved(
+    path: &Path,
+    registry: &crate::registry::EffectRegistry,
+) -> Result<Loaded, LoadError> {
+    from_json_resolved(&fs::read_to_string(path)?, registry)
+}
+
 /// The assets folder that belongs to a project file: `<name>.assets/` next to
 /// `<name>.voxy`.
 pub fn assets_dir(project_path: &Path) -> PathBuf {

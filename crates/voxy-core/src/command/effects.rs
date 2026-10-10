@@ -489,3 +489,31 @@ impl Command for AddAdjustmentLayer {
         insert_layer(doc, self.comp, self.index, layer)
     }
 }
+
+/// Puts every parameter of an effect back to its default, static (its
+/// keyframes are removed).
+#[derive(Debug, Clone)]
+pub struct ResetEffect {
+    pub layer: LayerId,
+    pub id: EffectId,
+}
+
+impl Command for ResetEffect {
+    fn label(&self) -> Cow<'static, str> {
+        "Reset Effect".into()
+    }
+
+    fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
+        let layer = layer_mut(doc, self.layer)?;
+        let i = effect_index(layer, self.id)?;
+        if layer.effects[i].is_placeholder() {
+            return Err(CommandError::Invalid(
+                "a missing effect's settings cannot be changed".into(),
+            ));
+        }
+        for p in &mut layer.effects[i].params {
+            *p = crate::property::Property::with_default(p.id, p.desc.clone());
+        }
+        Ok(())
+    }
+}

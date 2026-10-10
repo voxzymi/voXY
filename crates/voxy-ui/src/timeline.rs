@@ -680,7 +680,7 @@ fn start_layer_drag(ui: &Ui, state: &mut EditorState, layer: &Layer, kind: DragK
     let _ = cx;
 }
 
-fn value_text(v: &Value) -> String {
+pub(crate) fn value_text(v: &Value) -> String {
     match v {
         Value::Scalar(x) => format!("{x:.2}"),
         Value::Vec2(v) => format!("{:.1}, {:.1}", v.x, v.y),

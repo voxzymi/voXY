@@ -131,6 +131,56 @@ fn draw(state: &mut EditorState, frames: usize) {
     }
 }
 
+/// [`animated`] plus every built-in effect on the selected layer, one with
+/// a keyframed parameter, one disabled, and a placeholder for an effect that
+/// is not installed.
+fn with_effects() -> EditorState {
+    use voxy_core::command::{AddEffect, SetAnimated};
+    let mut s = animated();
+    let layer = s.selection.unwrap();
+    let defs: Vec<_> = s.effects.latest_all().cloned().collect();
+    for def in defs {
+        s.execute(AddEffect {
+            layer,
+            index: None,
+            def,
+        });
+    }
+    let doc = s.history.current().clone();
+    let l = doc.find_layer(layer).unwrap().1;
+    let radius = l
+        .effects
+        .iter()
+        .find_map(|fx| fx.param("radius"))
+        .unwrap()
+        .id;
+    s.execute(SetAnimated {
+        prop: radius,
+        time: Time::ZERO,
+        animated: true,
+    });
+    s.execute(SetProperty {
+        prop: radius,
+        time: Time::from_secs(2),
+        value: Value::Scalar(30.0),
+    });
+    let mut doc = (**s.history.current()).clone();
+    let l = doc.layer_mut(layer).unwrap();
+    l.effects[1].enabled = false;
+    l.effects[2].mark_missing(voxy_core::MissingReason::UnknownType);
+    s.history.reset(doc);
+    s.selection = Some(layer);
+    s
+}
+
+#[test]
+fn every_panel_draws_with_effects_and_a_placeholder() {
+    let mut s = with_effects();
+    draw(&mut s, 3);
+    s.time = Time::from_secs(1);
+    draw(&mut s, 2);
+}
+
 #[test]
 fn every_panel_draws_with_no_composition() {
     draw(&mut empty(), 3);
