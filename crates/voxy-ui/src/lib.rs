@@ -16,6 +16,7 @@ mod effect_presets;
 mod effects_panel;
 mod empty_state;
 mod footage;
+mod gizmo;
 mod graph_editor;
 mod layout;
 mod media;

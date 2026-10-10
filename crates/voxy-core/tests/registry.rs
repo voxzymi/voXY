@@ -81,6 +81,14 @@ fn duplicate_and_invalid_definitions_are_refused() {
         fresh.register(bad).is_err(),
         "parameter keys of another type"
     );
+
+    // A point handle needs a Vec2 parameter (the blur radius is a scalar).
+    let mut point = def.clone();
+    point.version = 3;
+    let mut params = point.params.to_vec();
+    params[0].gizmo = Some(voxy_core::registry::GizmoKind::Point);
+    point.params = params.into();
+    assert!(reg.register(point).is_err(), "point gizmo on a scalar");
 }
 
 #[test]

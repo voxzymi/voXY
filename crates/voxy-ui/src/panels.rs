@@ -197,6 +197,7 @@ impl Panels<'_> {
         if let (Some(pos), Some((before, _))) = (preview.split, before) {
             self.split_overlay(ui, rect, before, pos);
         }
+        crate::gizmo::show(ui, self.state, &doc, comp_id, rect);
     }
 
     /// The before/after split over the viewport frame at `rect`: the frame

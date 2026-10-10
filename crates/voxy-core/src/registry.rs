@@ -190,6 +190,9 @@ impl EffectDef {
             if p.desc.kind != p.desc.default.kind() || !p.desc.default.is_finite() {
                 return Err(bad(format!("parameter `{}` has a bad default", p.name)));
             }
+            if p.gizmo == Some(GizmoKind::Point) && p.desc.kind != crate::ValueKind::Vec2 {
+                return Err(bad(format!("point parameter `{}` is not a Vec2", p.name)));
+            }
             if let (Some(choices), Value::Enum(i)) = (&p.choices, &p.desc.default)
                 && *i as usize >= choices.len()
             {

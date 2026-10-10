@@ -174,7 +174,7 @@ at `743b053` (merge of #3).
 
    **E-B complete.** `cargo clippy -D warnings` (Rust 1.99) is clean, and
    all 594 workspace tests pass on Linux.
-3. E-C (in progress):
+3. E-C (complete, CI pending):
    1. **Done:** Effect Controls in the Properties panel.
       - One collapsible section per effect. The header has an enable
         toggle, the name (warning colour for placeholders), ▲/▼ to reorder,
@@ -245,7 +245,21 @@ at `743b053` (merge of #3).
         Solo Effect and Before/After Split.
       - Tests: plan views (bypass, solo, a stale solo changes nothing) and
         no history entries.
-   6. On-canvas gizmos for point parameters.
+   6. **Done:** on-canvas handles for point parameters (`gizmo.rs`).
+      - Every enabled effect on the selected layer draws a handle for each
+        parameter marked `gizmo: Point`, mapped from layer pixels through
+        the layer's world transform (parents included). The effect clicked
+        in Effect Controls is highlighted.
+      - Dragging issues `SetProperty` at the current time (a key when the
+        parameter is animated); its merge key makes one drag one undo step.
+        A layer scaled to zero ignores the drag.
+      - Core: the registry refuses a point gizmo on a parameter that is not
+        a `Vec2`.
+      - Group 1 has no point parameters, so the tests register their own
+        definition. The first built-in users come in E-D.
+
+   **E-C complete.** `cargo clippy -D warnings` (Rust 1.99) is clean, and
+   all 610 workspace tests pass on Linux.
    Stop after E-C if the owner says so.
 4. E-D, then O-A to O-D.
 
