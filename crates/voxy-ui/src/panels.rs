@@ -156,19 +156,33 @@ impl Panels<'_> {
         let avail = ui.available_size();
         let ppp = ui.ctx().pixels_per_point();
         let (doc, revision) = self.state.view_document();
-        let shot = crate::viewport::Shot {
+        let preview = self.state.effects_preview;
+        let playing = self.state.transport.is_playing();
+        let mut shot = crate::viewport::Shot {
             doc: &doc,
             comp: comp_id,
             revision,
             time: self.state.time,
+            effects: preview.view(),
         };
         let frame = viewport.frame(
             &shot,
             avail * ppp,
             self.state.asset_root(),
-            self.state.transport.is_playing(),
+            playing,
+            crate::viewport::Slot::Main,
         );
         let Some((id, _)) = frame else { return };
+        let before = preview.split.and_then(|_| {
+            shot.effects = voxy_render::EffectsView::Bypass;
+            viewport.frame(
+                &shot,
+                avail * ppp,
+                self.state.asset_root(),
+                playing,
+                crate::viewport::Slot::Before,
+            )
+        });
         // Fit the whole composition into the panel, preserving aspect ratio.
         // The frame itself is rendered at most at full resolution.
         let Some(comp) = doc.comp(comp_id) else {
@@ -176,9 +190,60 @@ impl Panels<'_> {
         };
         let scale = (avail.x / comp.width as f32).min(avail.y / comp.height as f32);
         let size = egui::vec2(comp.width as f32, comp.height as f32) * scale;
-        ui.centered_and_justified(|ui| {
-            ui.add(egui::Image::new((id, size)));
-        });
+        let rect = ui
+            .centered_and_justified(|ui| ui.add(egui::Image::new((id, size))))
+            .inner
+            .rect;
+        if let (Some(pos), Some((before, _))) = (preview.split, before) {
+            self.split_overlay(ui, rect, before, pos);
+        }
+    }
+
+    /// The before/after split over the viewport frame at `rect`: the frame
+    /// without effects left of a draggable divider at `pos` (0 to 1).
+    fn split_overlay(&mut self, ui: &mut Ui, rect: egui::Rect, before: egui::TextureId, pos: f32) {
+        let x = rect.left() + rect.width() * pos;
+        let left = egui::Rect::from_min_max(rect.min, egui::pos2(x, rect.bottom()));
+        let uv = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(pos, 1.0));
+        let painter = ui.painter_at(rect);
+        painter.image(before, left, uv, egui::Color32::WHITE);
+        let handle = egui::Rect::from_center_size(
+            egui::pos2(x, rect.center().y),
+            egui::vec2(8.0, rect.height()),
+        );
+        let response = ui
+            .interact(handle, ui.id().with("effects-split"), egui::Sense::drag())
+            .on_hover_cursor(egui::CursorIcon::ResizeHorizontal)
+            .on_hover_text("Left: without effects. Right: with effects. Drag to move.");
+        if response.dragged()
+            && let Some(p) = response.interact_pointer_pos()
+            && rect.width() > 0.0
+        {
+            self.state.effects_preview.split =
+                Some(((p.x - rect.left()) / rect.width()).clamp(0.0, 1.0));
+        }
+        let stroke = ui.visuals().selection.stroke;
+        painter.vline(x, rect.y_range(), egui::Stroke::new(2.0, stroke.color));
+        for (text, align, at) in [
+            (
+                "Before",
+                egui::Align2::RIGHT_TOP,
+                egui::pos2(x - 6.0, rect.top() + 4.0),
+            ),
+            (
+                "After",
+                egui::Align2::LEFT_TOP,
+                egui::pos2(x + 6.0, rect.top() + 4.0),
+            ),
+        ] {
+            painter.text(
+                at,
+                align,
+                text,
+                egui::FontId::proportional(12.0),
+                ui.visuals().strong_text_color(),
+            );
+        }
     }
 
     fn timeline_ui(&mut self, ui: &mut Ui) {
@@ -273,6 +338,16 @@ impl Panels<'_> {
                 .clicked()
             {
                 self.paste_effects(layer.id, None);
+            }
+            let split = self.state.effects_preview.split.is_some();
+            if ui
+                .add(egui::Button::new("Before/After").small().selected(split))
+                .on_hover_text(
+                    "Split the viewport: without effects on the left, with them on the right",
+                )
+                .clicked()
+            {
+                self.state.effects_preview.toggle_split();
             }
         });
         if layer.effects.is_empty() {
@@ -467,6 +542,21 @@ impl Panels<'_> {
                 .clicked()
             {
                 self.state.execute(ResetEffect { layer, id: fx.id });
+            }
+            let solo = self.state.effects_preview.solo == Some(fx.id);
+            if ui
+                .add_enabled(
+                    !fx.is_placeholder(),
+                    egui::Button::new("Solo").small().selected(solo),
+                )
+                .on_hover_text(if solo {
+                    "Show all effects again (viewport only)"
+                } else {
+                    "Show only this effect on this layer (viewport only)"
+                })
+                .clicked()
+            {
+                self.state.effects_preview.toggle_solo(fx.id);
             }
             if ui
                 .add_enabled(index + 1 < count, egui::Button::new("▼").small())

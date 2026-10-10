@@ -26,12 +26,41 @@ use crate::kernels::Kernel;
 pub struct RenderSettings {
     /// Output resolution relative to the composition (1.0 = full size).
     pub scale: f64,
+    /// Which effects are drawn. Preview only: export always uses
+    /// [`EffectsView::All`] (design §4.2, solo and before/after).
+    pub effects: EffectsView,
 }
 
 impl Default for RenderSettings {
     fn default() -> Self {
-        RenderSettings { scale: 1.0 }
+        RenderSettings {
+            scale: 1.0,
+            effects: EffectsView::All,
+        }
     }
+}
+
+impl RenderSettings {
+    /// Full-quality settings at `scale`.
+    pub fn at_scale(scale: f64) -> Self {
+        RenderSettings {
+            scale,
+            ..RenderSettings::default()
+        }
+    }
+}
+
+/// Which effects a preview draws.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum EffectsView {
+    /// Every enabled effect (always for export).
+    #[default]
+    All,
+    /// No effects at all: the "before" side of the before/after split.
+    Bypass,
+    /// Only this effect on its layer, the layer's other effects bypassed.
+    /// Other layers draw as usual.
+    Solo(voxy_core::EffectId),
 }
 
 impl RenderSettings {
@@ -269,7 +298,16 @@ impl Builder<'_> {
             }
             self.missing += l.missing_effects;
             let mut nodes = Vec::new();
+            let solo = match self.settings.effects {
+                EffectsView::Solo(id) if l.effects.iter().any(|fx| fx.id == id) => Some(id),
+                _ => None,
+            };
             for fx in &l.effects {
+                if self.settings.effects == EffectsView::Bypass
+                    || solo.is_some_and(|id| id != fx.id)
+                {
+                    continue;
+                }
                 match Kernel::find(&fx.type_id, fx.version) {
                     Some(kernel) => {
                         let mut effect = fx.clone();
@@ -686,7 +724,7 @@ mod tests {
         .unwrap();
 
         let eval = evaluate(&doc, comp, Time::ZERO).unwrap();
-        let plan = RenderPlan::build(&eval, &RenderSettings { scale: 0.5 });
+        let plan = RenderPlan::build(&eval, &RenderSettings::at_scale(0.5));
         assert_eq!((plan.width, plan.height), (50, 25));
         assert_eq!(plan.clear, [0.5, 0.5, 0.5, 1.0]);
         assert_eq!(plan.draws.len(), 1);
@@ -836,7 +874,7 @@ mod tests {
         let again = RenderPlan::build(&eval, &RenderSettings::default());
         assert_eq!(plan.content_key(), again.content_key());
         assert_eq!(plan, again);
-        let half = RenderPlan::build(&eval, &RenderSettings { scale: 0.5 });
+        let half = RenderPlan::build(&eval, &RenderSettings::at_scale(0.5));
         assert_ne!(plan.content_key(), half.content_key());
         assert_ne!(a.content_key(), plan.content_key());
         assert!(plan.assets().is_empty(), "solids have no assets");

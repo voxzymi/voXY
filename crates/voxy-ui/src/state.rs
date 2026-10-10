@@ -63,6 +63,45 @@ struct Preview {
 /// Preview revisions have this bit set, so they never equal a real one.
 const PREVIEW_REVISION_BIT: u64 = 1 << 63;
 
+/// How the viewport shows effects (design §4.2). Preview only: exports and
+/// the project never see it, so it is plain state, not a command.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct EffectsPreview {
+    /// Show only this effect on its layer.
+    pub solo: Option<voxy_core::EffectId>,
+    /// The before/after split: the divider's position across the frame
+    /// (0 to 1); left of it shows the frame without effects.
+    pub split: Option<f32>,
+}
+
+impl EffectsPreview {
+    /// What the main ("after") viewport frame draws.
+    pub fn view(&self) -> voxy_render::EffectsView {
+        self.solo.map_or(
+            voxy_render::EffectsView::All,
+            voxy_render::EffectsView::Solo,
+        )
+    }
+
+    /// Turns solo for `id` on, or off when it is already on.
+    pub fn toggle_solo(&mut self, id: voxy_core::EffectId) {
+        self.solo = if self.solo == Some(id) {
+            None
+        } else {
+            Some(id)
+        };
+    }
+
+    /// Turns the before/after split on (divider in the middle) or off.
+    pub fn toggle_split(&mut self) {
+        self.split = if self.split.is_some() {
+            None
+        } else {
+            Some(0.5)
+        };
+    }
+}
+
 #[derive(Debug)]
 pub struct EditorState {
     pub history: History,
@@ -103,6 +142,8 @@ pub struct EditorState {
     pub effect_presets_path: Option<PathBuf>,
     /// The effect last applied, for Apply Last Effect.
     pub last_effect: Option<std::sync::Arc<voxy_core::registry::EffectDef>>,
+    /// Solo and the before/after split: viewport-only, never saved or undone.
+    pub effects_preview: EffectsPreview,
     /// The easing last copied with "Copy Easing" (or the graph editor's Copy
     /// button). Lives for the session.
     pub ease_clipboard: Option<SegmentEase>,
@@ -158,6 +199,7 @@ impl EditorState {
             effect_presets: Vec::new(),
             effect_presets_path: None,
             last_effect: None,
+            effects_preview: EffectsPreview::default(),
             ease_clipboard: None,
             recovery: None,
             pending_recovery: None,
@@ -607,6 +649,8 @@ impl EditorState {
         self.transport.pause(rate);
         self.project = ProjectState::default();
         self.selection = None;
+        self.selected_effect = None;
+        self.effects_preview = EffectsPreview::default();
         self.time = Time::ZERO;
         self.timeline = crate::timeline::TimelineView::default();
         self.graph = crate::graph_editor::GraphView::default();
@@ -1606,7 +1650,8 @@ impl EditorState {
             | Action::EffectToggle
             | Action::EffectMoveUp
             | Action::EffectMoveDown
-            | Action::EffectReset => self.effect_action_check(action),
+            | Action::EffectReset
+            | Action::EffectSolo => self.effect_action_check(action),
             Action::EditUndo if !self.history.can_undo() => Err("Nothing to undo.".to_owned()),
             Action::EditRedo if !self.history.can_undo() && !self.history.can_redo() => {
                 Err("Nothing to redo.".to_owned())
@@ -1721,7 +1766,9 @@ impl EditorState {
             | Action::EffectToggle
             | Action::EffectMoveUp
             | Action::EffectMoveDown
-            | Action::EffectReset => self.perform_effect_action(action),
+            | Action::EffectReset
+            | Action::EffectSolo => self.perform_effect_action(action),
+            Action::EffectSplit => self.effects_preview.toggle_split(),
         }
         None
     }
@@ -1751,7 +1798,9 @@ impl EditorState {
         match action {
             Action::EffectMoveUp if i == 0 => Err("It is already applied first.".to_owned()),
             Action::EffectMoveDown if i + 1 == n => Err("It is already applied last.".to_owned()),
-            Action::EffectDuplicate | Action::EffectReset if fx.is_placeholder() => {
+            Action::EffectDuplicate | Action::EffectReset | Action::EffectSolo
+                if fx.is_placeholder() =>
+            {
                 Err("This effect is not installed.".to_owned())
             }
             _ => Ok(()),
@@ -1818,6 +1867,7 @@ impl EditorState {
             (Action::EffectReset, Some((_, fx, _, _))) => {
                 self.execute(ResetEffect { layer, id: fx.id });
             }
+            (Action::EffectSolo, Some((_, fx, _, _))) => self.effects_preview.toggle_solo(fx.id),
             _ => {}
         }
     }

@@ -471,4 +471,31 @@ mod tests {
         s.remove_effect_preset("Dreamy");
         assert_eq!(s.effect_presets.len(), 0);
     }
+
+    #[test]
+    fn solo_and_split_are_viewport_state_not_edits() {
+        use crate::actions::Action;
+        let (mut s, layer) = state_with_layer();
+        let blur = listing(&s, "gaussian")[0].1[0].clone();
+        apply(&mut s, layer, blur);
+        s.selection = Some(layer);
+        let fx = s.selected_layer_effects()[0].id;
+        let revision = s.history.revision();
+        // Solo needs a clicked effect.
+        assert!(s.availability(Action::EffectSolo).is_err());
+        s.selected_effect = Some(fx);
+        s.perform(Action::EffectSolo);
+        assert_eq!(s.effects_preview.solo, Some(fx));
+        assert_eq!(s.effects_preview.view(), voxy_render::EffectsView::Solo(fx));
+        s.perform(Action::EffectSolo);
+        assert_eq!(s.effects_preview.view(), voxy_render::EffectsView::All);
+        s.perform(Action::EffectSplit);
+        assert_eq!(s.effects_preview.split, Some(0.5));
+        s.effects_preview.toggle_solo(fx);
+        // Nothing went into the history.
+        assert_eq!(s.history.revision(), revision);
+        // A new document starts with every effect shown and no split.
+        s.new_document();
+        assert_eq!(s.effects_preview, crate::state::EffectsPreview::default());
+    }
 }

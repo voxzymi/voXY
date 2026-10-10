@@ -241,6 +241,9 @@ impl VoxyApp {
                 self.item(ui, Action::EffectMoveDown);
                 self.item(ui, Action::EffectReset);
                 ui.separator();
+                self.item(ui, Action::EffectSolo);
+                self.item(ui, Action::EffectSplit);
+                ui.separator();
                 self.item(ui, Action::EffectRemove);
                 self.item(ui, Action::EffectRemoveAll);
             });

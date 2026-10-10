@@ -23,7 +23,8 @@ pub use compositor::{
 };
 pub use gpu::{GpuContext, GpuError};
 pub use plan::{
-    ChainPlan, DrawOp, DrawSource, EffectNode, RenderPlan, RenderSettings, working_premultiplied,
+    ChainPlan, DrawOp, DrawSource, EffectNode, EffectsView, RenderPlan, RenderSettings,
+    working_premultiplied,
 };
 
 pub use wgpu;

@@ -111,6 +111,8 @@ pub enum Action {
     EffectMoveUp,
     EffectMoveDown,
     EffectReset,
+    EffectSolo,
+    EffectSplit,
 }
 
 /// Static description of an [`Action`].
@@ -223,6 +225,8 @@ impl Action {
         Action::EffectMoveUp,
         Action::EffectMoveDown,
         Action::EffectReset,
+        Action::EffectSolo,
+        Action::EffectSplit,
     ];
 
     pub fn def(self) -> ActionDef {
@@ -540,6 +544,15 @@ impl Action {
                 def("effect.move_down", "Move Effect Down", Layer, Editor, &[])
             }
             Action::EffectReset => def("effect.reset", "Reset Effect", Layer, Editor, &[]),
+            // Viewport only: neither is an edit, so neither is undone.
+            Action::EffectSolo => def("effect.solo", "Solo Effect", Layer, Editor, &[]),
+            Action::EffectSplit => def(
+                "effect.before_after",
+                "Before/After Split",
+                Layer,
+                Editor,
+                &[],
+            ),
         }
     }
 

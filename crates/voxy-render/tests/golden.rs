@@ -294,7 +294,7 @@ fn preview_scale_renders_smaller_frame() {
         &FrameRequest {
             comp: doc.main_comp.unwrap(),
             time: Time::ZERO,
-            settings: RenderSettings { scale: 0.25 },
+            settings: RenderSettings::at_scale(0.25),
             alpha: OutputAlpha::Premultiplied,
         },
     )

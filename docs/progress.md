@@ -207,7 +207,7 @@ at `743b053` (merge of #3).
       - Saved dock layouts from before the panel existed are kept: the
         panel joins the Project panel's group instead of the whole layout
         being refused (tested).
-   3. **Done:** ten effect actions in the action table, with no default
+   3. **Done:** ten effect actions (twelve with step 5) in the action table, with no default
       shortcuts, so they can be rebound in the shortcut editor: Apply Last
       Effect, Copy, Paste, Duplicate, Remove, Remove All, Turn On or Off,
       Move Up, Move Down, Reset.
@@ -231,7 +231,20 @@ at `743b053` (merge of #3).
         real descriptors. It leaves out, and reports, effects that are not
         installed, and pastes in one undo step.
       - Core: `registry::resolve_effect` for effects outside a document.
-   5. Solo and the before/after split (preview-only render settings).
+   5. **Done:** solo and the before/after split.
+      - `RenderSettings::effects` (`EffectsView`: all, bypass, or solo one
+        effect). Export keeps the default (all); only the viewport changes
+        it.
+      - "Solo" in each effect header shows only that effect on its layer;
+        other layers draw as usual. "Before/After" in Effect Controls
+        splits the viewport: no effects left of a draggable divider.
+      - The viewport has a second render target for the "before" frame,
+        skipped while unchanged like the main one.
+      - Both are plain editor state (`EffectsPreview`), never commands or
+        saved, and reset when another project opens. Also two actions:
+        Solo Effect and Before/After Split.
+      - Tests: plan views (bypass, solo, a stale solo changes nothing) and
+        no history entries.
    6. On-canvas gizmos for point parameters.
    Stop after E-C if the owner says so.
 4. E-D, then O-A to O-D.

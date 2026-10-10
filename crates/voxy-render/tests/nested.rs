@@ -134,7 +134,7 @@ fn render_at(
         &FrameRequest {
             comp: doc.main_comp.unwrap(),
             time,
-            settings: RenderSettings { scale },
+            settings: RenderSettings::at_scale(scale),
             alpha: OutputAlpha::Straight,
         },
     )

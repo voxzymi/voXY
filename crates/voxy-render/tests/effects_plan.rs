@@ -9,7 +9,7 @@ use voxy_core::{
     evaluate,
 };
 use voxy_render::kernels::{Kernel, Rect, chain_rod, chain_roi};
-use voxy_render::{DrawSource, RenderPlan, RenderSettings};
+use voxy_render::{DrawSource, EffectsView, RenderPlan, RenderSettings};
 
 fn doc() -> (Document, CompId, LayerId) {
     let mut doc = Document::with_comp(
@@ -54,7 +54,10 @@ fn set(doc: &mut Document, prop: voxy_core::PropId, value: Value) {
 }
 
 fn plan(doc: &Document, comp: CompId, t: Time, scale: f64) -> RenderPlan {
-    RenderPlan::build(&evaluate(doc, comp, t).unwrap(), &RenderSettings { scale })
+    RenderPlan::build(
+        &evaluate(doc, comp, t).unwrap(),
+        &RenderSettings::at_scale(scale),
+    )
 }
 
 fn chain_key(p: &RenderPlan) -> u64 {
@@ -101,6 +104,67 @@ fn effects_without_kernels_and_placeholders_pass_through() {
     let p = plan(&doc, comp, Time::ZERO, 1.0);
     assert!(matches!(p.draws[0].source, DrawSource::Solid(_)));
     assert_eq!((p.unsupported_effects, p.missing_effects), (1, 1));
+}
+
+/// Kernels of each draw, top layer first (`None` for a plain draw).
+fn kernels(p: &RenderPlan) -> Vec<Option<Vec<Kernel>>> {
+    p.draws
+        .iter()
+        .rev()
+        .map(|d| match &d.source {
+            DrawSource::Chain { chain, .. } => {
+                Some(chain.effects.iter().map(|n| n.kernel).collect())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn solo_and_bypass_are_preview_only_views() {
+    let (mut doc, comp, under) = doc();
+    add(&mut doc, under, ids::TINT);
+    AddSolidLayer {
+        comp,
+        name: None,
+        color: LinearRgba::new(0.0, 0.5, 1.0, 1.0),
+        index: 0,
+    }
+    .apply(&mut doc)
+    .unwrap();
+    let top = doc.main().unwrap().layers[0].id;
+    add(&mut doc, top, ids::INVERT);
+    add(&mut doc, top, ids::GAUSSIAN_BLUR);
+    let blur = doc.find_layer(top).unwrap().1.effects[1].id;
+    let eval = evaluate(&doc, comp, Time::ZERO).unwrap();
+    let with = |effects| {
+        RenderPlan::build(
+            &eval,
+            &RenderSettings {
+                effects,
+                ..RenderSettings::default()
+            },
+        )
+    };
+    let all = with(EffectsView::All);
+    assert_eq!(all, RenderPlan::build(&eval, &RenderSettings::default()));
+    assert_eq!(
+        kernels(&all),
+        [
+            Some(vec![Kernel::Invert, Kernel::GaussianBlur]),
+            Some(vec![Kernel::Tint])
+        ]
+    );
+    // Bypass: every layer draws its plain source.
+    assert_eq!(kernels(&with(EffectsView::Bypass)), [None, None]);
+    // Solo: only that effect on its layer; other layers are untouched.
+    assert_eq!(
+        kernels(&with(EffectsView::Solo(blur))),
+        [Some(vec![Kernel::GaussianBlur]), Some(vec![Kernel::Tint])]
+    );
+    // Soloing an effect that no longer exists changes nothing.
+    let gone = voxy_core::EffectId(u64::MAX);
+    assert_eq!(with(EffectsView::Solo(gone)), all);
 }
 
 #[test]

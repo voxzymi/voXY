@@ -12,7 +12,7 @@ use std::sync::Arc;
 use egui_wgpu::RenderState;
 use voxy_core::{AssetId, CompId, Document, Time};
 use voxy_render::{
-    Compositor, OUTPUT_FORMAT, OutputAlpha, RenderPlan, RenderReport, RenderSettings,
+    Compositor, EffectsView, OUTPUT_FORMAT, OutputAlpha, RenderPlan, RenderReport, RenderSettings,
 };
 
 use crate::media::MediaPool;
@@ -25,6 +25,17 @@ pub struct Shot<'a> {
     /// [`voxy_core::History::revision`] of `doc`.
     pub revision: u64,
     pub time: Time,
+    /// Which effects to draw (solo, or none for the "before" side).
+    pub effects: EffectsView,
+}
+
+/// The viewport's two render targets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Slot {
+    /// The frame as shown (with effects, or the soloed one).
+    Main = 0,
+    /// The "before" side of the before/after split.
+    Before = 1,
 }
 
 /// Everything that determines a viewport frame. Rendering is skipped while
@@ -35,6 +46,7 @@ struct FrameKey {
     revision: u64,
     time: Time,
     size: (u32, u32),
+    effects: EffectsView,
     asset_root: Option<PathBuf>,
     /// The video frames drawn.
     video: Vec<(AssetId, Time, usize)>,
@@ -63,8 +75,9 @@ pub struct ViewportRenderer {
     render_state: RenderState,
     compositor: Compositor,
     pub media: MediaPool,
-    target: Option<Target>,
-    last: Option<FrameKey>,
+    targets: [Option<Target>; 2],
+    last: [Option<FrameKey>; 2],
+    /// The report of the last [`Slot::Main`] render.
     pub last_report: RenderReport,
     /// The last frame showed a stand-in for some video frame.
     pub approximate: bool,
@@ -84,8 +97,8 @@ impl ViewportRenderer {
             render_state,
             compositor,
             media: MediaPool::new(Some(Arc::new(move || ctx.request_repaint()))),
-            target: None,
-            last: None,
+            targets: [None, None],
+            last: [None, None],
             last_report: RenderReport::default(),
             approximate: false,
         }
@@ -99,18 +112,21 @@ impl ViewportRenderer {
     /// Renders `shot.comp` at `shot.time`, sized to fit `max_px` physical
     /// pixels (never above full resolution), and returns the texture to show.
     /// `playing` makes video sources prefetch ahead instead of scrubbing.
+    /// Each [`Slot`] has its own target and is skipped while unchanged.
     pub fn frame(
         &mut self,
         shot: &Shot<'_>,
         max_px: egui::Vec2,
         asset_root: Option<PathBuf>,
         playing: bool,
+        slot: Slot,
     ) -> Option<(egui::TextureId, (u32, u32))> {
         let &Shot {
             doc,
             comp: eval_comp,
             revision,
             time,
+            effects,
         } = shot;
         let comp = doc.comp(eval_comp)?;
         let settings = RenderSettings {
@@ -119,32 +135,37 @@ impl ViewportRenderer {
                 (max_px.x, max_px.y),
                 comp.preview_resolution,
             ),
+            effects,
         };
         let size = settings.output_size(comp.width, comp.height);
         let eval = voxy_core::evaluate(doc, eval_comp, time)?;
         let video = self
             .media
             .resolve(doc, &eval, asset_root.as_deref(), playing);
-        self.approximate = video.approximate;
+        if slot == Slot::Main {
+            self.approximate = video.approximate;
+        }
         let key = FrameKey {
             comp: eval_comp,
             revision,
             time,
             size,
+            effects,
             asset_root: asset_root.clone(),
             video: video.identity(),
         };
-        if self.last.as_ref() == Some(&key)
-            && let Some(t) = &self.target
+        let i = slot as usize;
+        if self.last[i].as_ref() == Some(&key)
+            && let Some(t) = &self.targets[i]
         {
             return Some((t.id, t.size));
         }
 
         self.compositor.set_asset_root(asset_root);
-        self.ensure_target(size);
+        self.ensure_target(i, size);
         let plan = RenderPlan::build(&eval, &settings);
-        let target = self.target.as_ref().expect("ensured");
-        self.last_report = self.compositor.render(
+        let target = self.targets[i].as_ref().expect("ensured");
+        let report = self.compositor.render(
             &self.render_state.device,
             &self.render_state.queue,
             &doc.assets,
@@ -153,12 +174,15 @@ impl ViewportRenderer {
             &target.view,
             OutputAlpha::Premultiplied,
         );
-        self.last = Some(key);
+        if slot == Slot::Main {
+            self.last_report = report;
+        }
+        self.last[i] = Some(key);
         Some((target.id, target.size))
     }
 
-    fn ensure_target(&mut self, size: (u32, u32)) {
-        if self.target.as_ref().is_some_and(|t| t.size == size) {
+    fn ensure_target(&mut self, i: usize, size: (u32, u32)) {
+        if self.targets[i].as_ref().is_some_and(|t| t.size == size) {
             return;
         }
         let device = &self.render_state.device;
@@ -178,7 +202,7 @@ impl ViewportRenderer {
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let mut renderer = self.render_state.renderer.write();
-        let id = if let Some(old) = &self.target {
+        let id = if let Some(old) = &self.targets[i] {
             renderer.update_egui_texture_from_wgpu_texture(
                 device,
                 &view,
@@ -190,7 +214,7 @@ impl ViewportRenderer {
             renderer.register_native_texture(device, &view, wgpu::FilterMode::Linear)
         };
         drop(renderer);
-        self.target = Some(Target {
+        self.targets[i] = Some(Target {
             size,
             view,
             id,
@@ -221,9 +245,7 @@ mod tests {
     #[test]
     fn preview_renders_get_a_different_key_but_export_does_not_depend_on_it() {
         let size = |res| {
-            let s = RenderSettings {
-                scale: preview_scale((1920, 1080), (2000.0, 2000.0), res),
-            };
+            let s = RenderSettings::at_scale(preview_scale((1920, 1080), (2000.0, 2000.0), res));
             s.output_size(1920, 1080)
         };
         // The preview key holds the output size, so changing the preview
@@ -233,5 +255,6 @@ mod tests {
         // Exports use the default settings, whatever the preview says.
         let export = RenderSettings::default();
         assert_eq!(export.output_size(1920, 1080), (1920, 1080));
+        assert_eq!(export.effects, EffectsView::All);
     }
 }
