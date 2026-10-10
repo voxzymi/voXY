@@ -1,0 +1,89 @@
+# voXY third-party credits for OpenFX: the single source of truth.
+#
+# The README section "Third-party OFX plugins and credits", the matching
+# section of LICENSING.md and the in-app About & Credits dialog are all
+# generated from (or read directly from) this file. Edit it here, never
+# in those places.
+#
+# Generator and CI check: `cargo xtask credits [--check]` (arrives with
+# O-A). Until then the README and LICENSING.md blocks between the
+# `credits:begin` / `credits:end` markers are kept in sync by hand.
+#
+# Fields:
+#   id          stable identifier, also used by the CI fixture list
+#   name        display name
+#   authors     authors or maintainers, as the project credits them
+#   url         upstream project
+#   version     release tag, if any
+#   commit      exact pinned commit
+#   license     SPDX expression, read from the project's license file
+#   license_url link to the license file at the pinned commit
+#   copyright   copyright line exactly as the license file gives it
+#   use         "host-api" (voXY implements this API)
+#               "fixture"  (built in CI as a test fixture, never shipped)
+#               "download" (offered to users; needs the owner's decision)
+#   status      "approved" or "proposed" (shortlisted, waiting for the
+#               owner's approval). The README, LICENSING.md and the app
+#               list only "approved" entries.
+#   sha256      checksum of anything downloaded (filled when first fetched)
+
+schema = 1
+
+[[credit]]
+id = "openfx-api"
+name = "OpenFX (OFX) image-effect API"
+authors = ["OpenFX and contributors to the OpenFX project", "Academy Software Foundation"]
+url = "https://github.com/AcademySoftwareFoundation/openfx"
+version = "OFX_Release_1.5.1"
+commit = "ab779510b2655b4d11a7e01e5c521f9aa8c88976"
+license = "BSD-3-Clause"
+license_url = "https://github.com/AcademySoftwareFoundation/openfx/blob/ab779510b2655b4d11a7e01e5c521f9aa8c88976/LICENSE.md"
+copyright = "Copyright (c) 2025, OpenFX and contributors to the OpenFX project"
+use = "host-api"
+status = "approved"
+note = "voXY's OpenFX host is written against these headers and the OpenFX specification."
+
+# --- Shortlist from docs/ofx-plugins.md, waiting for the owner's approval ---
+# All from the same pinned OpenFX commit as the API above.
+
+[[credit]]
+id = "openfx-examples"
+name = "OpenFX example plugins (Invert, Basic, Rectangle, ChoiceParams, DepthConverter, Test, Custom)"
+authors = ["OpenFX and contributors to the OpenFX project"]
+url = "https://github.com/AcademySoftwareFoundation/openfx/tree/ab779510b2655b4d11a7e01e5c521f9aa8c88976/Examples"
+version = "OFX_Release_1.5.1"
+commit = "ab779510b2655b4d11a7e01e5c521f9aa8c88976"
+license = "BSD-3-Clause"
+license_url = "https://github.com/AcademySoftwareFoundation/openfx/blob/ab779510b2655b4d11a7e01e5c521f9aa8c88976/LICENSE.md"
+copyright = "Copyright (c) 2025, OpenFX and contributors to the OpenFX project"
+use = "fixture"
+status = "proposed"
+
+[[credit]]
+id = "openfx-support-plugins"
+name = "OpenFX Support library sample plugins (Invert, Generator, Transition, Tester, MultiBundle)"
+authors = ["OpenFX and contributors to the OpenFX project"]
+url = "https://github.com/AcademySoftwareFoundation/openfx/tree/ab779510b2655b4d11a7e01e5c521f9aa8c88976/Support/Plugins"
+version = "OFX_Release_1.5.1"
+commit = "ab779510b2655b4d11a7e01e5c521f9aa8c88976"
+license = "BSD-3-Clause"
+license_url = "https://github.com/AcademySoftwareFoundation/openfx/blob/ab779510b2655b4d11a7e01e5c521f9aa8c88976/Support/LICENSE"
+copyright = "Copyright OpenFX and contributors to the OpenFX project"
+use = "fixture"
+status = "proposed"
+
+# Optional, copyleft: only if the owner chooses Q2 (a) or (c) in
+# docs/ofx-plugins.md. CI-only, never uploaded or distributed.
+
+[[credit]]
+id = "natron-openfx-misc"
+name = "openfx-misc (CImgBlur, Transform, ChromaKeyer, ColorCorrect)"
+authors = ["The Natron Developers", "INRIA"]
+url = "https://github.com/NatronGitHub/openfx-misc"
+commit = "0abd46b5a8cbc98fa24579042129460d0aa87b8f"
+license = "GPL-2.0-or-later"
+license_url = "https://github.com/NatronGitHub/openfx-misc/blob/0abd46b5a8cbc98fa24579042129460d0aa87b8f/LICENSE"
+copyright = "(C) 2018-2021 The Natron Developers, (C) 2013-2018 INRIA"
+use = "fixture"
+status = "proposed"
+note = "Built with submodules openfx 2303ff811bee3ffe085287602f684fe5fe5357e0 and SupportExt 2485505dbe55885ee92ca9f164e7732a85856a13 (GPL-2.0), and CImg.h b33dcc8f9f1acf1f276ded92c04f8231f6c23fcd (CeCILL-C or CeCILL v2)."

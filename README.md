@@ -281,6 +281,21 @@ flowchart LR
 - Property-based tests (`proptest`) run random edit sequences through undo,
   redo and save/load. Set `PROPTEST_CASES` to change how many sequences run.
 
+## Third-party OFX plugins and credits
+
+<!-- credits:begin (generated from third_party/credits.toml; do not edit by hand) -->
+voXY hosts OpenFX image-effect plugins. The projects below are credited
+because voXY implements their API or uses their plugins. **They are not
+affiliated with or endorsed by voXY. voXY only hosts them.**
+
+| Project | Authors | License | Used for |
+|---|---|---|---|
+| [OpenFX (OFX) image-effect API](https://github.com/AcademySoftwareFoundation/openfx) (OFX_Release_1.5.1) | OpenFX and contributors to the OpenFX project, Academy Software Foundation | BSD-3-Clause | voXY's OpenFX host is written against these headers and the OpenFX specification. |
+
+No third-party plugins are built or offered yet. The candidates and their
+licenses are in [`docs/ofx-plugins.md`](docs/ofx-plugins.md).
+<!-- credits:end -->
+
 ## Licensing
 
 See [`LICENSING.md`](LICENSING.md). It covers the dependency policy, OpenFX

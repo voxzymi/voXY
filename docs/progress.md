@@ -27,9 +27,11 @@ at `743b053` (merge of #3).
 
 ## Next, in order
 
-1. P-0 (in progress). Step 1 done: research and shortlist in
-   `docs/ofx-plugins.md`. Step 2: the credits TOML and the README and
-   LICENSING scaffolding. Then: plugin research and shortlist in `docs/ofx-plugins.md`,
+1. P-0 done, waiting for approval. Step 1: research and shortlist in
+   `docs/ofx-plugins.md`. Step 2: `third_party/credits.toml` and the README
+   and LICENSING sections between the `credits:begin` and `credits:end`
+   markers, kept in sync by hand until `cargo xtask credits --check` arrives
+   in O-A. Then: plugin research and shortlist in `docs/ofx-plugins.md`,
    the credits TOML, and README/LICENSING scaffolding, then stop for
    approval. Research only: nothing is downloaded or built.
 2. E-A, E-B, E-C, then E-D, then O-A to O-D.
@@ -59,8 +61,12 @@ at `743b053` (merge of #3).
 
 ## Open questions waiting on the owner
 
-- The P-0 shortlist, Q1 to Q4 in `docs/ofx-plugins.md` §4 (once step 2 is
-  in).
+- The P-0 shortlist, Q1 to Q4 in `docs/ofx-plugins.md` §4:
+  - Q1: the BSD core as fixtures;
+  - Q2: GPL `openfx-misc` CI-only, or our own blur, transform and keyer
+    test plugins;
+  - Q3: whether to persist the 1.5 Bytes parameter;
+  - Q4: skip "Get free plugins" for now.
 
 ## Verified only on Linux
 

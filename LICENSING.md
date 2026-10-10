@@ -73,6 +73,27 @@ Third-party OFX **plugins** are separate programs that the user installs. voXY
 loads them at run time in a separate sandbox process and does not distribute
 them, so their licenses do not affect voXY's.
 
+- Plugins used as **CI test fixtures** are built from source at a pinned
+  commit in CI. They are never shipped, uploaded as artifacts or linked into
+  voXY. Copyleft plugins need the project owner's explicit approval before
+  any use. See [`docs/ofx-plugins.md`](docs/ofx-plugins.md).
+- Offering plugins to users as a download is a separate decision by the
+  owner, and it is not made yet.
+
+### Credits and notices
+
+<!-- credits:begin (generated from third_party/credits.toml; do not edit by hand) -->
+**OpenFX (OFX) image-effect API**: <https://github.com/AcademySoftwareFoundation/openfx>,
+tag `OFX_Release_1.5.1`, commit `ab779510b2655b4d11a7e01e5c521f9aa8c88976`.
+License: BSD-3-Clause
+([full text](https://github.com/AcademySoftwareFoundation/openfx/blob/ab779510b2655b4d11a7e01e5c521f9aa8c88976/LICENSE.md)),
+"Copyright (c) 2025, OpenFX and contributors to the OpenFX project". Use:
+voXY's host implements this API. The headers will be vendored in
+`third_party/openfx/` with this license file.
+
+No third-party plugins are used yet.
+<!-- credits:end -->
+
 ## FFmpeg (from Milestone 3)
 
 voXY reaches FFmpeg through the `ffmpeg-next` bindings (WTFPL), which link
