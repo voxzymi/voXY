@@ -97,8 +97,15 @@ at `743b053` (merge of #3).
    **E-A complete.** `cargo clippy -D warnings` is clean and all 565
    workspace tests pass on Linux.
 2. E-B: the render-graph integration and group 1.
-   1. The per-layer chain in the plan: intermediate targets, RoD and ROI,
-      and cache keys, with a pass-through effect node.
+   1. The per-layer chain, in three slices:
+      - 1a **done:** `EvaluatedLayer::effects` holds the enabled,
+        non-placeholder effects with parameters at the frame time, plus an
+        exact frame number for seeds. Placeholders are counted in
+        `missing_effects`.
+      - 1b: the plan chain on the CPU (kernel table in `voxy-render`, RoD
+        and ROI, content keys), with unit tests.
+      - 1c: GPU execution (layer-local targets, chain cache) with the first
+        kernel (invert) and a golden.
    2. The blend modes (ping-pong shader), with CPU reference tests.
    3. The blurs (gaussian, box, directional), with goldens and the ROI test.
    4. The colour basics (brightness/contrast, exposure, invert, tint,

@@ -384,3 +384,42 @@ fn blend_modes_and_adjustment_layers_need_format_0_7_0() {
     assert!(json.contains("\"type\": \"adjustment\""));
     assert_eq!(persist::from_json(&json).unwrap(), doc);
 }
+
+#[test]
+fn evaluation_resolves_enabled_effects_at_the_time() {
+    let (mut doc, layer) = doc_with_solid();
+    let comp = doc.main_comp.unwrap();
+    let reg = voxy_core::registry::builtins();
+    let def = |id: &str| reg.latest(&EffectTypeId::new(id)).unwrap().clone();
+    let mut blur = def(voxy_core::registry::ids::GAUSSIAN_BLUR).instantiate(&mut doc);
+    let radius = blur.param_mut("radius").unwrap();
+    radius.set_animated(voxy_core::Time::ZERO, true).unwrap();
+    radius
+        .set_value_at(voxy_core::Time::ZERO, Value::Scalar(0.0))
+        .unwrap();
+    radius
+        .set_value_at(voxy_core::Time::from_secs(2), Value::Scalar(20.0))
+        .unwrap();
+    let mut off = def(voxy_core::registry::ids::INVERT).instantiate(&mut doc);
+    off.enabled = false;
+    let mut gone = def(voxy_core::registry::ids::TINT).instantiate(&mut doc);
+    gone.mark_missing(MissingReason::UnknownType);
+    let l = doc.layer_mut(layer).unwrap();
+    l.effects.extend([blur, off, gone]);
+
+    let t = voxy_core::Time::from_secs(1);
+    let eval = voxy_core::evaluate(&doc, comp, t).unwrap();
+    let e = &eval.layers[0];
+    assert_eq!(
+        e.effects.len(),
+        1,
+        "disabled and missing effects are left out"
+    );
+    assert_eq!(e.missing_effects, 1);
+    let fx = &e.effects[0];
+    assert_eq!(fx.type_id.as_str(), voxy_core::registry::ids::GAUSSIAN_BLUR);
+    assert!((fx.scalar("radius").unwrap() - 10.0).abs() < 1e-9);
+    assert_eq!(fx.param("dimensions"), Some(&Value::Enum(0)));
+    // 30 fps by default: one second is frame 30.
+    assert_eq!(fx.frame, 30);
+}

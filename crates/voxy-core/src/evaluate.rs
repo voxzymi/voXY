@@ -13,9 +13,11 @@ use crate::asset::AssetTable;
 use crate::color::{LinearRgba, WorkingSpace};
 use crate::comp::Composition;
 use crate::document::Document;
-use crate::id::{AssetId, CompId, LayerId};
+use crate::effect::{EffectMatte, EffectTypeId};
+use crate::id::{AssetId, CompId, EffectId, LayerId};
 use crate::layer::{BlendMode, Layer, LayerKind, Transform};
 use crate::time::Time;
+use crate::value::Value;
 
 /// A composition with every property resolved at one time.
 #[derive(Debug, Clone, PartialEq)]
@@ -39,6 +41,44 @@ pub struct EvaluatedLayer {
     /// Layer opacity in `0..=1` (not inherited from parents).
     pub opacity: f64,
     pub blend: BlendMode,
+    /// The enabled effects, in stack order (first applied first), with
+    /// their parameters resolved at this time. Disabled effects are left
+    /// out; placeholders are left out too and counted in
+    /// [`EvaluatedLayer::missing_effects`] (they render as pass-through).
+    pub effects: Vec<EvaluatedEffect>,
+    /// Enabled placeholder effects skipped on this layer.
+    pub missing_effects: usize,
+}
+
+/// An effect with every parameter resolved at one time.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EvaluatedEffect {
+    pub id: EffectId,
+    pub type_id: EffectTypeId,
+    pub version: u32,
+    /// `(parameter name, value)` in definition order.
+    pub params: Vec<(Arc<str>, Value)>,
+    pub matte: Option<EffectMatte>,
+    /// The frame of the layer's composition containing this time, for
+    /// deterministic seeds (design §3.4): `floor(t × fps)`, exact.
+    pub frame: i64,
+}
+
+impl EvaluatedEffect {
+    pub fn param(&self, name: &str) -> Option<&Value> {
+        self.params
+            .iter()
+            .find(|(n, _)| &**n == name)
+            .map(|(_, v)| v)
+    }
+
+    pub fn scalar(&self, name: &str) -> Option<f64> {
+        match self.param(name)? {
+            Value::Scalar(v) => Some(*v),
+            Value::Int(v) => Some(*v as f64),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -145,6 +185,12 @@ fn evaluate_in(
             world: worlds.world(l.id),
             opacity: scalar(&l.transform.opacity, time, 1.0).clamp(0.0, 1.0),
             blend: l.blend_mode,
+            effects: effects(l, time, c.frame_rate.time_to_frame(time)),
+            missing_effects: l
+                .effects
+                .iter()
+                .filter(|fx| fx.enabled && fx.is_placeholder())
+                .count(),
         })
         .collect();
     Some(EvaluatedComp {
@@ -156,6 +202,26 @@ fn evaluate_in(
         background,
         layers,
     })
+}
+
+fn effects(layer: &Layer, time: Time, frame: i64) -> Vec<EvaluatedEffect> {
+    layer
+        .effects
+        .iter()
+        .filter(|fx| fx.enabled && !fx.is_placeholder())
+        .map(|fx| EvaluatedEffect {
+            id: fx.id,
+            type_id: fx.type_id.clone(),
+            version: fx.version,
+            params: fx
+                .params
+                .iter()
+                .map(|p| (Arc::from(fx.param_name(p)), p.value_at(time)))
+                .collect(),
+            matte: fx.matte,
+            frame,
+        })
+        .collect()
 }
 
 fn content(doc: &Document, layer: &Layer, time: Time, scope: &mut Scope) -> EvaluatedContent {
