@@ -22,14 +22,15 @@ at `743b053` (merge of #3).
   | Project format | 0.6.0. A file is written as 0.6.0 only when it uses parametric easings. |
   | CI | Linux x64, Windows x64, macOS arm64, macOS x64. GPU golden tests run on Linux (lavapipe). There are cargo-deny and license-list checks. |
 
-- **Step 1: design note** `docs/design-effects-ofx.md` written (draft).
+- **Step 1: design note** `docs/design-effects-ofx.md`, approved with
+  D1 to D8.
 
 ## Next, in order
 
-1. Owner approval of the design note and decisions D1 to D8 (its §11).
-2. P-0: plugin research and shortlist in `docs/ofx-plugins.md`, the credits
-   TOML, and README/LICENSING scaffolding, then stop for approval.
-3. E-A, E-B, E-C, then E-D, then O-A to O-D.
+1. P-0 (in progress): plugin research and shortlist in `docs/ofx-plugins.md`,
+   the credits TOML, and README/LICENSING scaffolding, then stop for
+   approval. Research only: nothing is downloaded or built.
+2. E-A, E-B, E-C, then E-D, then O-A to O-D.
 
 ## Approved decisions
 
@@ -40,11 +41,23 @@ at `743b053` (merge of #3).
   and track mattes stay a later milestone, with a reserved slot in the render
   order.
 - Step 0: add `Value::Layer` for layer-reference parameters.
+- Design note approved, with all of D1 to D8 as recommended (see its §11):
+  - D1: add `Value::Curve` (validated, hold only), plus `AssetKind::Lut`
+    with `Value::Asset`; gradient map uses three colour stops.
+  - D2: hand plugins premultiplied images and convert the output.
+  - D3: `interprocess` local sockets.
+  - D4: `memmap2` over per-session files, cleaned up on exit and, after a
+    crash, on the next launch.
+  - D5: no GPU suites in O-A to O-D.
+  - D6: batch order as listed, in small groups.
+  - D7: blend modes and adjustment layers also write 0.7.0.
+  - D8: W3C luma weights.
+  - Also: OpenFX 1.5.1 headers, the macOS universal folder, and Custom
+    parameters as the only plugin state.
 
 ## Open questions waiting on the owner
 
-- Approval of `docs/design-effects-ofx.md`, including decisions D1 to D8
-  (§11 of that file).
+- None until the P-0 shortlist is ready.
 
 ## Verified only on Linux
 

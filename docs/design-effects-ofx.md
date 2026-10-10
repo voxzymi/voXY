@@ -1,7 +1,7 @@
 # Design: effects system and OpenFX hosting
 
-**Status: draft, waiting for the owner's approval. No code has been written
-for it.** Milestones: E-A to E-D (built-in effects, the design proposal's
+**Status: approved by the owner, including decisions D1 to D8 (§11), with
+the additions recorded there. No code has been written for it yet.** Milestones: E-A to E-D (built-in effects, the design proposal's
 Milestone 5), P-0 (plugin research), and O-A to O-D (the OpenFX host,
 Milestones 7 and 8).
 
@@ -776,3 +776,15 @@ These go into `docs/deferred.md` when the design is approved:
 | D6 | Built-in effect batch order (§5) | As listed, group 1 first. |
 | D7 | Blend and adjustment layers also trigger format 0.7.0 (§2) | Yes. |
 | D8 | HSL blend-mode luma weights | W3C (0.30, 0.59, 0.11). |
+
+**Owner's answers (all approved as recommended), with these additions:**
+
+- **D1:** curve values and LUT assets are validated on load. A curve is
+  always hold-interpolated, and never blended between keys.
+- **D2:** the rule is written down in `docs/ofx-host.md`.
+- **D4:** the shared-memory files are removed when voXY exits. Any left by a
+  crash are removed on the next launch.
+- **D6:** effects ship in small groups.
+- Also approved: headers pinned to OpenFX 1.5.1, the macOS universal-folder
+  correction (§6.2), and no plugin state blob, only Custom parameters
+  (§6.8).
