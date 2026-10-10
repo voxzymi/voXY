@@ -87,8 +87,24 @@ at `743b053` (merge of #3).
         exactly as in the file.
       - Migration of older built-in versions arrives with the first
         version 2 of a built-in; all are version 1 now.
-   7. Tests: undo proptest, round trips, placeholders.
-2. E-B, E-C, then E-D, then O-A to O-D.
+   7. **Done:** the undo proptest (`tests/history_props.rs`) now mixes random
+      effect-stack edits (add, remove, move, duplicate, enable, rename,
+      matte, keyframed parameter edits, paste, blend mode, adjustment
+      layers) with every existing layer, pool and precomp edit. Full undo
+      restores the document exactly, save and load are lossless, and IDs
+      are never reused. Run with 5000 cases locally.
+
+   **E-A complete.** `cargo clippy -D warnings` is clean and all 565
+   workspace tests pass on Linux.
+2. E-B: the render-graph integration and group 1.
+   1. The per-layer chain in the plan: intermediate targets, RoD and ROI,
+      and cache keys, with a pass-through effect node.
+   2. The blend modes (ping-pong shader), with CPU reference tests.
+   3. The blurs (gaussian, box, directional), with goldens and the ROI test.
+   4. The colour basics (brightness/contrast, exposure, invert, tint,
+      hue/saturation), with goldens.
+   5. Determinism and cache tests, and `docs/effects.md` for group 1.
+3. E-C, then E-D, then O-A to O-D.
 
 ## Approved decisions
 

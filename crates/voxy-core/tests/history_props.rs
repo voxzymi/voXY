@@ -7,6 +7,10 @@ use proptest::prelude::*;
 use std::collections::BTreeSet;
 
 use voxy_core::command::{
+    AddAdjustmentLayer, AddEffect, DuplicateEffects, MoveEffect, PasteEffects, RemoveEffects,
+    RenameEffect, SetBlendMode, SetEffectMatte, SetEffectsEnabled,
+};
+use voxy_core::command::{
     AddImageLayer, AddSolidLayer, AddSourceLayer, Anchor, ApplyEasePreset, CreateComposition,
     CreateFolder, DuplicateComposition, MoveKeyframes, MoveLayer, MoveToFolder, PrecomposeLayers,
     PrecomposeMode, RemoveItems, RemoveKeyframes, RemoveLayers, RemoveMode, RenameComposition,
@@ -15,7 +19,9 @@ use voxy_core::command::{
     SetWorkingSpace, UnprecomposeLayer,
 };
 use voxy_core::glam::{DVec2, DVec3};
+use voxy_core::registry::{EffectDef, builtins};
 use voxy_core::shapes::Range;
+use voxy_core::{BlendMode, EffectMatte, MatteChannel, ValueKind};
 use voxy_core::{
     BounceParams, CompId, CompSettings, Document, EaseHandle, EasePreset, FrameRate, History,
     Interp, JumpMode, Layer, LinearRgba, OscillationParams, PoolItem, PropId, SourceRef,
@@ -58,6 +64,19 @@ enum Edit {
     Unprecompose(usize),
     RemoveItem(usize, bool),
     Duplicate,
+    // Effect-stack edits (Milestone E-A): (layer, effect, ...) indices.
+    FxAdd(usize, usize, usize),
+    FxRemove(usize, usize),
+    FxMove(usize, usize, usize),
+    FxDuplicate(usize, usize),
+    FxEnable(usize, usize, bool),
+    FxRename(usize, usize, String),
+    FxMatte(usize, usize, Option<usize>),
+    /// (layer, effect, parameter, time in ms, animate first, value draw)
+    FxParam(usize, usize, usize, i64, bool, f64),
+    FxPaste(usize, usize, usize),
+    Blend(usize, usize),
+    AddAdjustment,
     RenameComp(String),
     NewFolder,
     MoveItem(usize, usize),
@@ -194,9 +213,192 @@ fn pool_edit() -> impl Strategy<Value = Edit> {
     ]
 }
 
-/// Edits of every kind, pool edits included.
+fn fx_edit() -> impl Strategy<Value = Edit> {
+    let n = builtin_defs().len();
+    prop_oneof![
+        3 => (any::<usize>(), 0..n, 0usize..4).prop_map(|(l, d, i)| Edit::FxAdd(l, d, i)),
+        1 => (any::<usize>(), any::<usize>()).prop_map(|(l, f)| Edit::FxRemove(l, f)),
+        1 => (any::<usize>(), any::<usize>(), 0usize..4).prop_map(|(l, f, t)| Edit::FxMove(l, f, t)),
+        1 => (any::<usize>(), any::<usize>()).prop_map(|(l, f)| Edit::FxDuplicate(l, f)),
+        1 => (any::<usize>(), any::<usize>(), any::<bool>())
+            .prop_map(|(l, f, on)| Edit::FxEnable(l, f, on)),
+        1 => (any::<usize>(), any::<usize>(), "[a-zA-Z0-9 ]{0,8}")
+            .prop_map(|(l, f, s)| Edit::FxRename(l, f, s)),
+        1 => (any::<usize>(), any::<usize>(), proptest::option::of(any::<usize>()))
+            .prop_map(|(l, f, m)| Edit::FxMatte(l, f, m)),
+        3 => (
+            any::<usize>(),
+            any::<usize>(),
+            any::<usize>(),
+            -2000i64..12_000,
+            any::<bool>(),
+            -2000.0f64..2000.0
+        )
+            .prop_map(|(l, f, p, t, a, v)| Edit::FxParam(l, f, p, t, a, v)),
+        1 => (any::<usize>(), any::<usize>(), any::<usize>())
+            .prop_map(|(a, f, b)| Edit::FxPaste(a, f, b)),
+        1 => (any::<usize>(), 0..BlendMode::ALL.len()).prop_map(|(l, m)| Edit::Blend(l, m)),
+        1 => Just(Edit::AddAdjustment),
+    ]
+}
+
+fn builtin_defs() -> Vec<std::sync::Arc<EffectDef>> {
+    builtins().latest_all().cloned().collect()
+}
+
+/// Edits of every kind, pool and effect edits included.
 fn any_edit() -> impl Strategy<Value = Edit> {
-    prop_oneof![3 => edit(), 2 => pool_edit()]
+    prop_oneof![3 => edit(), 2 => pool_edit(), 2 => fx_edit()]
+}
+
+fn is_fx(e: &Edit) -> bool {
+    matches!(
+        e,
+        Edit::FxAdd(..)
+            | Edit::FxRemove(..)
+            | Edit::FxMove(..)
+            | Edit::FxDuplicate(..)
+            | Edit::FxEnable(..)
+            | Edit::FxRename(..)
+            | Edit::FxMatte(..)
+            | Edit::FxParam(..)
+            | Edit::FxPaste(..)
+            | Edit::Blend(..)
+            | Edit::AddAdjustment
+    )
+}
+
+/// A value of `kind` drawn from `v` (some out of range, to exercise clamping
+/// and rejection).
+fn value_of(kind: ValueKind, v: f64) -> Value {
+    match kind {
+        ValueKind::Int => Value::Int(v as i64),
+        ValueKind::Enum => Value::Enum((v.abs() as u32) % 8),
+        ValueKind::Bool => Value::Bool(v > 0.0),
+        ValueKind::Color => {
+            let c = (v / 1000.0) as f32;
+            Value::Color(LinearRgba::new(c, 1.0 - c, 0.5, 1.0))
+        }
+        ValueKind::Vec2 => Value::Vec2(DVec2::new(v, -v)),
+        // Scalars, and kinds group 1 does not use.
+        _ => Value::Scalar(v),
+    }
+}
+
+/// Effect-stack edits on the layers of `comp`. Missing targets are skipped
+/// and rejected edits must change nothing, so errors are ignored.
+fn apply_fx(h: &mut History, e: &Edit, doc: &Document, comp: CompId) {
+    let layers = &doc.comp(comp).expect("exists").layers;
+    let pick = |i: usize| (!layers.is_empty()).then(|| &layers[i % layers.len()]);
+    let fx_of =
+        |l: &Layer, f: usize| (!l.effects.is_empty()).then(|| l.effects[f % l.effects.len()].id);
+    let _ = match e {
+        Edit::FxAdd(l, d, i) => match pick(*l) {
+            Some(l) => h.execute(AddEffect {
+                layer: l.id,
+                index: Some(*i),
+                def: builtin_defs()[*d].clone(),
+            }),
+            None => Ok(()),
+        },
+        Edit::FxRemove(l, f) => match pick(*l).and_then(|l| Some((l.id, fx_of(l, *f)?))) {
+            Some((layer, id)) => h.execute(RemoveEffects {
+                layer,
+                ids: vec![id],
+            }),
+            None => Ok(()),
+        },
+        Edit::FxMove(l, f, to) => match pick(*l).and_then(|l| Some((l.id, fx_of(l, *f)?))) {
+            Some((layer, id)) => h.execute(MoveEffect {
+                layer,
+                id,
+                to_index: *to,
+            }),
+            None => Ok(()),
+        },
+        Edit::FxDuplicate(l, f) => match pick(*l).and_then(|l| Some((l.id, fx_of(l, *f)?))) {
+            Some((layer, id)) => h.execute(DuplicateEffects {
+                layer,
+                ids: vec![id],
+            }),
+            None => Ok(()),
+        },
+        Edit::FxEnable(l, f, on) => match pick(*l).and_then(|l| Some((l.id, fx_of(l, *f)?))) {
+            Some((layer, id)) => h.execute(SetEffectsEnabled {
+                layer,
+                ids: vec![id],
+                enabled: *on,
+            }),
+            None => Ok(()),
+        },
+        Edit::FxRename(l, f, name) => match pick(*l).and_then(|l| Some((l.id, fx_of(l, *f)?))) {
+            Some((layer, id)) => h.execute(RenameEffect {
+                layer,
+                id,
+                name: name.clone(),
+            }),
+            None => Ok(()),
+        },
+        Edit::FxMatte(l, f, m) => match pick(*l).and_then(|l| Some((l.id, fx_of(l, *f)?))) {
+            Some((layer, id)) => h.execute(SetEffectMatte {
+                layer,
+                id,
+                matte: m.and_then(pick).map(|t| EffectMatte {
+                    layer: t.id,
+                    channel: MatteChannel::Luma,
+                    invert: false,
+                }),
+            }),
+            None => Ok(()),
+        },
+        Edit::FxParam(l, f, p, ms, animate, v) => {
+            let target = pick(*l).and_then(|l| {
+                let id = fx_of(l, *f)?;
+                let fx = l.effect(id)?;
+                let params = fx.editable_params();
+                (!params.is_empty()).then(|| &params[*p % params.len()])
+            });
+            match target {
+                Some(prop) => {
+                    let time = Time::from_millis(*ms);
+                    if *animate {
+                        let _ = h.execute(SetAnimated {
+                            prop: prop.id,
+                            time,
+                            animated: true,
+                        });
+                    }
+                    h.execute(SetProperty {
+                        prop: prop.id,
+                        time,
+                        value: value_of(prop.desc.kind, *v),
+                    })
+                }
+                None => Ok(()),
+            }
+        }
+        Edit::FxPaste(a, f, b) => match (pick(*a), pick(*b)) {
+            (Some(src), Some(dst)) if !src.effects.is_empty() => h.execute(PasteEffects {
+                layers: vec![dst.id],
+                index: None,
+                items: vec![src.effects[*f % src.effects.len()].clone()],
+            }),
+            _ => Ok(()),
+        },
+        Edit::Blend(l, m) => match pick(*l) {
+            Some(l) => h.execute(SetBlendMode {
+                layers: vec![l.id],
+                mode: BlendMode::ALL[*m],
+            }),
+            None => Ok(()),
+        },
+        Edit::AddAdjustment => h.execute(AddAdjustmentLayer {
+            comp,
+            name: None,
+            index: 0,
+        }),
+        _ => Ok(()),
+    };
 }
 
 /// Every ID in a document.
@@ -209,6 +411,9 @@ fn all_ids(doc: &Document) -> BTreeSet<u64> {
         for l in &c.layers {
             ids.insert(l.id.raw());
             ids.extend(l.properties().iter().map(|p| p.id.raw()));
+            for fx in &l.effects {
+                ids.extend(fx.ids());
+            }
         }
     }
     ids
@@ -257,6 +462,10 @@ fn apply(h: &mut History, e: &Edit, focus: &mut Option<CompId>) {
         }
         return;
     };
+    if is_fx(e) {
+        apply_fx(h, e, &doc, comp);
+        return;
+    }
     if matches!(
         e,
         Edit::NewComp
