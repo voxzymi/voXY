@@ -10,10 +10,10 @@ mod builtin;
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use crate::document::Document;
-use crate::effect::{EffectInstance, EffectTypeId};
+use crate::effect::{EffectInstance, EffectTypeId, MissingReason};
 use crate::id::EffectId;
 use crate::layer::ForeignData;
 use crate::property::{Property, PropertyDesc, Unit};
@@ -278,6 +278,136 @@ impl EffectRegistry {
     pub fn is_empty(&self) -> bool {
         self.by_type.is_empty()
     }
+}
+
+/// The registry of built-in effects, built once.
+pub fn builtins() -> &'static EffectRegistry {
+    static BUILTINS: LazyLock<EffectRegistry> = LazyLock::new(EffectRegistry::with_builtins);
+    &BUILTINS
+}
+
+/// Gives every effect in `doc` its definition from `reg` (design §1.1):
+///
+/// - parameters get the definition's descriptors, in definition order;
+///   parameters the file does not have are added at their defaults, and a
+///   saved value of the wrong type is reset to the default (reported);
+/// - an effect whose type or version `reg` does not have, or which has a
+///   parameter the definition does not know, becomes a placeholder that
+///   keeps its data verbatim;
+/// - a placeholder whose definition `reg` now has is restored.
+///
+/// Returns warnings for the user. Running it again with the same registry
+/// changes nothing.
+pub fn resolve_effects(doc: &mut Document, reg: &EffectRegistry) -> Vec<String> {
+    let mut warnings = Vec::new();
+    let targets: Vec<crate::id::LayerId> = doc
+        .comps
+        .values()
+        .flat_map(|c| {
+            c.layers
+                .iter()
+                .filter(|l| !l.effects.is_empty())
+                .map(|l| l.id)
+        })
+        .collect();
+    for layer in targets {
+        let Some((_, l)) = doc.find_layer(layer) else {
+            continue;
+        };
+        let before = l.effects.clone();
+        let mut effects = before.clone();
+        for fx in &mut effects {
+            resolve_one(fx, reg, &mut || doc.alloc_id(), &mut warnings);
+        }
+        if effects != before
+            && let Some(l) = doc.layer_mut(layer)
+        {
+            l.effects = effects;
+        }
+    }
+    warnings
+}
+
+fn resolve_one(
+    fx: &mut EffectInstance,
+    reg: &EffectRegistry,
+    alloc: &mut dyn FnMut() -> u64,
+    warnings: &mut Vec<String>,
+) {
+    if fx.is_placeholder() {
+        // Unreadable data stays a placeholder; a missing definition may have
+        // been installed since.
+        match fx.reparse_placeholder() {
+            Some(again) if reg.get(&again.type_id, again.version).is_some() => *fx = again,
+            _ => {
+                refresh_reason(fx, reg);
+                return;
+            }
+        }
+    }
+    let Some(def) = reg.get(&fx.type_id, fx.version) else {
+        refresh_reason(fx, reg);
+        warnings.push(format!("“{}”: {}", fx.name, missing_reason(fx, reg)));
+        return;
+    };
+    let mut saved = std::mem::take(&mut fx.params);
+    if let Some(p) = saved.iter().find(|p| def.param(fx.param_name(p)).is_none()) {
+        let why = format!(
+            "it has a parameter `{}` this build does not know",
+            fx.param_name(p)
+        );
+        fx.params = saved;
+        fx.mark_missing(MissingReason::Unreadable(why.clone()));
+        warnings.push(format!("“{}”: {why}", fx.name));
+        return;
+    }
+    let mut params = Vec::with_capacity(def.params.len());
+    for pd in def.params.iter() {
+        let at = saved.iter().position(|p| fx.param_name(p) == &*pd.name);
+        let p = match at.map(|i| saved.swap_remove(i)) {
+            Some(p) => {
+                let id = p.id;
+                Property::from_saved(
+                    id,
+                    &pd.desc.key,
+                    p.animation().clone(),
+                    Some(pd.desc.clone()),
+                )
+                .unwrap_or_else(|_| {
+                    warnings.push(format!(
+                        "“{}”: the saved value of “{}” was damaged and was reset",
+                        fx.name, pd.desc.label
+                    ));
+                    Property::with_default(id, pd.desc.clone())
+                })
+            }
+            None => Property::with_default(crate::id::PropId(alloc()), pd.desc.clone()),
+        };
+        params.push(p);
+    }
+    fx.params = params;
+}
+
+fn missing_reason(fx: &EffectInstance, reg: &EffectRegistry) -> MissingReason {
+    match reg.latest(&fx.type_id) {
+        Some(latest) if fx.version > latest.version => MissingReason::NewerVersion {
+            known: latest.version,
+        },
+        _ => MissingReason::UnknownType,
+    }
+}
+
+/// Marks `fx` missing with the reason that applies under `reg` (keeping an
+/// `Unreadable` reason, which no registry can fix).
+fn refresh_reason(fx: &mut EffectInstance, reg: &EffectRegistry) {
+    if matches!(
+        fx.placeholder.as_ref().map(|p| &p.reason),
+        Some(MissingReason::Unreadable(_))
+    ) {
+        return;
+    }
+    let reason = missing_reason(fx, reg);
+    fx.mark_missing(reason);
 }
 
 /// Builds parameter definitions tersely (used by the built-ins and tests).

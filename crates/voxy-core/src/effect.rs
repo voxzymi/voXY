@@ -248,10 +248,13 @@ impl EffectInstance {
             ph.reason = reason;
             return;
         }
-        let raw = match serde_json::to_value(self.to_repr()) {
-            Ok(serde_json::Value::Object(map)) => map,
-            _ => serde_json::Map::new(),
-        };
+        // Through text, not `to_value`: f32 values (colours) are written in
+        // their shortest form, exactly as in a saved file, instead of being
+        // widened to f64 digits.
+        let raw = serde_json::to_string(&self.to_repr())
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or_default();
         // The parameters stay (read-only), so their IDs are already counted.
         self.placeholder = Some(Placeholder {
             raw: Arc::new(raw),
@@ -374,6 +377,20 @@ impl<'de> Deserialize<'de> for EffectInstance {
                 }),
             }),
         }
+    }
+}
+
+impl EffectInstance {
+    /// Re-reads a placeholder's preserved JSON, keeping the fields voXY owns
+    /// (`id`, `name`, `enabled`) from `self`. `None` if it is not a
+    /// placeholder or its data still cannot be read.
+    pub(crate) fn reparse_placeholder(&self) -> Option<EffectInstance> {
+        let ph = self.placeholder.as_ref()?;
+        let mut fx = parse_full(&ph.raw).ok()?;
+        fx.id = self.id;
+        fx.name.clone_from(&self.name);
+        fx.enabled = self.enabled;
+        Some(fx)
     }
 }
 

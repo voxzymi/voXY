@@ -236,13 +236,8 @@ fn mattes_must_be_in_the_same_composition() {
         })
         .is_err()
     );
-    // Descriptors are resolved from the registry in a later step; the data
-    // already round-trips exactly.
     let json = persist::to_json(h.current()).unwrap();
-    assert_eq!(
-        persist::to_json(&persist::from_json(&json).unwrap()).unwrap(),
-        json
-    );
+    assert_eq!(&persist::from_json(&json).unwrap(), &**h.current());
 }
 
 #[test]

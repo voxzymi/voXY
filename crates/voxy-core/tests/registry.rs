@@ -95,3 +95,136 @@ fn enum_parameters_clamp_to_their_choices() {
     channel.set_static(Value::Enum(99)).unwrap();
     assert_eq!(channel.value_at(Time::ZERO), Value::Enum(4));
 }
+
+mod resolve {
+    use std::sync::Arc;
+
+    use voxy_core::command::{AddEffect, AddSolidLayer};
+    use voxy_core::registry::{EffectRegistry, builtins, ids, resolve_effects};
+    use voxy_core::{
+        CompSettings, Document, EffectTypeId, History, LayerId, LinearRgba, MissingReason, persist,
+    };
+
+    fn project_with(id: &str) -> (History, LayerId) {
+        let doc = Document::with_comp("Resolve", CompSettings::default());
+        let comp = doc.main_comp.expect("main");
+        let mut h = History::new(doc);
+        h.execute(AddSolidLayer {
+            comp,
+            name: None,
+            color: LinearRgba::WHITE,
+            index: 0,
+        })
+        .expect("solid");
+        let layer = h.current().comp(comp).expect("comp").layers[0].id;
+        h.execute(AddEffect {
+            layer,
+            index: None,
+            def: builtins()
+                .latest(&EffectTypeId::new(id))
+                .expect("def")
+                .clone(),
+        })
+        .expect("effect");
+        (h, layer)
+    }
+
+    fn edit(json: &str, f: impl FnOnce(&mut serde_json::Value)) -> String {
+        let mut v: serde_json::Value = serde_json::from_str(json).expect("json");
+        let fx = &mut v["project"]["comps"][0]["layers"][0]["effects"][0];
+        assert!(fx.is_object(), "effect not found");
+        f(fx);
+        serde_json::to_string(&v).expect("json")
+    }
+
+    #[test]
+    fn damaged_values_reset_with_a_warning() {
+        let (h, layer) = project_with(ids::GAUSSIAN_BLUR);
+        let json = persist::to_json(h.current()).unwrap();
+        let bad = edit(&json, |fx| {
+            fx["params"][0]["static"] = serde_json::json!({ "type": "bool", "value": true });
+        });
+        let loaded = persist::from_json_resolved(&bad, builtins()).unwrap();
+        assert_eq!(loaded.warnings.len(), 1, "{:?}", loaded.warnings);
+        let fx = &loaded.doc.find_layer(layer).unwrap().1.effects[0];
+        assert!(!fx.is_placeholder());
+        assert_eq!(
+            fx.param("radius").unwrap().value_at(voxy_core::Time::ZERO),
+            fx.param("radius").unwrap().desc.default
+        );
+    }
+
+    #[test]
+    fn unknown_parameters_and_newer_versions_become_placeholders() {
+        let (h, layer) = project_with(ids::BOX_BLUR);
+        let json = persist::to_json(h.current()).unwrap();
+        let next = h.current().next_id();
+        let extra = edit(&json, |fx| {
+            let p = serde_json::json!({ "key": "future", "id": next,
+                "static": { "type": "scalar", "value": 3.0 } });
+            fx["params"].as_array_mut().unwrap().push(p);
+        });
+        let mut extra: serde_json::Value = serde_json::from_str(&extra).unwrap();
+        extra["project"]["next_id"] = (next + 1).into();
+        let extra = extra.to_string();
+        let loaded = persist::from_json_resolved(&extra, builtins()).unwrap();
+        let fx = &loaded.doc.find_layer(layer).unwrap().1.effects[0];
+        assert!(matches!(
+            fx.placeholder.as_ref().unwrap().reason,
+            MissingReason::Unreadable(_)
+        ));
+
+        let newer = edit(&json, |fx| fx["version"] = 7.into());
+        let loaded = persist::from_json_resolved(&newer, builtins()).unwrap();
+        let fx = &loaded.doc.find_layer(layer).unwrap().1.effects[0];
+        assert_eq!(
+            fx.placeholder.as_ref().unwrap().reason,
+            MissingReason::NewerVersion { known: 1 }
+        );
+        assert!(!loaded.warnings.is_empty());
+    }
+
+    #[test]
+    fn placeholders_come_back_when_the_definition_is_installed() {
+        let (h, layer) = project_with(ids::INVERT);
+        let json = persist::to_json(h.current()).unwrap();
+        // Pretend the effect is a plugin that is not installed yet.
+        let plugin = json.replace(ids::INVERT, "ofx:org.example.Invert");
+        let loaded = persist::from_json_resolved(&plugin, builtins()).unwrap();
+        let mut doc = loaded.doc;
+        assert!(doc.find_layer(layer).unwrap().1.effects[0].is_placeholder());
+        let saved = persist::to_json(&doc).unwrap();
+
+        // Running again with the same registry changes nothing.
+        let before = doc.clone();
+        assert!(resolve_effects(&mut doc, builtins()).is_empty());
+        assert_eq!(doc, before);
+
+        // Install it: the same definition under the plugin's type ID.
+        let mut def = (**builtins().latest(&EffectTypeId::new(ids::INVERT)).unwrap()).clone();
+        let ty = EffectTypeId::new("ofx:org.example.Invert");
+        def.params = def
+            .params
+            .iter()
+            .map(|p| {
+                let mut p = p.clone();
+                let mut desc = (*p.desc).clone();
+                desc.key = ty.param_key(&p.name).into();
+                p.desc = Arc::new(desc);
+                p
+            })
+            .collect();
+        def.type_id = ty;
+        let mut reg = EffectRegistry::with_builtins();
+        reg.register(def).unwrap();
+        resolve_effects(&mut doc, &reg);
+        let fx = &doc.find_layer(layer).unwrap().1.effects[0];
+        assert!(!fx.is_placeholder());
+        assert_eq!(fx.editable_params().len(), 2);
+        doc.validate().unwrap();
+        // Nothing was lost on the way.
+        let a: serde_json::Value = serde_json::from_str(&saved).unwrap();
+        let b: serde_json::Value = serde_json::from_str(&persist::to_json(&doc).unwrap()).unwrap();
+        assert_eq!(a["project"], b["project"]);
+    }
+}

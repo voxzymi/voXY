@@ -135,32 +135,56 @@ fn effect_parameters_are_layer_properties() {
 
 #[test]
 fn effects_survive_save_and_load() {
+    // A built-in at its defaults, then edited: it loads with the real
+    // descriptors and compares equal.
     let (mut doc, layer) = doc_with_solid();
-    let other = layer;
+    let reg = voxy_core::registry::builtins();
+    let tint = reg
+        .latest(&EffectTypeId::new(voxy_core::registry::ids::TINT))
+        .unwrap();
+    let mut fx = tint.instantiate(&mut doc);
+    fx.param_mut("amount")
+        .unwrap()
+        .set_static(Value::Scalar(0.5))
+        .unwrap();
+    doc.layer_mut(layer).unwrap().effects.push(fx);
+    let json = persist::to_json(&doc).unwrap();
+    let back = persist::from_json(&json).unwrap();
+    assert_eq!(back, doc);
+    let saved = find_effects(&serde_json::from_str(&json).unwrap()).clone();
+    assert_eq!(saved[0]["type"], "voxy.color.tint");
+    assert_eq!(
+        saved[0]["params"][0]["key"], "map_black",
+        "short keys on disk"
+    );
+
+    // An effect this build does not know keeps every value, including
+    // layer references, and saves the same data.
+    let (mut doc, layer) = doc_with_solid();
     add_effect(
         &mut doc,
         layer,
-        "voxy.color.tint",
+        "voxy.test.unknown",
         &[
             ("amount", Value::Scalar(0.5)),
             (
                 "map_black",
                 Value::Color(LinearRgba::new(0.0, 0.0, 0.1, 1.0)),
             ),
-            ("source", Value::Layer(Some(other))),
+            ("source", Value::Layer(Some(layer))),
             ("mode", Value::Enum(2)),
         ],
     );
     let json = persist::to_json(&doc).unwrap();
     let back = persist::from_json(&json).unwrap();
     back.validate().unwrap();
-    assert_eq!(persist::to_json(&back).unwrap(), json);
-    let saved = find_effects(&serde_json::from_str(&json).unwrap()).clone();
-    assert_eq!(saved[0]["type"], "voxy.color.tint");
-    assert_eq!(saved[0]["params"][0]["key"], "amount", "short keys on disk");
     let l = back.find_layer(layer).unwrap().1;
+    assert!(l.effects[0].is_placeholder());
     let p = l.effects[0].param("source").unwrap();
     assert_eq!(p.desc.kind, ValueKind::Layer);
+    let a: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let b: serde_json::Value = serde_json::from_str(&persist::to_json(&back).unwrap()).unwrap();
+    assert_eq!(find_effects(&a), find_effects(&b));
 }
 
 #[test]
@@ -299,7 +323,17 @@ fn effects_are_written_as_format_0_7_0_only_when_present() {
     );
     assert_eq!(version(&doc), "0.7.0");
     let json = persist::to_json(&doc).unwrap();
-    assert_eq!(persist::from_json(&json).unwrap().next_id(), doc.next_id());
+    // Parameters the file lacks are filled in at their defaults.
+    let back = persist::from_json(&json).unwrap();
+    let def_len = voxy_core::registry::builtins()
+        .latest(&EffectTypeId::new(voxy_core::registry::ids::BOX_BLUR))
+        .unwrap()
+        .params
+        .len();
+    assert_eq!(
+        back.find_layer(layer).unwrap().1.effects[0].params.len(),
+        def_len
+    );
 
     // A placeholder counts as an effect too.
     doc.layer_mut(layer)

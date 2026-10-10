@@ -213,8 +213,20 @@ An effect this build cannot use (an unknown `type`, a newer `version`, or
 parameters it cannot read) loads as a **placeholder**: it renders as
 pass-through with a warning, its parameters are read-only, and it is saved
 exactly as it was loaded, except for the fields voXY owns (`id`, `name`,
-`enabled`). It still needs `id`, `type`, `version` and `name`; an effect
-without them makes the file invalid.
+`enabled`). The values are kept exactly, but object keys are written in
+sorted order, as for `foreign`. It still needs `id`, `type`, `version` and
+`name`; an effect without them makes the file invalid.
+
+When a project loads, each effect is matched with its definition (same
+`type` and `version`):
+
+- a parameter the file does not have is added at its default;
+- a parameter whose saved value has the wrong type is reset to its
+  default, with a warning;
+- a parameter the definition does not know makes the effect a placeholder,
+  so that no data is dropped;
+- a placeholder whose definition has since been installed (for example a
+  plugin) is restored.
 
 ### Transform
 

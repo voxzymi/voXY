@@ -76,8 +76,17 @@ at `743b053` (merge of #3).
       Composition, Unprecompose) renumber their effects, including IDs
       inside a placeholder's preserved JSON, and remap references to the
       copies. Precompose clears references that would cross compositions.
-   6. Persistence: format 0.7.0 when used, placeholders kept verbatim, and
-      migrations.
+   6. **Done:** loading resolves effects against the registry
+      (`registry::resolve_effects`, `persist::from_json_resolved` with load
+      warnings; plain `from_json` uses the built-ins). It fills in missing
+      parameters, resets damaged values with a warning, keeps unknown
+      types, newer versions or unknown parameters as placeholders, and
+      restores placeholders once their definition is installed.
+      - Fixed: a placeholder made from a loaded effect widened f32 colours
+        to f64 digits. It is now built through text, so values stay
+        exactly as in the file.
+      - Migration of older built-in versions arrives with the first
+        version 2 of a built-in; all are version 1 now.
    7. Tests: undo proptest, round trips, placeholders.
 2. E-B, E-C, then E-D, then O-A to O-D.
 

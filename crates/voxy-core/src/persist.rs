@@ -155,6 +155,24 @@ pub fn from_json(json: &str) -> Result<Document, LoadError> {
 /// one. It is returned unparsed: the editor validates it and drops what it
 /// cannot use.
 pub fn from_json_with_ui(json: &str) -> Result<(Document, Option<serde_json::Value>), LoadError> {
+    from_json_resolved(json, crate::registry::builtins()).map(|l| (l.doc, l.ui_state))
+}
+
+/// A loaded project, its `ui_state` section and the load warnings.
+#[derive(Debug)]
+pub struct Loaded {
+    pub doc: Document,
+    pub ui_state: Option<serde_json::Value>,
+    /// Effects that became placeholders, damaged values that were reset.
+    pub warnings: Vec<String>,
+}
+
+/// Loads a project and resolves its effects against `registry` (built-ins
+/// plus installed plugins); see [`crate::registry::resolve_effects`].
+pub fn from_json_resolved(
+    json: &str,
+    registry: &crate::registry::EffectRegistry,
+) -> Result<Loaded, LoadError> {
     let header: Header = serde_json::from_str(json).map_err(|_| LoadError::NotAProject)?;
     if header.format != FORMAT_ID {
         return Err(LoadError::NotAProject);
@@ -192,9 +210,15 @@ pub fn from_json_with_ui(json: &str) -> Result<(Document, Option<serde_json::Val
     if found_core < Version::new(0, 4, 0) {
         migrate_0_3_to_0_4(&mut project);
     }
-    let doc: Document = serde_json::from_value(project)?;
+    let mut doc: Document = serde_json::from_value(project)?;
     doc.validate()?;
-    Ok((doc, env.ui_state))
+    let warnings = crate::registry::resolve_effects(&mut doc, registry);
+    doc.validate()?;
+    Ok(Loaded {
+        doc,
+        ui_state: env.ui_state,
+        warnings,
+    })
 }
 
 fn migrate_0_3_to_0_4(project: &mut serde_json::Value) {
