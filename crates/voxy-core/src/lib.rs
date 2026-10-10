@@ -63,7 +63,7 @@ pub use shapes::{
     BounceParams, Jump, JumpMode, OscillationParams, SpringParams, SteppedRampParams, StepsParams,
 };
 pub use time::{FLICKS_PER_SECOND, FrameRate, Time};
-pub use value::{Value, ValueKind};
+pub use value::{Curve, CurveError, Value, ValueKind};
 
 /// Re-exported math types used in the public API.
 pub use glam;

@@ -740,7 +740,8 @@ fn mix(a: f64, b: f64, p: f64) -> f64 {
 /// - Scalars, vectors: component-wise.
 /// - Colors: component-wise in linear light, straight alpha.
 /// - Integers: interpolated, then rounded half away from zero.
-/// - Booleans, enums, strings: hold the first value until the next key.
+/// - Booleans, enums, strings, layer and asset references and curves: hold
+///   the first value until the next key.
 pub fn interpolate(from: &Value, to: &Value, progress: f64) -> Value {
     let t = progress;
     match (from, to) {

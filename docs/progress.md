@@ -36,8 +36,11 @@ at `743b053` (merge of #3).
 1. E-A: the effect data model, the registry, commands and undo,
    placeholders for missing effects, format 0.7.0 only when used, and
    headless tests. It goes in small steps:
-   1. `Value::Layer`, `Value::Curve` and `Value::Asset`, plus
-      `AssetKind::Lut` (with validation).
+   1. **Done:** `Value::Layer`, `Value::Curve` (validated: 2 to 64 points,
+      strictly increasing x, both in 0..=1, checked again on load) and
+      `Value::Asset`. All three hold between keys. `AssetKind::Lut`
+      moves to E-D group 2 together with the LUT effect, because it
+      touches import and the Project panel.
    2. `EffectId`, `EffectInstance`, `Layer::effects`, and effect
       parameters in `Layer::properties()`.
    3. The registry and the built-in definitions for group 1 (schemas only).

@@ -689,6 +689,10 @@ fn value_text(v: &Value) -> String {
         Value::Color(_) => String::new(),
         Value::Enum(e) => e.to_string(),
         Value::String(s) => s.to_string(),
+        Value::Layer(Some(id)) => id.to_string(),
+        Value::Asset(Some(id)) => id.to_string(),
+        Value::Layer(None) | Value::Asset(None) => "none".to_owned(),
+        Value::Curve(c) => format!("{} points", c.points().len()),
     }
 }
 
