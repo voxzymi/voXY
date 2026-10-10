@@ -3776,6 +3776,7 @@ dependencies = [
  "bytemuck",
  "glam",
  "image",
+ "libm",
  "pollster 1.0.1",
  "tempfile",
  "thiserror 2.0.21",
