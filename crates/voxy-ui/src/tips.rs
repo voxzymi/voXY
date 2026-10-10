@@ -148,7 +148,7 @@ pub fn next_tip(tips: &[Tip], current: usize) -> Option<usize> {
     if tips.is_empty() {
         None
     } else {
-        Some((current + 1) % tips.len())
+        Some((current % tips.len() + 1) % tips.len())
     }
 }
 

@@ -21,7 +21,7 @@ use std::borrow::Cow;
 use glam::DVec2;
 
 use super::pool::{
-    check_nesting, insert_source_layer, kind_for_source, numbered_name, source_duration,
+    check_nesting, insert_source_layer, numbered_name, replace_layer_source, source_duration,
     source_exists, source_layer_length, validate_name,
 };
 use super::settings::{nearest_frame_time, validate_comp_settings};
@@ -462,16 +462,7 @@ impl Command for DropItems {
                 item,
                 warnings,
             } => {
-                let source = sources[item];
-                let (comp, existing) = doc
-                    .find_layer(layer)
-                    .ok_or_else(|| CommandError::NotFound(layer.to_string()))?;
-                check_nesting(doc, comp, source)?;
-                let kind = kind_for_source(doc, source, Some(&existing.kind));
-                comp_mut(doc, comp)?
-                    .layer_mut(layer)
-                    .expect("found above")
-                    .kind = kind;
+                replace_layer_source(doc, layer, sources[item])?;
                 report.warnings.extend(warnings);
             }
             Plan::NewComps { comps, warnings } => {

@@ -8,8 +8,8 @@
 #![allow(clippy::many_single_char_names)] // a, b, c, h, l, p read best short in these scenarios.
 
 use voxy_core::command::{
-    AddImageLayer, AddSolidLayer, AddSourceLayer, Command, CreateComposition, SetCollapse,
-    SetLayerTiming, SetProperty,
+    AddImageLayer, AddSolidLayer, AddSourceLayer, Command, CreateComposition, ReplaceMedia,
+    SetCollapse, SetLayerTiming, SetProperty,
 };
 use voxy_core::glam::DVec2;
 use voxy_core::{
@@ -452,4 +452,78 @@ fn rendering_a_nested_scene_is_deterministic() {
     let (fresh, _) = render_at(&gpu, &mut b, &doc, Time::ZERO, 1.0);
     assert!(first.pixels == again.pixels, "cached picture, same frame");
     assert!(first.pixels == fresh.pixels, "fresh compositor, same frame");
+}
+
+fn write_color(path: &std::path::Path, rgba: [u8; 4]) {
+    let mut img = image::RgbaImage::new(8, 8);
+    for p in img.pixels_mut() {
+        *p = image::Rgba(rgba);
+    }
+    img.save(path).unwrap();
+}
+
+#[test]
+fn relinking_an_image_inside_a_precomp_refreshes_the_cached_picture() {
+    let Some(gpu) = gpu() else { return };
+    let dir = tempfile::tempdir().unwrap();
+    let (a, b) = (dir.path().join("a.png"), dir.path().join("b.png"));
+    write_color(&a, [255, 0, 0, 255]);
+    write_color(&b, [0, 255, 0, 255]);
+    let mut doc = parent(32, 32);
+    let main = doc.main_comp.unwrap();
+    let child = add_comp(&mut doc, "Child", 32, 32, LinearRgba::BLACK);
+    AddImageLayer {
+        comp: child,
+        path: a.to_string_lossy().into_owned(),
+        pixel_size: [8, 8],
+        index: 0,
+    }
+    .apply(&mut doc)
+    .unwrap();
+    let asset = doc.comp(child).unwrap().layers[0].kind.asset().unwrap();
+    nest(&mut doc, main, child);
+    let mut c = Compositor::new(&gpu.device);
+    // The 8x8 image sits at the child's center (16, 16).
+    let (first, report) = render_at(&gpu, &mut c, &doc, Time::ZERO, 1.0);
+    assert_eq!(report, RenderReport::default());
+    assert_eq!(pixel(&first, 16, 16), [255, 0, 0, 255], "the first file");
+    // Relink: the same asset now points at another file. The plan is
+    // identical, so only the cache's dependency check can notice.
+    ReplaceMedia {
+        asset,
+        path: b.to_string_lossy().into_owned(),
+        pixel_size: Some([8, 8]),
+        duration: None,
+        frame_rate: None,
+        audio: None,
+        content_hash: None,
+    }
+    .apply(&mut doc)
+    .unwrap();
+    let (second, _) = render_at(&gpu, &mut c, &doc, Time::ZERO, 1.0);
+    assert_eq!(
+        pixel(&second, 16, 16),
+        [0, 255, 0, 255],
+        "the picture was rendered again from the new file"
+    );
+    assert_eq!(c.nested_stats().renders, 2);
+}
+
+#[test]
+fn a_composition_used_twice_is_rendered_once_per_frame() {
+    let Some(gpu) = gpu() else { return };
+    let mut doc = parent(200, 100);
+    let main = doc.main_comp.unwrap();
+    let child = add_comp(&mut doc, "Child", 100, 50, LinearRgba::BLACK);
+    add_solid(&mut doc, child, RED);
+    nest(&mut doc, main, child);
+    nest(&mut doc, main, child);
+    let mut c = Compositor::new(&gpu.device);
+    render_at(&gpu, &mut c, &doc, Time::ZERO, 1.0);
+    let s = c.nested_stats();
+    assert_eq!(
+        (s.renders, s.reused),
+        (1, 1),
+        "two uses, one picture: {s:?}"
+    );
 }

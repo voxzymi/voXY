@@ -170,11 +170,7 @@ enum Icon {
 /// The timeline area while no composition is open.
 pub fn show(ui: &mut Ui, state: &mut EditorState) {
     let avail = ui.available_rect_before_wrap();
-    let tip = if state.prefs.show_tips {
-        state.tip_text(ui.ctx())
-    } else {
-        None
-    };
+    let tip = tip_line(state, ui.ctx());
     let layout = layout(avail.width(), avail.height(), tip.is_some());
     let content = layout.content_size();
     let origin = pos2(
@@ -223,6 +219,20 @@ pub fn show(ui: &mut Ui, state: &mut EditorState) {
     } else if footage.clicked() {
         state.perform(Action::FileNewCompositionFromFootage);
     }
+}
+
+/// What the tip row says: the tip, or a note when the current tip cannot be
+/// written (so the "Next tip" button stays and the user can move on), or
+/// nothing when tips are off or there is none.
+fn tip_line(state: &EditorState, ctx: &Context) -> Option<String> {
+    if !state.prefs.show_tips || state.tip.is_none() {
+        return None;
+    }
+    Some(
+        state
+            .tip_text(ctx)
+            .unwrap_or_else(|| "This tip could not be shown. Try the next one.".to_owned()),
+    )
 }
 
 /// The Tip of the Day: a lightbulb, a heading, the text and a "Next tip"
@@ -729,5 +739,22 @@ mod tests {
             );
             previous = Some(id);
         }
+    }
+
+    #[test]
+    fn a_tip_that_cannot_be_written_still_shows_the_row_with_next_tip() {
+        let (ctx, mut state) = fresh();
+        assert_eq!(tip_line(&state, &ctx), None, "no tip chosen yet");
+        state.choose_startup_tip(3);
+        assert!(tip_line(&state, &ctx).is_some_and(|t| !t.contains("could not")));
+        state.tip = Some(usize::MAX);
+        assert!(
+            tip_line(&state, &ctx).is_some_and(|t| t.contains("could not be shown")),
+            "the row stays so the user can press Next tip"
+        );
+        state.next_tip();
+        assert!(tip_line(&state, &ctx).is_some());
+        state.prefs.show_tips = false;
+        assert_eq!(tip_line(&state, &ctx), None, "turned off");
     }
 }

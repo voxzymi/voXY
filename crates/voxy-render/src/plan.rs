@@ -9,6 +9,7 @@
 //! Planning is pure CPU work in `f64`, rounded to `f32` only at the end, so it
 //! is deterministic and testable without a GPU.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use voxy_core::glam::{DAffine2, DVec2};
@@ -80,6 +81,10 @@ pub struct RenderPlan {
     /// circle (validation should make this unreachable). Counts the whole
     /// tree.
     pub skipped_precomps: usize,
+    /// [`RenderPlan::content_key`], computed once when the plan is built (a
+    /// nested plan is hashed by its own key, so hashing is not repeated down
+    /// the tree).
+    key: u64,
 }
 
 /// Fill of a placeholder layer (a removed source): mid grey.
@@ -101,14 +106,17 @@ pub fn working_premultiplied(color: LinearRgba, space: WorkingSpace) -> [f32; 4]
 }
 
 /// Collects the draws of one plan.
-struct Builder {
+struct Builder<'a> {
     settings: RenderSettings,
     space: WorkingSpace,
     draws: Vec<DrawOp>,
     skipped: usize,
+    /// Plans already built for a shared evaluated child (by its address), so
+    /// a composition used by several layers is planned once.
+    memo: &'a mut HashMap<usize, Arc<RenderPlan>>,
 }
 
-impl Builder {
+impl Builder<'_> {
     /// Adds the draws for `eval`'s layers. `base` maps `eval`'s composition
     /// pixels to output pixels; `inherited` is the opacity of collapsed
     /// precomp layers above (1.0 at the top).
@@ -171,15 +179,21 @@ impl Builder {
                         if size.x <= 0.0 || size.y <= 0.0 {
                             continue;
                         }
-                        let plan = RenderPlan::nested(child, self.settings);
+                        let at = Arc::as_ptr(child) as usize;
+                        let plan = if let Some(done) = self.memo.get(&at) {
+                            Arc::clone(done)
+                        } else {
+                            let built = Arc::new(RenderPlan::build_with(
+                                child,
+                                self.settings,
+                                [0.0; 4],
+                                self.memo,
+                            ));
+                            self.memo.insert(at, Arc::clone(&built));
+                            built
+                        };
                         self.skipped += plan.skipped_precomps;
-                        (
-                            DrawSource::Comp {
-                                plan: Arc::new(plan),
-                                opacity,
-                            },
-                            Some(*size),
-                        )
+                        (DrawSource::Comp { plan, opacity }, Some(*size))
                     }
                     Nested::TooDeep => {
                         self.skipped += 1;
@@ -203,17 +217,19 @@ impl RenderPlan {
             eval,
             *settings,
             working_premultiplied(eval.background, eval.working_space).map(f64::from),
+            &mut HashMap::new(),
         )
     }
 
-    /// A nested composition's plan: transparent where the child draws
-    /// nothing. As in After Effects, a composition's background colour shows
+    /// A plan for `eval`. A nested composition's plan has a transparent
+    /// `clear`: as in After Effects, a composition's background colour shows
     /// only when it is viewed or exported directly, never when nested.
-    fn nested(eval: &EvaluatedComp, settings: RenderSettings) -> RenderPlan {
-        Self::build_with(eval, settings, [0.0; 4])
-    }
-
-    fn build_with(eval: &EvaluatedComp, settings: RenderSettings, clear: [f64; 4]) -> RenderPlan {
+    fn build_with(
+        eval: &EvaluatedComp,
+        settings: RenderSettings,
+        clear: [f64; 4],
+        memo: &mut HashMap<usize, Arc<RenderPlan>>,
+    ) -> RenderPlan {
         let (width, height) = settings.output_size(eval.width, eval.height);
         let output_from_comp = DAffine2::from_scale(DVec2::new(
             f64::from(width) / f64::from(eval.width),
@@ -224,15 +240,40 @@ impl RenderPlan {
             space: eval.working_space,
             draws: Vec::new(),
             skipped: 0,
+            memo,
         };
         b.layers(eval, output_from_comp, 1.0);
-        RenderPlan {
+        let mut plan = RenderPlan {
             width,
             height,
             working_space: eval.working_space,
             clear,
             draws: b.draws,
             skipped_precomps: b.skipped,
+            key: 0,
+        };
+        plan.key = plan.compute_key();
+        plan
+    }
+
+    /// The image and video assets this plan and its nested plans draw.
+    pub fn assets(&self) -> Vec<AssetId> {
+        let mut out = Vec::new();
+        self.collect_assets(&mut out);
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
+    fn collect_assets(&self, out: &mut Vec<AssetId>) {
+        for d in &self.draws {
+            match &d.source {
+                DrawSource::Image { asset, .. } | DrawSource::Video { asset, .. } => {
+                    out.push(*asset);
+                }
+                DrawSource::Comp { plan, .. } => plan.collect_assets(out),
+                DrawSource::Solid(_) => {}
+            }
         }
     }
 
@@ -243,11 +284,16 @@ impl RenderPlan {
     /// that resolves the same at two times shares one cached picture, and any
     /// change to settings changes the key (no stale frame is possible).
     pub fn content_key(&self) -> u64 {
+        self.key
+    }
+
+    fn compute_key(&self) -> u64 {
         let mut h = Fnv::new();
         self.hash_into(&mut h);
         h.0
     }
 
+    /// Hashes this plan's own content; nested plans by their stored keys.
     fn hash_into(&self, h: &mut Fnv) {
         h.u32(self.width);
         h.u32(self.height);
@@ -285,7 +331,7 @@ impl RenderPlan {
                 DrawSource::Comp { plan, opacity } => {
                     h.u32(4);
                     h.f32(*opacity);
-                    plan.hash_into(h);
+                    h.u64(plan.key);
                 }
             }
             match d.local_size {
@@ -475,5 +521,56 @@ mod tests {
         let grey = working_premultiplied(PLACEHOLDER_COLOR, WorkingSpace::Linear);
         assert_eq!(plan.draws[0].source, DrawSource::Solid(grey));
         assert_eq!(plan.draws[0].local_size, Some(DVec2::new(40.0, 20.0)));
+    }
+
+    #[test]
+    fn a_composition_used_twice_is_planned_once_and_keys_follow_content() {
+        use voxy_core::command::{AddSourceLayer, CreateComposition};
+        let mut doc = Document::with_comp("Plan", CompSettings::default());
+        let comp = doc.main_comp.unwrap();
+        CreateComposition {
+            settings: CompSettings::default(),
+            folder: None,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let child = *doc.comps.keys().last().unwrap();
+        AddSolidLayer {
+            comp: child,
+            name: None,
+            color: LinearRgba::WHITE,
+            index: 0,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        for _ in 0..2 {
+            AddSourceLayer {
+                comp,
+                source: voxy_core::SourceRef::Comp(child),
+                index: 0,
+                in_point: Time::ZERO,
+            }
+            .apply(&mut doc)
+            .unwrap();
+        }
+        let eval = evaluate(&doc, comp, Time::ZERO).unwrap();
+        let plan = RenderPlan::build(&eval, &RenderSettings::default());
+        let [
+            DrawSource::Comp { plan: a, .. },
+            DrawSource::Comp { plan: b, .. },
+        ] = [&plan.draws[0].source, &plan.draws[1].source]
+        else {
+            panic!("two nested draws")
+        };
+        assert!(Arc::ptr_eq(a, b), "one shared sub-plan");
+        // The key is a function of content: equal plans share it, a change
+        // (here the preview scale) does not.
+        let again = RenderPlan::build(&eval, &RenderSettings::default());
+        assert_eq!(plan.content_key(), again.content_key());
+        assert_eq!(plan, again);
+        let half = RenderPlan::build(&eval, &RenderSettings { scale: 0.5 });
+        assert_ne!(plan.content_key(), half.content_key());
+        assert_ne!(a.content_key(), plan.content_key());
+        assert!(plan.assets().is_empty(), "solids have no assets");
     }
 }

@@ -30,6 +30,8 @@ pub struct VoxyApp {
     dock: DockState<Tab>,
     /// The layout text last written to the preferences.
     saved_layout: Option<String>,
+    /// The layout was changed by code (Reset Layout), not by a drag.
+    layout_dirty: bool,
     viewport: Option<ViewportRenderer>,
     pending: Option<Discarding>,
     allow_close: bool,
@@ -82,6 +84,7 @@ impl VoxyApp {
         let dock = crate::layout::restore(state.prefs.dock_layout.as_deref());
         VoxyApp {
             saved_layout: crate::layout::to_text(&dock),
+            layout_dirty: false,
             state,
             dock,
             viewport,
@@ -112,10 +115,13 @@ impl VoxyApp {
         }
     }
 
-    /// Writes the dock layout to the preferences once a drag has ended and
-    /// the arrangement differs from what was last written.
+    /// Writes the dock layout to the preferences when the arrangement
+    /// changed. The layout only changes when a drag or click ends (the button
+    /// is released) or when it is reset, so nothing is serialised on the
+    /// frames in between (including every playback frame).
     fn save_layout(&mut self, ctx: &egui::Context) {
-        if ctx.input(|i| i.pointer.any_down()) {
+        let released = ctx.input(|i| i.pointer.any_released());
+        if !released && !std::mem::take(&mut self.layout_dirty) {
             return;
         }
         let Some(text) = crate::layout::to_text(&self.dock) else {
@@ -280,6 +286,7 @@ impl VoxyApp {
                 }
                 if ui.button("Reset Layout").clicked() {
                     self.dock = default_layout();
+                    self.layout_dirty = true;
                     ui.close();
                 }
             });

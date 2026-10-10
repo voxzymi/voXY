@@ -682,16 +682,30 @@ impl Command for ReplaceLayerSource {
     fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
         source_exists(doc, self.source)?;
         for &id in &self.layers {
-            let (comp, layer) = doc.find_layer(id).ok_or_else(|| not_found(id))?;
-            check_nesting(doc, comp, self.source)?;
-            let kind = kind_for_source(doc, self.source, Some(&layer.kind));
-            comp_mut(doc, comp)?
-                .layer_mut(id)
-                .expect("found above")
-                .kind = kind;
+            replace_layer_source(doc, id, self.source)?;
         }
         Ok(())
     }
+}
+
+/// Makes layer `id` show `source`, keeping its name, timing, transform,
+/// keyframes and flags (a placeholder becomes a real layer again, precomp
+/// timing options carry over between precomps). Checks nesting. The one
+/// place this rule lives: the menu command and a drop onto a layer both call
+/// it.
+pub(crate) fn replace_layer_source(
+    doc: &mut Document,
+    id: LayerId,
+    source: SourceRef,
+) -> Result<(), CommandError> {
+    let (comp, layer) = doc.find_layer(id).ok_or_else(|| not_found(id))?;
+    check_nesting(doc, comp, source)?;
+    let kind = kind_for_source(doc, source, Some(&layer.kind));
+    comp_mut(doc, comp)?
+        .layer_mut(id)
+        .expect("found above")
+        .kind = kind;
+    Ok(())
 }
 
 /// Adds a layer showing a project item: centered, starting at `in_point`.

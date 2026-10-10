@@ -116,6 +116,13 @@ const MAX_RENDER_DEPTH: usize = 16;
 
 /// A nested composition's rendered picture.
 struct NestedEntry {
+    /// The plan it was rendered from. A hit must equal it (the key is only a
+    /// 64-bit hash), so a collision can never show the wrong picture.
+    plan: Option<Arc<RenderPlan>>,
+    /// The file each image or video asset in the plan resolved to when the
+    /// picture was rendered. If one has since changed (a relink, a replaced
+    /// file) the picture is stale even though the plan is the same.
+    deps: Vec<(AssetId, Option<PathBuf>)>,
     size: (u32, u32),
     /// The frame counter when it was last drawn.
     used: u64,
@@ -623,7 +630,7 @@ impl Compositor {
             pass.draw(0..3, 0..1);
         }
         self.working = Some(working);
-        report.skipped_precomps = plan.skipped_precomps;
+        report.skipped_precomps += plan.skipped_precomps;
         self.trim_nested();
         report
     }
@@ -813,7 +820,7 @@ impl Compositor {
         queue: &wgpu::Queue,
         assets: &AssetTable,
         video: &dyn VideoFrames,
-        plan: &RenderPlan,
+        plan: &Arc<RenderPlan>,
         depth: usize,
         report: &mut RenderReport,
     ) -> Option<u64> {
@@ -832,9 +839,14 @@ impl Compositor {
             return None;
         }
         let key = plan.content_key();
+        let deps = self.asset_paths(assets, plan);
         if let Some(e) = self.nested.get_mut(&key)
             && e.complete
             && e.size == size
+            && e.deps == deps
+            && e.plan
+                .as_ref()
+                .is_some_and(|p| Arc::ptr_eq(p, plan) || **p == **plan)
         {
             e.used = self.frame_counter;
             self.nested_stats.reused += 1;
@@ -859,6 +871,8 @@ impl Compositor {
         queue.submit([encoder.finish()]);
         self.nested_stats.renders += 1;
         entry.used = self.frame_counter;
+        entry.plan = Some(Arc::clone(plan));
+        entry.deps = deps;
         entry.complete = sub.missing_assets.is_empty()
             && sub.pending_video.is_empty()
             && sub.skipped_precomps == 0;
@@ -875,6 +889,26 @@ impl Compositor {
         report.skipped_precomps += sub.skipped_precomps;
         self.nested.insert(key, entry);
         Some(key)
+    }
+
+    /// The file each image or video asset in `plan` (and its nested plans)
+    /// resolves to now, in asset-id order.
+    fn asset_paths(
+        &self,
+        assets: &AssetTable,
+        plan: &RenderPlan,
+    ) -> Vec<(AssetId, Option<PathBuf>)> {
+        plan.assets()
+            .into_iter()
+            .map(|a| {
+                (
+                    a,
+                    assets
+                        .get(a)
+                        .map(|info| info.resolve(self.asset_root.as_deref())),
+                )
+            })
+            .collect()
     }
 
     /// An offscreen target of `size` for `key`: the entry already there, or a
@@ -921,6 +955,8 @@ impl Compositor {
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let bind_group = self.image_bind_group(device, &view);
         NestedEntry {
+            plan: None,
+            deps: Vec::new(),
             size,
             used: 0,
             complete: false,

@@ -267,12 +267,15 @@ impl EditorState {
     ) -> R {
         let rate = self.frame_rate();
         let before = self.workspace.active;
+        let before_comp = self.workspace.active_comp();
         if let Some(i) = before.filter(|i| *i < self.workspace.tabs.len()) {
             let live = self.take_live();
             self.workspace.tabs[i].saved = live;
         }
         let result = change(&mut self.workspace);
-        if self.workspace.active != before {
+        // A different tab is active when its index or its composition
+        // differs: closing a tab can leave a different one at the same index.
+        if self.workspace.active != before || self.workspace.active_comp() != before_comp {
             self.transport.pause(rate);
         }
         let view = match self.workspace.active {
@@ -1708,16 +1711,33 @@ impl EditorState {
     }
 
     /// Deletes the autosave of the current project (saved: next to it;
-    /// untitled: this session's). Used when the project is saved, replaced
-    /// or deliberately discarded.
+    /// untitled: this session's), and the dead session's file this session
+    /// recovered from, if it is still around. Used when the project is saved,
+    /// replaced or deliberately discarded.
+    ///
+    /// **Never deletes a file an unanswered recovery offer points at**: it
+    /// may be the only copy of the user's work, and only answering the offer
+    /// (recover or discard) decides its fate.
     pub fn discard_autosave(&mut self) {
         if let Some(project) = &self.project_path {
-            let _ = std::fs::remove_file(recovery::autosave_path(project));
+            let file = recovery::autosave_path(project);
+            let offered = self
+                .pending_recovery
+                .as_ref()
+                .is_some_and(|o| o.autosave == file);
+            if !offered {
+                let _ = std::fs::remove_file(file);
+            }
         }
         if let Some(rec) = self.recovery.as_mut() {
             rec.session.forget_untitled();
             rec.saved_revision = None;
             rec.dirty_since = None;
+            // The orphan this session recovered from is now either saved or
+            // given up: it must not be offered again at the next launch.
+            if let Some(old) = rec.superseded.take() {
+                recovery::discard(&old);
+            }
         }
     }
 
@@ -3227,5 +3247,145 @@ mod tests {
         s.close_tab(0);
         s.open_comp(c[1]);
         assert!(s.active_child_range().is_none());
+    }
+
+    #[test]
+    fn an_undecided_offer_survives_closing_saving_and_opening_something_else() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("P.voxy");
+        let auto = recovery::autosave_path(&project);
+        // A crash left an autosave newer than the project file.
+        let mut crashed = recovering(dir.path(), true);
+        // The autosave must be strictly newer than the project file.
+        std::thread::sleep(Duration::from_millis(50));
+        edit_something(&mut crashed);
+        let t0 = Instant::now();
+        crashed.autosave_tick(t0, false);
+        crashed.autosave_tick(t0 + Duration::from_secs(10), false);
+        assert!(auto.exists());
+        drop(crashed);
+        std::thread::sleep(Duration::from_millis(50));
+        // The user opens the project: an offer is waiting, undecided.
+        let mut s = recovering(dir.path(), false);
+        s.open_path(&project);
+        assert!(s.pending_recovery.is_some());
+        // Closing the window without answering must not delete the only copy.
+        s.finish_session(false);
+        assert!(auto.exists(), "an unconfirmed close keeps it");
+        s.finish_session(true);
+        assert!(
+            auto.exists(),
+            "even a clean exit: the offer was never answered"
+        );
+        // Nor does opening another project.
+        let other = dir.path().join("Q.voxy");
+        persist::save(s.history.current(), &other).unwrap();
+        s.open_path(&other);
+        assert!(auto.exists(), "opening another project leaves P's autosave");
+        // P's offer comes back when P is opened again; answering deletes it.
+        s.open_path(&project);
+        assert!(s.pending_recovery.is_some());
+        // Saving the open document does not decide the offer either.
+        assert!(s.save());
+        assert!(
+            auto.exists(),
+            "saving does not delete an unanswered offer's file"
+        );
+        s.discard_recovery();
+        assert!(!auto.exists());
+    }
+
+    #[test]
+    fn a_recovered_orphan_is_cleaned_up_when_the_user_saves_or_gives_up() {
+        for save in [true, false] {
+            let dir = tempfile::tempdir().unwrap();
+            let rec = dir.path().join("recovery");
+            {
+                let mut a = recovering(dir.path(), false);
+                edit_something(&mut a);
+                let t0 = Instant::now();
+                a.autosave_tick(t0, false);
+                a.autosave_tick(t0 + Duration::from_secs(10), false);
+            }
+            let mut b = recovering(dir.path(), false);
+            b.offer_orphaned_recovery();
+            let offer = b.pending_recovery.clone().expect("the orphan");
+            b.recover();
+            assert!(
+                offer.autosave.exists(),
+                "kept until this session has a copy"
+            );
+            // Before the next autosave interval: save, or quit with Don't Save.
+            if save {
+                b.dialogs = Box::new(SaveTo(dir.path().join("Saved.voxy")));
+                assert!(b.save());
+            } else {
+                b.finish_session(true);
+            }
+            assert!(
+                !offer.autosave.exists(),
+                "the dead session's file must not come back (save: {save})"
+            );
+            assert_eq!(recovery::orphans(&rec).len(), 0, "save: {save}");
+        }
+    }
+
+    /// A dialog stub that saves to a fixed path.
+    #[derive(Debug)]
+    struct SaveTo(PathBuf);
+
+    impl crate::dialogs::Dialogs for SaveTo {
+        fn pick_media(&self) -> Vec<PathBuf> {
+            Vec::new()
+        }
+        fn pick_image(&self) -> Option<PathBuf> {
+            None
+        }
+        fn pick_video(&self) -> Option<PathBuf> {
+            None
+        }
+        fn pick_relink(&self) -> Option<PathBuf> {
+            None
+        }
+        fn open_project(&self) -> Option<PathBuf> {
+            None
+        }
+        fn save_project(&self, _file_name: &str) -> Option<PathBuf> {
+            Some(self.0.clone())
+        }
+    }
+
+    #[test]
+    fn playback_stops_when_another_tab_takes_the_active_index() {
+        let (mut s, c) = tabs_state(&["B", "A", "C"]);
+        // Tab 0 came from B into A; tab 1 shows B; tab 2 shows C.
+        s.open_comp(c[1]);
+        s.open_comp(c[0]);
+        s.open_comp(c[2]);
+        s.switch_tab(0);
+        s.workspace.tabs[0].path.insert(
+            0,
+            crate::workspace::NavStep {
+                comp: c[0],
+                via_layer: None,
+            },
+        );
+        s.workspace.tabs[0].path[1].via_layer = Some(LayerId(1));
+        s.workspace.tabs[0]
+            .trail
+            .push(crate::workspace::TabView::default());
+        assert_eq!(s.workspace.active, Some(0));
+        s.transport.play(Time::ZERO, FrameRate::FPS_30);
+        assert!(s.transport.is_playing());
+        // Going up lands on B, which tab 1 already shows: tab 0 closes and
+        // the tab that was at index 1 is now at index 0 (the same index!).
+        s.go_to_crumb(0);
+        assert_eq!(s.workspace.tabs.len(), 2);
+        assert_eq!(s.workspace.active, Some(0), "the same index as before");
+        assert_eq!(s.comp_id(), Some(c[0]), "but a different tab");
+        assert!(
+            !s.transport.is_playing(),
+            "playback stopped with the switch"
+        );
     }
 }

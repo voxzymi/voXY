@@ -224,3 +224,39 @@ fn a_missing_child_is_reported_as_missing() {
     let (_, nested, _) = nested_of(&doc, parent, Time::ZERO);
     assert_eq!(nested, Nested::Missing);
 }
+
+#[test]
+fn a_composition_used_twice_is_evaluated_once_so_diamonds_do_not_explode() {
+    let mut h = History::new(Document::empty("N"));
+    // A chain of 14 compositions, each holding TWO layers of the next: a
+    // naive evaluation does 2^14 child evaluations.
+    let comps: Vec<CompId> = (0..14)
+        .map(|i| new_comp(&mut h, &format!("D{i}"), 10))
+        .collect();
+    for pair in comps.windows(2) {
+        nest(&mut h, pair[0], pair[1]);
+        nest(&mut h, pair[0], pair[1]);
+    }
+    let started = std::time::Instant::now();
+    let eval = evaluate(h.current(), comps[0], Time::ZERO).expect("root");
+    let mut level = std::sync::Arc::new(eval);
+    for _ in 1..comps.len() {
+        let [a, b] = [&level.layers[0], &level.layers[1]].map(|l| match &l.content {
+            EvaluatedContent::Precomp {
+                nested: Nested::Shown(inner),
+                ..
+            } => std::sync::Arc::clone(inner),
+            other => panic!("{other:?}"),
+        });
+        assert!(
+            std::sync::Arc::ptr_eq(&a, &b),
+            "both uses share one evaluation"
+        );
+        level = a;
+    }
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(5),
+        "exponential evaluation would take far longer: {:?}",
+        started.elapsed()
+    );
+}

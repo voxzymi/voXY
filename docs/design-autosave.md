@@ -60,6 +60,23 @@ dialog belongs to the Preferences milestone (P-D).
 - Only the newest crashed untitled project is offered at launch; older ones stay
   in the recovery folder and are offered one per launch after that.
 
+## Fixes after review
+
+An independent review of the whole branch found two ways to lose or resurrect
+work; both are fixed and covered by tests:
+
+- **An unanswered offer is never deleted.** `discard_autosave` (used by save,
+  new, open and a clean exit) skipped nothing before, so closing the window or
+  opening another project while the "recover?" question was open deleted the
+  only copy of the user's work. It now leaves the file an unanswered offer
+  points at; only Recover or Discard decides its fate. (Saving the open,
+  clean document is not an answer either.)
+- **A recovered orphan does not come back.** After recovering a dead
+  session's untitled project, that file was removed only after this session's
+  next autosave. Saving or quitting with Don't Save first left it in the
+  recovery folder, to be offered again at every launch. Save, replace and
+  discard now remove it too.
+
 ## Code
 
 `crates/voxy-ui/src/recovery.rs` (paths, offers, orphans, the session lock),

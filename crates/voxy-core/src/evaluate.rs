@@ -5,6 +5,7 @@
 //! produce the same [`EvaluatedComp`].
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use glam::{DAffine2, DVec2};
 
@@ -85,8 +86,9 @@ pub const MAX_NESTING: usize = 16;
 /// What a precomp layer's child evaluated to.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Nested {
-    /// The child at the layer's child time.
-    Shown(Box<EvaluatedComp>),
+    /// The child at the layer's child time. Shared: a composition used by
+    /// several layers at the same child time is evaluated once.
+    Shown(Arc<EvaluatedComp>),
     /// The child time is outside the child's duration: nothing to show.
     OutsideChild,
     /// Too deep, or the composition contains itself: nothing is drawn.
@@ -97,16 +99,30 @@ pub enum Nested {
 
 /// Evaluates `comp` at `time`. Returns `None` if the composition is missing.
 pub fn evaluate(doc: &Document, comp: CompId, time: Time) -> Option<EvaluatedComp> {
-    evaluate_in(doc, comp, time, &mut vec![comp])
+    let mut scope = Scope {
+        chain: vec![comp],
+        done: HashMap::new(),
+    };
+    evaluate_in(doc, comp, time, &mut scope)
 }
 
-/// [`evaluate`] with the chain of compositions being evaluated, outermost
-/// first.
+/// What one `evaluate` call is in the middle of.
+struct Scope {
+    /// The compositions being evaluated, outermost first.
+    chain: Vec<CompId>,
+    /// Compositions already evaluated in this call, by composition, child
+    /// time and depth. Without this, a composition used by several layers
+    /// (or a diamond of them) would be evaluated once per use, which grows
+    /// exponentially with the nesting. The depth is part of the key because
+    /// it decides where [`MAX_NESTING`] cuts.
+    done: HashMap<(CompId, Time, usize), Arc<EvaluatedComp>>,
+}
+
 fn evaluate_in(
     doc: &Document,
     comp: CompId,
     time: Time,
-    chain: &mut Vec<CompId>,
+    scope: &mut Scope,
 ) -> Option<EvaluatedComp> {
     let c = doc.comp(comp)?;
     let background = c
@@ -122,7 +138,7 @@ fn evaluate_in(
         .filter(|l| l.is_active_at(time))
         .map(|l| EvaluatedLayer {
             id: l.id,
-            content: content(doc, l, time, chain),
+            content: content(doc, l, time, scope),
             world: worlds.world(l.id),
             opacity: scalar(&l.transform.opacity, time, 1.0).clamp(0.0, 1.0),
             blend: l.blend_mode,
@@ -139,7 +155,7 @@ fn evaluate_in(
     })
 }
 
-fn content(doc: &Document, layer: &Layer, time: Time, chain: &mut Vec<CompId>) -> EvaluatedContent {
+fn content(doc: &Document, layer: &Layer, time: Time, scope: &mut Scope) -> EvaluatedContent {
     let assets = &doc.assets;
     match &layer.kind {
         LayerKind::Solid { color, size } => EvaluatedContent::Solid {
@@ -161,15 +177,29 @@ fn content(doc: &Document, layer: &Layer, time: Time, chain: &mut Vec<CompId>) -
             let child_time = layer.child_time(time, duration).unwrap_or(Time::ZERO);
             let nested = match child {
                 None => Nested::Missing,
-                Some(_) if chain.contains(comp) || chain.len() >= MAX_NESTING => Nested::TooDeep,
+                Some(_) if scope.chain.contains(comp) || scope.chain.len() >= MAX_NESTING => {
+                    Nested::TooDeep
+                }
                 Some(_) if child_time < Time::ZERO || child_time >= duration => {
                     Nested::OutsideChild
                 }
                 Some(_) => {
-                    chain.push(*comp);
-                    let eval = evaluate_in(doc, *comp, child_time, chain);
-                    chain.pop();
-                    eval.map_or(Nested::Missing, |e| Nested::Shown(Box::new(e)))
+                    let key = (*comp, child_time, scope.chain.len());
+                    if let Some(done) = scope.done.get(&key) {
+                        Nested::Shown(Arc::clone(done))
+                    } else {
+                        scope.chain.push(*comp);
+                        let eval = evaluate_in(doc, *comp, child_time, scope);
+                        scope.chain.pop();
+                        match eval {
+                            Some(e) => {
+                                let shared = Arc::new(e);
+                                scope.done.insert(key, Arc::clone(&shared));
+                                Nested::Shown(shared)
+                            }
+                            None => Nested::Missing,
+                        }
+                    }
                 }
             };
             EvaluatedContent::Precomp {

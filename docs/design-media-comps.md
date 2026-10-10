@@ -863,11 +863,18 @@ What landed in `voxy-core`, and where it refines the design above.
   outside the child's bounds stays visible. `RenderPlan::content_key()` is a
   64-bit FNV-1a over everything that decides the pixels (sizes, working
   space, clear colour, every draw with exact `f64`/`f32` bits, video frame
-  identity, nested plans), so two times that resolve identically share one
-  picture and any change to settings changes the key.
+  identity, nested plans by their own keys), so two times that resolve
+  identically share one picture and any change to settings changes the key.
+  The key is computed once per plan. Evaluation and planning are
+  **memoized**: a composition used by several layers at the same child time is
+  evaluated and planned once (`Arc` shared), so a diamond of nested
+  compositions costs linear, not exponential, time.
 - **Compositor.** A `Comp` draw is rendered into a pooled `Rgba16Float`
   texture (its own submit, so per-draw uniforms never collide) and then drawn
-  like an image. Pictures are cached by content key up to 512 MiB, least
+  like an image. A cached picture is reused only if the plan is **equal** (the
+  key is just a hash) and every image or video asset in it still resolves to
+  the **same file** (a relink changes neither the plan nor the key, so this
+  dependency check is what refreshes it). Pictures are cached up to 512 MiB, least
   recently drawn first, never one used this frame; textures of the same size
   are recycled. **A picture that was missing something (an image, a video
   frame) is not cached**, so a frame that arrives later is picked up. Missing
