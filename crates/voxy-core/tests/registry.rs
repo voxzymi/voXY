@@ -181,7 +181,7 @@ mod resolve {
             fx.placeholder.as_ref().unwrap().reason,
             MissingReason::NewerVersion { known: 1 }
         );
-        assert!(!loaded.warnings.is_empty());
+        assert_eq!(loaded.warnings.len(), 1, "{:?}", loaded.warnings);
     }
 
     #[test]
@@ -197,7 +197,7 @@ mod resolve {
 
         // Running again with the same registry changes nothing.
         let before = doc.clone();
-        assert!(resolve_effects(&mut doc, builtins()).is_empty());
+        assert_eq!(resolve_effects(&mut doc, builtins()), Vec::<String>::new());
         assert_eq!(doc, before);
 
         // Install it: the same definition under the plugin's type ID.

@@ -222,7 +222,7 @@ fn unreadable_effects_load_as_placeholders_and_save_verbatim() {
             ..
         })
     ));
-    assert!(e.editable_params().is_empty());
+    assert_eq!(e.editable_params().len(), 0);
     // Its parameter ID stays reserved.
     let reserved = e.placeholder.as_ref().unwrap().reserved.clone();
     assert_eq!(reserved.len(), 1);
