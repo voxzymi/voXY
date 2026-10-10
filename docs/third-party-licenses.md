@@ -7,7 +7,7 @@ CI fails if this file is stale. The policy that every license must satisfy is in
 The list covers every target platform, so it includes crates that are only
 compiled on Windows, macOS or Linux.
 
-411 crates.
+412 crates.
 
 ## By license
 
@@ -29,7 +29,7 @@ compiled on Windows, macOS or Linux.
 | `BSL-1.0` | 2 |
 | `ISC` | 1 |
 | `MIT` | 90 |
-| `MIT OR Apache-2.0` | 208 |
+| `MIT OR Apache-2.0` | 209 |
 | `MIT OR Apache-2.0 OR LGPL-2.1-or-later` | 1 |
 | `MIT OR Apache-2.0 OR Zlib` | 6 |
 | `MIT OR Zlib OR Apache-2.0` | 1 |
@@ -134,6 +134,7 @@ compiled on Windows, macOS or Linux.
 | [`endi`](https://github.com/zeenix/endi) | 1.1.1 | `MIT` |
 | [`enumflags2`](https://github.com/meithecatte/enumflags2) | 0.7.12 | `MIT OR Apache-2.0` |
 | [`enumflags2_derive`](https://github.com/meithecatte/enumflags2) | 0.7.12 | `MIT OR Apache-2.0` |
+| [`enumn`](https://github.com/dtolnay/enumn) | 0.1.14 | `MIT OR Apache-2.0` |
 | [`epaint`](https://github.com/emilk/egui/tree/main/crates/epaint) | 0.36.2 | `MIT OR Apache-2.0` |
 | [`epaint_default_fonts`](https://github.com/emilk/egui/tree/main/crates/epaint_default_fonts) | 0.36.2 | `(MIT OR Apache-2.0) AND OFL-1.1 AND Ubuntu-font-1.0` |
 | [`equivalent`](https://github.com/indexmap-rs/equivalent) | 1.0.2 | `Apache-2.0 OR MIT` |
