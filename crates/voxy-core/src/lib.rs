@@ -22,6 +22,7 @@ pub mod command;
 mod comp;
 mod document;
 pub mod easing;
+pub mod effect;
 mod evaluate;
 mod history;
 mod id;
@@ -44,12 +45,13 @@ pub use document::{
     CompSettings, Document, ProjectMeta, ProjectSettings, PropertyOwner, ValidationError,
 };
 pub use easing::{CubicEase, EaseHandle, EasePreset};
+pub use effect::{EffectInstance, EffectMatte, EffectTypeId, MatteChannel, MissingReason};
 pub use evaluate::{
     EvaluatedComp, EvaluatedContent, EvaluatedLayer, MAX_NESTING, Nested, evaluate, layer_world,
     local_matrix,
 };
 pub use history::{History, SharedDocument};
-pub use id::{AssetId, CompId, FolderId, LayerId, PropId};
+pub use id::{AssetId, CompId, EffectId, FolderId, LayerId, PropId};
 pub use keyframe::{
     Interp, InterpKind, Keyframe, KeyframeTrack, SegmentEase, SpatialTangents, TrackError,
 };

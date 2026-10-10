@@ -508,15 +508,28 @@ struct PropertyRepr {
 impl TryFrom<PropertyRepr> for Property {
     type Error = PropertyError;
     fn try_from(r: PropertyRepr) -> Result<Self, PropertyError> {
-        let (sample, animated) = match &r.anim {
+        let desc = builtin_desc(&r.key);
+        Property::from_saved(r.id, &r.key, r.anim, desc)
+    }
+}
+
+impl Property {
+    /// Rebuilds a saved property under `desc`, or under a descriptor for an
+    /// unknown key (data preserved as-is) when `desc` is `None`.
+    pub(crate) fn from_saved(
+        id: PropId,
+        key: &str,
+        anim: Animation,
+        desc: Option<Arc<PropertyDesc>>,
+    ) -> Result<Self, PropertyError> {
+        let (sample, animated) = match &anim {
             Animation::Static(v) => (v, false),
             Animation::Keyframed(t) => (&t.first().value, true),
         };
-        let desc = builtin_desc(&r.key)
-            .unwrap_or_else(|| Arc::new(PropertyDesc::unknown(&r.key, sample, animated)));
+        let desc = desc.unwrap_or_else(|| Arc::new(PropertyDesc::unknown(key, sample, animated)));
         // Load exactly what was saved: kinds and finiteness are checked, but
         // values are not re-clamped, so a load/save cycle never alters data.
-        match &r.anim {
+        match &anim {
             Animation::Static(v) => check_kind(&desc, v)?,
             Animation::Keyframed(t) => {
                 for k in t.keys() {
@@ -529,11 +542,7 @@ impl TryFrom<PropertyRepr> for Property {
                 }
             }
         }
-        Ok(Property {
-            id: r.id,
-            desc,
-            anim: r.anim,
-        })
+        Ok(Property { id, desc, anim })
     }
 }
 

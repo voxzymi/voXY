@@ -263,6 +263,7 @@ pub(crate) fn new_layer(
         parent: None,
         transform,
         blend_mode: BlendMode::Normal,
+        effects: Vec::new(),
         flags: LayerFlags::default(),
         foreign: ForeignData::default(),
     }

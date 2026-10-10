@@ -58,6 +58,11 @@ define_id!(
     "asset"
 );
 define_id!(
+    /// Identifies an [`crate::EffectInstance`] on a layer.
+    EffectId,
+    "effect"
+);
+define_id!(
     /// Identifies a [`crate::Folder`] in the project panel.
     FolderId,
     "folder"

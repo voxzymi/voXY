@@ -41,8 +41,15 @@ at `743b053` (merge of #3).
       `Value::Asset`. All three hold between keys. `AssetKind::Lut`
       moves to E-D group 2 together with the LUT effect, because it
       touches import and the Project panel.
-   2. `EffectId`, `EffectInstance`, `Layer::effects`, and effect
-      parameters in `Layer::properties()`.
+   2. **Done:** `EffectId`, `EffectInstance` (`voxy_core::effect`),
+      `Layer::effects`, and editable effect parameters in
+      `Layer::properties()`.
+      - Placeholders: an effect that cannot be read keeps its JSON
+        verbatim, and its parameter IDs stay reserved.
+      - Validation covers effect IDs and parameter keys.
+   2b. **Next:** format 0.7.0, written whenever a project contains
+       effects. It is pulled forward so that no build ever saves effects
+       under an older version number.
    3. The registry and the built-in definitions for group 1 (schemas only).
    4. `BlendMode` variants and `LayerKind::Adjustment` (model only).
    5. Commands: add, remove, move, duplicate, enable, rename, matte,

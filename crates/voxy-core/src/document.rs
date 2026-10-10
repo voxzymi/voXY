@@ -8,7 +8,8 @@ use serde::{Deserialize, Serialize};
 use crate::asset::{Asset, AssetTable};
 use crate::color::{LinearRgba, WorkingSpace};
 use crate::comp::{Composition, PixelAspect, PreviewResolution};
-use crate::id::{AssetId, CompId, FolderId, LayerId, PropId};
+use crate::effect::EffectInstance;
+use crate::id::{AssetId, CompId, EffectId, FolderId, LayerId, PropId};
 use crate::layer::{ForeignData, Layer, LayerKind};
 use crate::pool::Folder;
 use crate::property::{Property, keys};
@@ -178,6 +179,12 @@ pub enum ValidationError {
     BadPixelAspect(CompId),
     #[error("{0} has an invalid speed")]
     BadSpeed(LayerId),
+    #[error("{effect} on {layer} has a missing, duplicate or misnamed parameter `{key}`")]
+    BadEffectParam {
+        layer: LayerId,
+        effect: EffectId,
+        key: String,
+    },
     #[error("property {prop} has key `{found}` where `{expected}` is required")]
     WrongProperty {
         prop: PropId,
@@ -395,6 +402,21 @@ impl Document {
                 for p in layer.properties() {
                     claim(p.id.raw())?;
                 }
+                for fx in &layer.effects {
+                    claim(fx.id.raw())?;
+                    // Editable parameters were claimed above.
+                    if let Some(ph) = &fx.placeholder {
+                        for id in fx
+                            .params
+                            .iter()
+                            .map(|p| p.id)
+                            .chain(ph.reserved.iter().copied())
+                        {
+                            claim(id.raw())?;
+                        }
+                    }
+                    validate_effect(layer.id, fx)?;
+                }
                 validate_layer_props(layer)?;
                 if layer.out_point < layer.in_point {
                     return Err(ValidationError::InvertedLayer(layer.id));
@@ -464,6 +486,30 @@ fn expect_key(p: &Property, expected: &'static str) -> Result<(), ValidationErro
             found: p.key().to_owned(),
         })
     }
+}
+
+/// An effect's parameters must carry its type's key prefix, each name once.
+fn validate_effect(layer: LayerId, fx: &EffectInstance) -> Result<(), ValidationError> {
+    let prefix = fx.type_id.param_prefix();
+    let mut names = HashSet::new();
+    for p in &fx.params {
+        let name = p.key().strip_prefix(prefix.as_str());
+        if !name.is_some_and(|n| !n.is_empty() && names.insert(n)) {
+            return Err(ValidationError::BadEffectParam {
+                layer,
+                effect: fx.id,
+                key: p.key().to_owned(),
+            });
+        }
+    }
+    if fx.type_id.as_str().is_empty() {
+        return Err(ValidationError::BadEffectParam {
+            layer,
+            effect: fx.id,
+            key: String::new(),
+        });
+    }
+    Ok(())
 }
 
 fn validate_layer_props(layer: &Layer) -> Result<(), ValidationError> {

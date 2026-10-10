@@ -5,7 +5,8 @@ use std::collections::BTreeMap;
 use glam::DVec2;
 use serde::{Deserialize, Serialize};
 
-use crate::id::{AssetId, CompId, LayerId, PropId};
+use crate::effect::EffectInstance;
+use crate::id::{AssetId, CompId, EffectId, LayerId, PropId};
 use crate::property::{Property, keys};
 use crate::time::Time;
 use crate::value::Value;
@@ -214,6 +215,9 @@ pub struct Layer {
     pub transform: Transform,
     #[serde(default)]
     pub blend_mode: BlendMode,
+    /// The effect stack: index 0 is applied first (format 0.7.0).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub effects: Vec<EffectInstance>,
     #[serde(default)]
     pub flags: LayerFlags,
     #[serde(default, skip_serializing_if = "ForeignData::is_empty")]
@@ -266,7 +270,10 @@ impl Layer {
         })
     }
 
-    /// Every property of the layer, transform first.
+    /// Every editable property of the layer: transform first, then the
+    /// layer kind's, then each effect's parameters in stack order.
+    /// Placeholder effects' parameters are not included (they are
+    /// read-only).
     pub fn properties(&self) -> Vec<&Property> {
         let mut out: Vec<&Property> = self.transform.properties().to_vec();
         match &self.kind {
@@ -280,10 +287,13 @@ impl Layer {
             } => out.push(remap),
             _ => {}
         }
+        for fx in &self.effects {
+            out.extend(fx.editable_params());
+        }
         out
     }
 
-    /// Every property of the layer, mutably, transform first.
+    /// [`Layer::properties`], mutably.
     pub fn properties_mut(&mut self) -> Vec<&mut Property> {
         let mut out: Vec<&mut Property> = self.transform.properties_mut().into_iter().collect();
         match &mut self.kind {
@@ -297,7 +307,18 @@ impl Layer {
             } => out.push(remap),
             _ => {}
         }
+        for fx in &mut self.effects {
+            out.extend(fx.editable_params_mut());
+        }
         out
+    }
+
+    pub fn effect(&self, id: EffectId) -> Option<&EffectInstance> {
+        self.effects.iter().find(|e| e.id == id)
+    }
+
+    pub fn effect_mut(&mut self, id: EffectId) -> Option<&mut EffectInstance> {
+        self.effects.iter_mut().find(|e| e.id == id)
     }
 
     pub fn property_mut(&mut self, id: PropId) -> Option<&mut Property> {
