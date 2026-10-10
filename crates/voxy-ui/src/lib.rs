@@ -63,3 +63,15 @@ pub fn run(open: Option<PathBuf>) -> eframe::Result {
         Box::new(|cc| Ok(Box::new(VoxyApp::new(cc, open)))),
     )
 }
+
+/// A context that has run one frame. On macOS `Context::format_shortcut`
+/// looks at the font's glyphs (for the ⌘ symbol), which panics before the
+/// first frame has set the fonts up; Linux and Windows never touch fonts
+/// there, so tests that format shortcuts outside a frame need this.
+#[cfg(test)]
+pub(crate) fn warmed_context() -> egui::Context {
+    let ctx = egui::Context::default();
+    let mut out = ctx.run_ui(egui::RawInput::default(), |_| {});
+    out.textures_delta.clear();
+    ctx
+}

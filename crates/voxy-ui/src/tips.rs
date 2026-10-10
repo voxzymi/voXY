@@ -197,7 +197,7 @@ mod tests {
 
     #[test]
     fn every_placeholder_names_a_real_action_and_nothing_raw_is_left() {
-        let ctx = Context::default();
+        let ctx = crate::warmed_context();
         let resolve = resolver(&ctx);
         for t in all() {
             let text = render(&t.text, &resolve).unwrap_or_else(|e| panic!("{}: {e}", t.id));
@@ -229,7 +229,7 @@ mod tests {
 
     #[test]
     fn no_tip_is_longer_than_the_limit_after_substitution() {
-        let ctx = Context::default();
+        let ctx = crate::warmed_context();
         let resolve = resolver(&ctx);
         for t in all() {
             let text = render(&t.text, &resolve).unwrap();
@@ -244,7 +244,7 @@ mod tests {
 
     #[test]
     fn every_tip_fits_two_lines_at_the_narrowest_tile_width() {
-        let ctx = Context::default();
+        let ctx = crate::warmed_context();
         let resolve = resolver(&ctx);
         let mut out = ctx.run_ui(
             RawInput {

@@ -639,7 +639,7 @@ mod tests {
     fn fresh() -> (Context, EditorState) {
         let mut state = EditorState::new(Document::empty("t"));
         state.dialogs = Box::new(crate::dialogs::NoDialogs);
-        (Context::default(), state)
+        (crate::warmed_context(), state)
     }
 
     #[test]
