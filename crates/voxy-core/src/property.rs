@@ -123,6 +123,16 @@ impl Property {
     /// # Panics
     /// If `key` is not a built-in property or `value` does not fit it; both
     /// are programming errors.
+    /// A new static property holding its descriptor's default.
+    pub fn with_default(id: PropId, desc: Arc<PropertyDesc>) -> Self {
+        let value = desc.default.clone();
+        Property {
+            id,
+            desc,
+            anim: Animation::Static(value),
+        }
+    }
+
     pub fn builtin(id: PropId, key: &str, value: Value) -> Self {
         let desc = builtin_desc(key).unwrap_or_else(|| panic!("unknown built-in property {key}"));
         Property::new(id, desc, value).unwrap_or_else(|e| panic!("{e}"))
@@ -492,6 +502,8 @@ fn clamp(desc: &PropertyDesc, value: Value) -> Value {
     match (value, desc.range) {
         (Value::Scalar(v), Some((lo, hi))) => Value::Scalar(v.clamp(lo, hi)),
         (Value::Int(v), Some((lo, hi))) => Value::Int(v.clamp(lo as i64, hi as i64)),
+        // An enum's range is its valid indices (effect parameters).
+        (Value::Enum(v), Some((lo, hi))) => Value::Enum(v.clamp(lo as u32, hi as u32)),
         (v, _) => v,
     }
 }

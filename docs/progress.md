@@ -52,7 +52,11 @@ at `743b053` (merge of #3).
        version number. It is documented in `docs/voxy-format.md`. Blend
        modes and adjustment layers join the 0.7.0 rule when they are added
        (D7).
-   3. The registry and the built-in definitions for group 1 (schemas only).
+   3. **Done:** the registry (`voxy_core::registry`: type and version
+      lookup, validation of definitions, instantiation at defaults) and the
+      group 1 built-in schemas. Group 1 is gaussian, box and directional
+      blur, brightness/contrast, exposure (linear light), invert, tint, and
+      hue/saturation/lightness. Enum parameters clamp to their choices.
    4. `BlendMode` variants and `LayerKind::Adjustment` (model only).
    5. Commands: add, remove, move, duplicate, enable, rename, matte,
       paste, set blend mode, new adjustment layer, and clearing layer

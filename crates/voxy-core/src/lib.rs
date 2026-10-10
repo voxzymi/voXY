@@ -32,6 +32,7 @@ pub mod motion_path;
 pub mod persist;
 mod pool;
 pub mod property;
+pub mod registry;
 pub mod shapes;
 mod time;
 pub mod timecode;
