@@ -137,12 +137,17 @@ pub struct Session {
 
 impl Session {
     pub fn new(dir: PathBuf) -> Self {
+        // The clock alone is not enough: on macOS it ticks in microseconds,
+        // so two sessions made back to back could get the same ID. A
+        // per-process counter keeps them apart.
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let nanos = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .map_or(0, |d| d.as_nanos());
         Session {
             dir,
-            id: format!("{:x}-{nanos:x}", std::process::id()),
+            id: format!("{:x}-{nanos:x}-{n:x}", std::process::id()),
             lock: None,
         }
     }
