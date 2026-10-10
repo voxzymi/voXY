@@ -12,7 +12,7 @@
 
 use voxy_core::glam::DVec2;
 use voxy_core::registry::ids;
-use voxy_core::{EffectTypeId, EvaluatedEffect, Value};
+use voxy_core::{EffectTypeId, EvaluatedEffect, LinearRgba, Value, WorkingSpace};
 
 /// The most taps one side of a convolution pass may have (the shader's
 /// weight array holds `MAX_TAPS + 1` weights: the centre and one side).
@@ -87,6 +87,34 @@ impl Rect {
     }
 }
 
+fn color(fx: &EvaluatedEffect, name: &str, default: LinearRgba) -> LinearRgba {
+    match fx.param(name) {
+        Some(Value::Color(c)) if c.is_finite() => *c,
+        _ => default,
+    }
+}
+
+/// A linear colour as working-space RGB (alpha dropped).
+fn working_rgb(c: LinearRgba, space: WorkingSpace) -> [f32; 4] {
+    let [r, g, b, _] = match space {
+        WorkingSpace::Linear => c.to_array(),
+        WorkingSpace::SrgbCompat => c.to_srgb(),
+    };
+    [r, g, b, 0.0]
+}
+
+/// The contrast factor `k` for a contrast setting `c` in `[-1, 1]`:
+/// `1 + c` below zero (down to a flat grey at −1), `1 / (1 − 0.99·c)` above
+/// (up to 100 at 1). Continuous, with `k = 1` at 0.
+pub fn contrast_factor(c: f64) -> f64 {
+    let c = c.clamp(-1.0, 1.0);
+    if c < 0.0 {
+        1.0 + c
+    } else {
+        1.0 / (1.0 - 0.99 * c)
+    }
+}
+
 fn flag(fx: &EvaluatedEffect, name: &str) -> bool {
     matches!(fx.param(name), Some(Value::Bool(true)))
 }
@@ -138,15 +166,23 @@ pub enum Kernel {
     GaussianBlur,
     BoxBlur,
     DirectionalBlur,
+    BrightnessContrast,
+    Exposure,
+    Tint,
+    HueSaturation,
 }
 
 impl Kernel {
     /// Every kernel.
-    pub const ALL: [Kernel; 4] = [
+    pub const ALL: [Kernel; 8] = [
         Kernel::Invert,
         Kernel::GaussianBlur,
         Kernel::BoxBlur,
         Kernel::DirectionalBlur,
+        Kernel::BrightnessContrast,
+        Kernel::Exposure,
+        Kernel::Tint,
+        Kernel::HueSaturation,
     ];
 
     /// The kernel running `type_id` at `version`, if this build has one.
@@ -169,18 +205,87 @@ impl Kernel {
             Kernel::GaussianBlur => ids::GAUSSIAN_BLUR,
             Kernel::BoxBlur => ids::BOX_BLUR,
             Kernel::DirectionalBlur => ids::DIRECTIONAL_BLUR,
+            Kernel::BrightnessContrast => ids::BRIGHTNESS_CONTRAST,
+            Kernel::Exposure => ids::EXPOSURE,
+            Kernel::Tint => ids::TINT,
+            Kernel::HueSaturation => ids::HUE_SATURATION,
         }
     }
 
     /// The shader passes for `fx`, in order. `texel_scale` is texels per
     /// layer pixel (the preview scale, possibly reduced to fit the GPU), by
-    /// which pixel parameters are multiplied. An empty list means the effect
-    /// does nothing with these parameters.
-    pub fn passes(self, fx: &EvaluatedEffect, texel_scale: f64) -> Vec<KernelParams> {
+    /// which pixel parameters are multiplied; `space` is the working space
+    /// colour parameters are encoded for. An empty list means the effect
+    /// does nothing with these parameters, so defaults pass through exactly.
+    pub fn passes(
+        self,
+        fx: &EvaluatedEffect,
+        texel_scale: f64,
+        space: WorkingSpace,
+    ) -> Vec<KernelParams> {
         let s = texel_scale;
+        let mut k = KernelParams::default();
         match self {
+            Kernel::BrightnessContrast => {
+                let brightness = scalar(fx, "brightness", 0.0).clamp(-1.0, 1.0);
+                let contrast = scalar(fx, "contrast", 0.0).clamp(-1.0, 1.0);
+                if brightness == 0.0 && contrast == 0.0 {
+                    return Vec::new();
+                }
+                k.p[0] = [
+                    brightness as f32,
+                    contrast_factor(contrast) as f32,
+                    0.0,
+                    0.0,
+                ];
+                vec![k]
+            }
+            Kernel::Exposure => {
+                let stops = scalar(fx, "exposure", 0.0).clamp(-20.0, 20.0);
+                let offset = scalar(fx, "offset", 0.0).clamp(-1.0, 1.0);
+                let gamma = scalar(fx, "gamma", 1.0).clamp(0.01, 10.0);
+                if stops == 0.0 && offset == 0.0 && gamma == 1.0 {
+                    return Vec::new();
+                }
+                k.p[0] = [
+                    libm::exp2(stops) as f32,
+                    offset as f32,
+                    (1.0 / gamma) as f32,
+                    0.0,
+                ];
+                vec![k]
+            }
+            Kernel::Tint => {
+                let amount = scalar(fx, "amount", 1.0).clamp(0.0, 1.0);
+                if amount == 0.0 {
+                    return Vec::new();
+                }
+                k.p[0] = working_rgb(color(fx, "map_black", LinearRgba::BLACK), space);
+                k.p[1] = working_rgb(color(fx, "map_white", LinearRgba::WHITE), space);
+                k.p[2][0] = amount as f32;
+                vec![k]
+            }
+            Kernel::HueSaturation => {
+                let hue = scalar(fx, "hue", 0.0);
+                let sat = scalar(fx, "saturation", 0.0).clamp(-1.0, 1.0);
+                let light = scalar(fx, "lightness", 0.0).clamp(-1.0, 1.0);
+                let colorize = flag(fx, "colorize");
+                if hue == 0.0 && sat == 0.0 && light == 0.0 && !colorize {
+                    return Vec::new();
+                }
+                // Turns, reduced exactly in f64 so large angles stay precise.
+                let turns = |deg: f64| (deg / 360.0).rem_euclid(1.0) as f32;
+                k.p[0] = [turns(hue), sat as f32, light as f32, 0.0];
+                k.p[1] = [
+                    turns(scalar(fx, "colorize_hue", 0.0)),
+                    scalar(fx, "colorize_saturation", 0.25).clamp(0.0, 1.0) as f32,
+                    0.0,
+                    0.0,
+                ];
+                k.i[0] = u32::from(colorize);
+                vec![k]
+            }
             Kernel::Invert => {
-                let mut k = KernelParams::default();
                 k.p[0][0] = scalar(fx, "mix", 0.0).clamp(0.0, 1.0) as f32;
                 k.i[0] = choice(fx, "channel").min(4);
                 vec![k]
@@ -191,12 +296,12 @@ impl Kernel {
                     return Vec::new();
                 }
                 let repeat = flag(fx, "repeat_edges");
-                let (x, y) = axes(fx);
+                let (along_x, along_y) = axes(fx);
                 let mut out = Vec::new();
-                if x {
+                if along_x {
                     out.push(convolve(0, repeat, w.clone()));
                 }
-                if y {
+                if along_y {
                     out.push(convolve(1, repeat, w));
                 }
                 out
@@ -208,13 +313,13 @@ impl Kernel {
                 }
                 let repeat = flag(fx, "repeat_edges");
                 let passes = scalar(fx, "passes", 1.0).clamp(1.0, 5.0) as usize;
-                let (x, y) = axes(fx);
+                let (along_x, along_y) = axes(fx);
                 let mut out = Vec::new();
                 for _ in 0..passes {
-                    if x {
+                    if along_x {
                         out.push(convolve(0, repeat, box_weights(taps)));
                     }
-                    if y {
+                    if along_y {
                         out.push(convolve(1, repeat, box_weights(taps)));
                     }
                 }
@@ -229,7 +334,6 @@ impl Kernel {
                 }
                 let angle = scalar(fx, "direction", 0.0).to_radians();
                 let step = length / (samples - 1) as f64;
-                let mut k = KernelParams::default();
                 k.p[0] = [
                     (libm::cos(angle) * step) as f32,
                     (libm::sin(angle) * step) as f32,
@@ -249,7 +353,11 @@ impl Kernel {
         // for preview scales up to 1.
         let r = |name: &str| scalar(fx, name, 0.0).max(0.0);
         match self {
-            Kernel::Invert => DVec2::ZERO,
+            Kernel::Invert
+            | Kernel::BrightnessContrast
+            | Kernel::Exposure
+            | Kernel::Tint
+            | Kernel::HueSaturation => DVec2::ZERO,
             Kernel::GaussianBlur | Kernel::BoxBlur => {
                 let passes = if self == Kernel::BoxBlur {
                     scalar(fx, "passes", 1.0).clamp(1.0, 5.0)

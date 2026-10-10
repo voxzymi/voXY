@@ -79,6 +79,12 @@ pub(super) fn kernel_shader(kernel: Kernel) -> &'static str {
             include_str!("../shaders/effects/convolve.wgsl")
         }
         Kernel::DirectionalBlur => include_str!("../shaders/effects/directional.wgsl"),
+        Kernel::BrightnessContrast => {
+            include_str!("../shaders/effects/brightness_contrast.wgsl")
+        }
+        Kernel::Exposure => include_str!("../shaders/effects/exposure.wgsl"),
+        Kernel::Tint => include_str!("../shaders/effects/tint.wgsl"),
+        Kernel::HueSaturation => include_str!("../shaders/effects/hue_saturation.wgsl"),
     }
 }
 
@@ -289,13 +295,22 @@ impl Compositor {
         let mut bytes = Vec::new();
         let mut passes = Vec::new();
         for (kernel, fx) in &nodes {
-            for k in kernel.passes(fx, s) {
+            for k in kernel.passes(fx, s, space) {
                 let mut w = [[0.0f32; 4]; 256];
                 for (i, v) in k.w.iter().take(1024).enumerate() {
                     w[i / 4][i % 4] = *v;
                 }
                 let u = EffectUniform {
-                    frame: [texels.0 as f32, texels.1 as f32, s as f32, 0.0],
+                    frame: [
+                        texels.0 as f32,
+                        texels.1 as f32,
+                        s as f32,
+                        if space == voxy_core::WorkingSpace::SrgbCompat {
+                            1.0
+                        } else {
+                            0.0
+                        },
+                    ],
                     p: k.p,
                     i: k.i,
                     w,

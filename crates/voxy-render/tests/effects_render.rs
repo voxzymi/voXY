@@ -198,11 +198,11 @@ fn chains_render_once_while_static_and_again_when_changed() {
     assert_eq!((half.width, half.height), (48, 32));
 }
 
+/// A golden: file name, effect type and parameter values.
+type Case<'a> = (&'a str, &'a str, Vec<(&'a str, Value)>);
+
 mod blurs {
     use super::*;
-
-    /// A golden: file name, effect type and parameter values.
-    type Case<'a> = (&'a str, &'a str, Vec<(&'a str, Value)>);
 
     fn blurred(id: &str, params: &[(&str, Value)]) -> (Document, Vec<LayerId>) {
         let (mut doc, layers) = scene(WorkingSpace::Linear);
@@ -334,5 +334,152 @@ mod blurs {
         let (doc, _) = blurred(ids::GAUSSIAN_BLUR, &[("radius", Value::Scalar(1000.0))]);
         let img = render(&gpu, &mut c, &doc, Time::ZERO, 0.25);
         assert_eq!((img.width, img.height), (24, 16));
+    }
+}
+
+mod color {
+    use super::*;
+
+    fn pixel(img: &RgbaImage, x: u32, y: u32) -> [u8; 4] {
+        let i = ((y * img.width + x) * 4) as usize;
+        img.pixels[i..i + 4].try_into().unwrap()
+    }
+
+    const COLOR: [&str; 4] = [
+        ids::BRIGHTNESS_CONTRAST,
+        ids::EXPOSURE,
+        ids::TINT,
+        ids::HUE_SATURATION,
+    ];
+
+    #[test]
+    fn defaults_pass_through_exactly() {
+        let Some(gpu) = gpu() else { return };
+        let mut c = Compositor::new(&gpu.device);
+        let (plain, layers) = scene(WorkingSpace::SrgbCompat);
+        let expected = render(&gpu, &mut c, &plain, Time::ZERO, 1.0);
+        for id in COLOR {
+            let mut doc = plain.clone();
+            add_effect(&mut doc, layers[0], id);
+            add_effect(&mut doc, layers[1], id);
+            if id == ids::TINT {
+                // Tint's default is a full black-to-white tint; zero is the
+                // identity.
+                for l in &layers {
+                    set_param(&mut doc, *l, 0, "amount", Value::Scalar(0.0));
+                }
+            }
+            assert_eq!(
+                render(&gpu, &mut c, &doc, Time::ZERO, 1.0),
+                expected,
+                "{id}"
+            );
+        }
+    }
+
+    #[test]
+    fn color_goldens() {
+        let Some(gpu) = gpu() else { return };
+        let mut c = Compositor::new(&gpu.device);
+        let cases: [Case<'_>; 5] = [
+            (
+                "effect_brightness_contrast",
+                ids::BRIGHTNESS_CONTRAST,
+                vec![
+                    ("brightness", Value::Scalar(0.15)),
+                    ("contrast", Value::Scalar(0.5)),
+                ],
+            ),
+            (
+                "effect_exposure",
+                ids::EXPOSURE,
+                vec![
+                    ("exposure", Value::Scalar(1.5)),
+                    ("gamma", Value::Scalar(1.3)),
+                ],
+            ),
+            (
+                "effect_tint",
+                ids::TINT,
+                vec![
+                    (
+                        "map_black",
+                        Value::Color(LinearRgba::from_srgb8(40, 0, 80, 255)),
+                    ),
+                    (
+                        "map_white",
+                        Value::Color(LinearRgba::from_srgb8(255, 230, 150, 255)),
+                    ),
+                    ("amount", Value::Scalar(0.8)),
+                ],
+            ),
+            (
+                "effect_hue_saturation",
+                ids::HUE_SATURATION,
+                vec![
+                    ("hue", Value::Scalar(120.0)),
+                    ("saturation", Value::Scalar(0.5)),
+                    ("lightness", Value::Scalar(-0.2)),
+                ],
+            ),
+            (
+                "effect_hue_colorize",
+                ids::HUE_SATURATION,
+                vec![
+                    ("colorize", Value::Bool(true)),
+                    ("colorize_hue", Value::Scalar(200.0)),
+                    ("colorize_saturation", Value::Scalar(0.6)),
+                ],
+            ),
+        ];
+        for (name, id, params) in cases {
+            let (mut doc, layers) = scene(WorkingSpace::SrgbCompat);
+            for l in &layers {
+                let fx = add_effect(&mut doc, *l, id);
+                for (n, v) in &params {
+                    set_param(&mut doc, *l, fx, n, v.clone());
+                }
+            }
+            compare(name, &render(&gpu, &mut c, &doc, Time::ZERO, 1.0));
+        }
+    }
+
+    /// Exposure computes in linear light, so it means the same in both
+    /// working spaces (on opaque pixels, where blending plays no part).
+    #[test]
+    fn exposure_is_the_same_in_both_working_spaces() {
+        let Some(gpu) = gpu() else { return };
+        let mut c = Compositor::new(&gpu.device);
+        let mut out = Vec::new();
+        for space in [WorkingSpace::Linear, WorkingSpace::SrgbCompat] {
+            let (mut doc, layers) = scene(space);
+            let fx = add_effect(&mut doc, layers[0], ids::EXPOSURE);
+            set_param(&mut doc, layers[0], fx, "exposure", Value::Scalar(-1.0));
+            out.push(pixel(&render(&gpu, &mut c, &doc, Time::ZERO, 1.0), 12, 20));
+        }
+        for ch in 0..3 {
+            assert!(out[0][ch].abs_diff(out[1][ch]) <= 2, "{out:?}");
+        }
+    }
+
+    /// Extreme settings, followed by a blur that would spread any infinity
+    /// or NaN, still give sane pixels.
+    #[test]
+    fn extreme_settings_stay_finite() {
+        let Some(gpu) = gpu() else { return };
+        let mut c = Compositor::new(&gpu.device);
+        let (mut doc, layers) = scene(WorkingSpace::Linear);
+        let l = layers[0];
+        let exposure = add_effect(&mut doc, l, ids::EXPOSURE);
+        set_param(&mut doc, l, exposure, "exposure", Value::Scalar(20.0));
+        set_param(&mut doc, l, exposure, "gamma", Value::Scalar(0.01));
+        let contrast = add_effect(&mut doc, l, ids::BRIGHTNESS_CONTRAST);
+        set_param(&mut doc, l, contrast, "brightness", Value::Scalar(1.0));
+        set_param(&mut doc, l, contrast, "contrast", Value::Scalar(1.0));
+        let blur = add_effect(&mut doc, l, ids::GAUSSIAN_BLUR);
+        set_param(&mut doc, l, blur, "radius", Value::Scalar(6.0));
+        let img = render(&gpu, &mut c, &doc, Time::ZERO, 1.0);
+        // Inside the layer: saturated white, never the black a NaN gives.
+        assert_eq!(pixel(&img, 30, 30), [255, 255, 255, 255]);
     }
 }

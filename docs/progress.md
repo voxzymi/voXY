@@ -151,8 +151,17 @@ at `743b053` (merge of #3).
         renders; two compositors give identical frames.
       - Four goldens: `effect_blur_gaussian`, `effect_blur_box`,
         `effect_blur_directional` and `effect_blur_repeat_edges`.
-   4. The colour basics (brightness/contrast, exposure, invert, tint,
-      hue/saturation), with goldens.
+   4. **Done:** the colour basics.
+      - Brightness/contrast, exposure (linear light, the same in both
+        working spaces), tint and hue/saturation/lightness, on top of
+        invert from 1c.
+      - Defaults run no pass, so they are an exact pass-through (tested).
+      - Outputs are capped at 60000 to stay inside RGBA16F; extreme
+        settings followed by a blur stay finite (tested).
+      - CPU grid test: every kernel's parameters are finite for every
+        combination of min, default and max, in both spaces and at two
+        scales.
+      - Five goldens.
    5. Determinism and cache tests, and `docs/effects.md` for group 1.
 3. E-C, then E-D, then O-A to O-D.
 

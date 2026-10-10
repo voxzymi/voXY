@@ -7,7 +7,8 @@
 // change with the preview resolution.
 
 struct EffectUniform {
-    // x, y: buffer size in texels; z: texels per layer pixel; w: unused.
+    // x, y: buffer size in texels; z: texels per layer pixel; w: 1 when the
+    // working space is SrgbCompat (values are sRGB-encoded), 0 when linear.
     frame: vec4<f32>,
     p0: vec4<f32>,
     p1: vec4<f32>,
@@ -52,4 +53,33 @@ fn unpremultiply(c: vec4<f32>) -> vec3<f32> {
         return vec3<f32>(0.0);
     }
     return c.rgb / c.a;
+}
+
+// The largest value an effect writes: below the RGBA16F maximum (65504),
+// so extreme settings never overflow to infinity (and then NaN).
+const MAX_VALUE: f32 = 60000.0;
+
+fn premultiply(rgb: vec3<f32>, a: f32) -> vec4<f32> {
+    return vec4<f32>(clamp(rgb, vec3<f32>(-MAX_VALUE), vec3<f32>(MAX_VALUE)) * a, a);
+}
+
+// Working-space values to linear light, and back (for effects that compute
+// in linear light, docs/effects.md).
+fn to_linear(c: vec3<f32>) -> vec3<f32> {
+    if fx.frame.w > 0.5 {
+        return srgb_to_linear(max(c, vec3<f32>(0.0)));
+    }
+    return c;
+}
+
+fn from_linear(c: vec3<f32>) -> vec3<f32> {
+    if fx.frame.w > 0.5 {
+        return linear_to_srgb(max(c, vec3<f32>(0.0)));
+    }
+    return c;
+}
+
+// Rec. 709 luma of working-space values.
+fn luma709(c: vec3<f32>) -> f32 {
+    return dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
 }

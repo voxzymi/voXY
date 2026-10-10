@@ -100,6 +100,79 @@ is the specification of the WGSL kernels in
 - **Regions:** RoD and ROI are the same as the input.
 - **Note:** values above 1 (HDR) are clamped to 1 before inverting.
 
+### Brightness & Contrast (`voxy.color.brightness_contrast`, v1)
+
+| Parameter | Type | Range | Default |
+|---|---|---|---|
+| Brightness (`brightness`) | scalar, normalized | −1–1 | 0 |
+| Contrast (`contrast`) | scalar, normalized | −1–1 | 0 |
+
+- **Space:** working.
+- **Formula:** `C′ = max((C − ½)·k + ½ + brightness, 0)` on the straight
+  colour, with alpha unchanged.
+  - The contrast factor is `k = 1 + c` for `c < 0`, which reaches a flat
+    grey at −1, and `k = 1 / (1 − 0.99·c)` for `c ≥ 0`, which reaches 100
+    at 1. It is continuous, with `k = 1` at 0.
+  - Values above 1 are kept (HDR). Results are capped at 60000 so they
+    never overflow half floats.
+- **Defaults** (0, 0) run no pass: an exact pass-through.
+- **Regions:** same.
+
+### Exposure (`voxy.color.exposure`, v1)
+
+| Parameter | Type | Range | Default |
+|---|---|---|---|
+| Exposure (`exposure`) | scalar, stops | −20–20 (slider ±5) | 0 |
+| Offset (`offset`) | scalar | −1–1 (slider ±0.1) | 0 |
+| Gamma Correction (`gamma`) | scalar | 0.01–10 (slider 0.2–5) | 1 |
+
+- **Space:** linear. In SrgbCompat projects the effect decodes to linear
+  first and re-encodes afterwards, so it looks the same in both working
+  spaces (tested).
+- **Formula:** `C′ = max(C·2^exposure + offset, 0)^(1/gamma)` in linear
+  light, capped at 60000.
+- **Defaults** (0, 0, 1) run no pass.
+- **Regions:** same.
+
+### Tint (`voxy.color.tint`, v1)
+
+| Parameter | Type | Range | Default |
+|---|---|---|---|
+| Map Black To (`map_black`) | colour (alpha unused) | — | black |
+| Map White To (`map_white`) | colour (alpha unused) | — | white |
+| Amount to Tint (`amount`) | scalar, normalized | 0–1 | 1 |
+
+- **Space:** working. The colours are encoded for the working space.
+- **Formula:** `L = clamp(Rec709Luma(C), 0, 1)` with weights
+  `0.2126, 0.7152, 0.0722`, then `T = mix(black, white, L)` and
+  `C′ = mix(C, T, amount)`.
+- **Amount 0** runs no pass.
+- **Regions:** same.
+
+### Hue / Saturation / Lightness (`voxy.color.hue_saturation`, v1)
+
+| Parameter | Type | Range | Default |
+|---|---|---|---|
+| Hue (`hue`) | angle, degrees | any (slider ±180) | 0 |
+| Saturation (`saturation`) | scalar, normalized | −1–1 | 0 |
+| Lightness (`lightness`) | scalar, normalized | −1–1 | 0 |
+| Colorize (`colorize`) | bool | — | off |
+| Colorize Hue (`colorize_hue`) | angle, degrees | any (slider 0–360) | 0 |
+| Colorize Saturation (`colorize_saturation`) | scalar, normalized | 0–1 | 0.25 |
+
+- **Space:** working. The straight colour is clamped to `[0, 1]` and
+  converted to HSL.
+- **Formula:**
+  - Without Colorize: `H′ = H + hue`, and `S′ = clamp(S·(1 + saturation), 0, 1)`.
+  - With Colorize: `H′` is Colorize Hue, `S′` is Colorize Saturation, and
+    `L` is kept.
+  - Lightness then applies: `L + (1 − L)·l` for `l > 0`, `L·(1 + l)` for
+    `l ≤ 0`.
+  - Angles are reduced to turns in `f64` on the CPU, so large angles stay
+    exact.
+- **Defaults** run no pass.
+- **Regions:** same.
+
 ## Blend modes
 
 A layer's blend mode decides how it combines with everything below it in

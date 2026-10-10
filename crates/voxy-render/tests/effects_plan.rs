@@ -86,8 +86,16 @@ fn a_layer_with_effects_becomes_a_chain() {
 #[test]
 fn effects_without_kernels_and_placeholders_pass_through() {
     let (mut doc, comp, layer) = doc();
-    // No kernels for exposure and tint yet (E-B step 4).
-    add(&mut doc, layer, ids::EXPOSURE);
+    // A version this build has no kernel for (a newer Tint).
+    let mut newer = (**builtins().latest(&EffectTypeId::new(ids::TINT)).unwrap()).clone();
+    newer.version = 2;
+    AddEffect {
+        layer,
+        index: None,
+        def: std::sync::Arc::new(newer),
+    }
+    .apply(&mut doc)
+    .unwrap();
     add(&mut doc, layer, ids::TINT);
     doc.layer_mut(layer).unwrap().effects[1].mark_missing(MissingReason::UnknownType);
     let p = plan(&doc, comp, Time::ZERO, 1.0);
@@ -230,7 +238,12 @@ mod blur_rules {
             &[("radius", Value::Scalar(4.0)), ("passes", Value::Int(3))],
         );
         assert_eq!(Kernel::BoxBlur.rod(&b, r, 1.0), r.pad(DVec2::splat(13.0)));
-        assert_eq!(Kernel::BoxBlur.passes(&b, 1.0).len(), 6);
+        assert_eq!(
+            Kernel::BoxBlur
+                .passes(&b, 1.0, voxy_core::WorkingSpace::Linear)
+                .len(),
+            6
+        );
         // Directional: along its angle only.
         let d = fx(
             voxy_core::registry::ids::DIRECTIONAL_BLUR,
@@ -249,7 +262,12 @@ mod blur_rules {
             voxy_core::registry::ids::GAUSSIAN_BLUR,
             &[("radius", Value::Scalar(0.0))],
         );
-        assert_eq!(Kernel::GaussianBlur.passes(&none, 1.0).len(), 0);
+        assert_eq!(
+            Kernel::GaussianBlur
+                .passes(&none, 1.0, voxy_core::WorkingSpace::Linear)
+                .len(),
+            0
+        );
     }
 
     #[test]
@@ -258,11 +276,85 @@ mod blur_rules {
             voxy_core::registry::ids::GAUSSIAN_BLUR,
             &[("radius", Value::Scalar(20.0))],
         );
-        let full = &Kernel::GaussianBlur.passes(&g, 1.0)[0];
-        let half = &Kernel::GaussianBlur.passes(&g, 0.5)[0];
+        let full = &Kernel::GaussianBlur.passes(&g, 1.0, voxy_core::WorkingSpace::Linear)[0];
+        let half = &Kernel::GaussianBlur.passes(&g, 0.5, voxy_core::WorkingSpace::Linear)[0];
         assert_eq!(full.i[1], 20);
         assert_eq!(half.i[1], 10);
         assert_eq!(full.w, gaussian_weights(20.0));
         assert_eq!(half.w, gaussian_weights(10.0));
+    }
+}
+
+/// Every kernel's shader parameters are finite for every combination of
+/// minimum, default and maximum parameter values (design §9: no NaN or
+/// infinity across the grid).
+#[test]
+fn kernel_parameters_are_finite_across_the_grid() {
+    use voxy_core::{EffectId, EvaluatedEffect, ValueKind, WorkingSpace};
+    for kernel in Kernel::ALL {
+        let def = builtins()
+            .latest(&EffectTypeId::new(kernel.type_id()))
+            .unwrap();
+        // Three settings per parameter: low, default, high.
+        let choices: Vec<Vec<Value>> = def
+            .params
+            .iter()
+            .map(|p| {
+                let d = &p.desc;
+                let (lo, hi) = d.range.or(d.soft_range).unwrap_or((-1e6, 1e6));
+                match d.kind {
+                    ValueKind::Scalar => {
+                        vec![Value::Scalar(lo), d.default.clone(), Value::Scalar(hi)]
+                    }
+                    ValueKind::Int => vec![
+                        Value::Int(lo as i64),
+                        d.default.clone(),
+                        Value::Int(hi as i64),
+                    ],
+                    ValueKind::Enum => {
+                        vec![Value::Enum(0), d.default.clone(), Value::Enum(hi as u32)]
+                    }
+                    ValueKind::Bool => vec![Value::Bool(false), Value::Bool(true)],
+                    _ => vec![d.default.clone()],
+                }
+            })
+            .collect();
+        let total: usize = choices.iter().map(Vec::len).product();
+        for n in 0..total {
+            let mut rest = n;
+            let params = def
+                .params
+                .iter()
+                .zip(&choices)
+                .map(|(p, c)| {
+                    let v = c[rest % c.len()].clone();
+                    rest /= c.len();
+                    (p.name.clone(), v)
+                })
+                .collect();
+            let fx = EvaluatedEffect {
+                id: EffectId(1),
+                type_id: def.type_id.clone(),
+                version: 1,
+                params,
+                matte: None,
+                frame: 0,
+            };
+            for space in [WorkingSpace::Linear, WorkingSpace::SrgbCompat] {
+                for scale in [1.0, 0.25] {
+                    for pass in kernel.passes(&fx, scale, space) {
+                        assert!(
+                            pass.p.iter().flatten().all(|v| v.is_finite())
+                                && pass.w.iter().all(|v| v.is_finite()),
+                            "{kernel:?} {:?}",
+                            fx.params
+                        );
+                    }
+                    let r = Rect::of_size(voxy_core::glam::DVec2::new(10.0, 10.0));
+                    let rod = kernel.rod(&fx, r, scale);
+                    assert!(rod.min.is_finite() && rod.max.is_finite(), "{kernel:?}");
+                }
+            }
+        }
     }
 }
