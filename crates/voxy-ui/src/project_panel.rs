@@ -291,7 +291,7 @@ fn list(
     if let Some(items) = bg.dnd_release_payload::<Vec<PoolItem>>() {
         state.move_items((*items).clone(), None);
     }
-    drag_label(ui.ctx(), state);
+    drag_label(ui.ctx(), ui.max_rect());
 }
 
 fn header_row(ui: &mut Ui, state: &mut EditorState, cx: &ListCx<'_>) {
@@ -803,15 +803,15 @@ fn os_drops(ui: &mut Ui, state: &mut EditorState, panel: Rect) {
     }
 }
 
-/// A small label at the pointer while items are dragged.
-fn drag_label(ctx: &egui::Context, state: &EditorState) {
+/// A small label at the pointer while items are dragged inside the panel.
+/// Over the timeline and viewport those panels say what the drop will do.
+fn drag_label(ctx: &egui::Context, panel: Rect) {
     let Some(items) = egui::DragAndDrop::payload::<Vec<PoolItem>>(ctx) else {
         return;
     };
-    let Some(pos) = ctx.pointer_hover_pos() else {
+    let Some(pos) = ctx.pointer_hover_pos().filter(|p| panel.contains(*p)) else {
         return;
     };
-    let _ = state;
     egui::Area::new(Id::new("project-drag-label"))
         .order(egui::Order::Tooltip)
         .fixed_pos(pos + vec2(14.0, 10.0))

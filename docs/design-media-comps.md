@@ -814,3 +814,34 @@ What landed in `voxy-core`, and where it refines the design above.
   main composition (`EditorState::comp_id`), and every panel handles a
   project with none. The viewport's frame key now includes the composition
   ID, so switching compositions can never show a stale frame.
+
+## Implementation notes (Milestone D)
+
+- **Core** (`command/dropping.rs`). `resolve_drop(doc, target, items,
+  placement) -> Plan` is pure and is called by both the drag preview and the
+  command, so the preview matches the result. `DropItems { target, items,
+  placement, folder }` imports any `DropItem::File` (already probed by the
+  UI; core does no I/O) and then applies the plan, as one undo step.
+  `DropTarget` is `Timeline`, `Viewport`, `ReplaceLayer` or `NewComp {
+  per_item, source }`. The length rule is `source_layer_length`, shared with
+  `AddSourceLayer`. Cycles block the drop with the reason ("A can't be placed
+  in B: B already contains it (A › B)"); a blocked or failing drop changes
+  nothing.
+- **Timeline** (`drops.rs`, `timeline.rs`). Dragging Project items over the
+  timeline shows an insertion line, a ghost bar per layer at the snapped
+  time, and a label at the pointer ("Add 2 layers"). The time snaps to the
+  playhead, layer edges, 0 and the composition end within 8 points; **Shift
+  turns snapping off**. **Ctrl/Cmd sequences**, **Alt/Option over a layer
+  replaces its source** (outlining the layer). Releasing runs the command; Esc
+  cancels (egui ends the drag). The new layer is selected.
+- **Viewport.** The marker shows where the layer will be centered; on release
+  the layer goes on top at the playhead with its center at the pointer. Alt
+  replace is not offered there because the viewport cannot pick a layer under
+  the pointer yet (viewport hit testing is still deferred).
+- **Files from the OS** dropped on the timeline or viewport are imported and
+  placed in one undo step. On the Project panel they are only imported, as
+  before.
+- **Empty timeline.** Footage dragged onto the empty-state screen makes a
+  composition from it (as the From Footage tile does).
+- The Project panel's "Move item" label only appears over the Project panel;
+  over the timeline and viewport those panels show what the drop will do.

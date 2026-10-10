@@ -210,6 +210,7 @@ pub fn show(ui: &mut Ui, state: &mut EditorState) {
         );
         tip_row(ui, state, area, &text);
     }
+    pool_drop(ui, state, avail);
     // Allocate the space so the parent knows it was used.
     ui.allocate_rect(avail, Sense::hover());
 
@@ -259,6 +260,33 @@ fn draw_bulb(painter: &egui::Painter, rect: Rect, stroke: Stroke) {
             stroke,
         );
     }
+}
+
+/// Footage dragged from the Project panel onto the empty timeline makes a
+/// composition from it (as the From Footage tile does).
+fn pool_drop(ui: &Ui, state: &mut EditorState, area: Rect) {
+    let ctx = ui.ctx();
+    let over = ctx
+        .input(|i| i.pointer.hover_pos())
+        .is_some_and(|p| area.contains(p));
+    if !over || !egui::DragAndDrop::has_payload_of_type::<Vec<voxy_core::PoolItem>>(ctx) {
+        return;
+    }
+    if crate::drops::cancel_on_escape(ctx) {
+        return;
+    }
+    if crate::drops::released(ctx) {
+        if let Some(items) = egui::DragAndDrop::take_payload::<Vec<voxy_core::PoolItem>>(ctx) {
+            state.new_comp_from_pool_items(&items);
+        }
+        return;
+    }
+    ui.painter().rect_stroke(
+        area.shrink(2.0),
+        4.0,
+        Stroke::new(2.0, ACCENT),
+        StrokeKind::Inside,
+    );
 }
 
 fn tile_rects(layout: &Layout, origin: Pos2) -> [Rect; 2] {

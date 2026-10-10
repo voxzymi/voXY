@@ -9,6 +9,7 @@ mod comp_dialog;
 mod comp_draft;
 mod compat;
 mod dialogs;
+mod drops;
 mod ease_params;
 mod ease_ui;
 mod empty_state;

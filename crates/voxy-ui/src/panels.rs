@@ -127,6 +127,15 @@ impl Panels<'_> {
             crate::empty_state::show_viewport_message(ui);
             return;
         };
+        if let Some(comp) = self.state.comp() {
+            crate::drops::viewport_drop(
+                ui,
+                self.state,
+                comp_id,
+                [comp.width, comp.height],
+                ui.max_rect(),
+            );
+        }
         let Some(viewport) = self.viewport.as_deref_mut() else {
             ui.centered_and_justified(|ui| ui.label("GPU viewport unavailable"));
             return;

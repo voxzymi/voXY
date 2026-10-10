@@ -14,7 +14,7 @@ use std::path::PathBuf;
 
 use egui::{Align, ComboBox, Context, Id, Key, Layout, Modal, RadioButton, Ui};
 use voxy_core::command::{DropItem, DropItems, DropTarget, Placement, Plan, resolve_drop};
-use voxy_core::{Asset, AssetId, FrameRate, Time};
+use voxy_core::{Asset, AssetId, FrameRate, PoolItem, Time};
 
 use crate::state::EditorState;
 
@@ -81,24 +81,32 @@ pub struct Prompt {
 }
 
 impl EditorState {
-    /// The assets selected in the Project panel (folders expanded) in the
-    /// project's own order. Compositions are ignored.
-    fn selected_footage(&self) -> Vec<Entry> {
+    /// The assets among `items` (folders expanded, compositions ignored) in
+    /// the project's own order.
+    fn footage_of(&self, items: &[PoolItem]) -> Vec<Entry> {
         let doc = self.history.current();
-        let expanded = doc.expand_items(
-            &self
-                .project
-                .selection
-                .items
-                .iter()
-                .copied()
-                .collect::<Vec<_>>(),
-        );
+        let expanded = doc.expand_items(items);
         doc.assets
             .iter()
             .filter(|a| expanded.assets.contains(&a.id))
             .map(|a| Entry::Existing(a.id, a.clone()))
             .collect()
+    }
+
+    /// The assets selected in the Project panel.
+    fn selected_footage(&self) -> Vec<Entry> {
+        let items: Vec<PoolItem> = self.project.selection.items.iter().copied().collect();
+        self.footage_of(&items)
+    }
+
+    /// Footage dropped on the empty timeline: a composition from it.
+    pub fn new_comp_from_pool_items(&mut self, items: &[PoolItem]) {
+        let entries = self.footage_of(items);
+        if entries.is_empty() {
+            self.error("Drop footage here to make a composition from it.");
+            return;
+        }
+        self.begin_from_footage(entries);
     }
 
     /// File > New > Composition From Footage. Uses the selected footage, else
