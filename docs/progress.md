@@ -207,8 +207,16 @@ at `743b053` (merge of #3).
       - Saved dock layouts from before the panel existed are kept: the
         panel joins the Project panel's group instead of the whole layout
         being refused (tested).
-   3. Actions in the action table (copy, paste, duplicate, remove,
-      enable, move, reset, open the panel).
+   3. **Done:** ten effect actions in the action table, with no default
+      shortcuts, so they can be rebound in the shortcut editor: Apply Last
+      Effect, Copy, Paste, Duplicate, Remove, Remove All, Turn On or Off,
+      Move Up, Move Down, Reset.
+      - Clicking an effect's name in Effect Controls selects it, and the
+        single-effect actions act on it (with a reason when they cannot).
+      - New Effect menu. The Window menu already lists the Effects &
+        Presets panel.
+      - Tests: the full action sequence is one undo step per edit, and the
+        audit runs every action with effects and a selected placeholder.
    4. Effect presets (`effect_presets.toml`, tolerant loader, save from the
       menu, apply from the panel).
    5. Solo and the before/after split (preview-only render settings).

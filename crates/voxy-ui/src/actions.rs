@@ -101,6 +101,16 @@ pub enum Action {
     EaseApplyOscillation,
     EaseApplySteps,
     EaseApplySteppedRamp,
+    EffectApplyLast,
+    EffectCopy,
+    EffectPaste,
+    EffectDuplicate,
+    EffectRemove,
+    EffectRemoveAll,
+    EffectToggle,
+    EffectMoveUp,
+    EffectMoveDown,
+    EffectReset,
 }
 
 /// Static description of an [`Action`].
@@ -203,6 +213,16 @@ impl Action {
         Action::EaseApplyOscillation,
         Action::EaseApplySteps,
         Action::EaseApplySteppedRamp,
+        Action::EffectApplyLast,
+        Action::EffectCopy,
+        Action::EffectPaste,
+        Action::EffectDuplicate,
+        Action::EffectRemove,
+        Action::EffectRemoveAll,
+        Action::EffectToggle,
+        Action::EffectMoveUp,
+        Action::EffectMoveDown,
+        Action::EffectReset,
     ];
 
     pub fn def(self) -> ActionDef {
@@ -494,6 +514,32 @@ impl Action {
                 Editor,
                 &[],
             ),
+            // Effects (Milestone E-C). No default shortcuts: they exist so
+            // the shortcut editor can bind them.
+            Action::EffectApplyLast => {
+                def("effect.apply_last", "Apply Last Effect", Layer, Editor, &[])
+            }
+            Action::EffectCopy => def("effect.copy", "Copy Effect", Layer, Editor, &[]),
+            Action::EffectPaste => def("effect.paste", "Paste Effect", Layer, Editor, &[]),
+            Action::EffectDuplicate => {
+                def("effect.duplicate", "Duplicate Effect", Layer, Editor, &[])
+            }
+            Action::EffectRemove => def("effect.remove", "Remove Effect", Layer, Editor, &[]),
+            Action::EffectRemoveAll => def(
+                "effect.remove_all",
+                "Remove All Effects",
+                Layer,
+                Editor,
+                &[],
+            ),
+            Action::EffectToggle => {
+                def("effect.toggle", "Turn Effect On or Off", Layer, Editor, &[])
+            }
+            Action::EffectMoveUp => def("effect.move_up", "Move Effect Up", Layer, Editor, &[]),
+            Action::EffectMoveDown => {
+                def("effect.move_down", "Move Effect Down", Layer, Editor, &[])
+            }
+            Action::EffectReset => def("effect.reset", "Reset Effect", Layer, Editor, &[]),
         }
     }
 

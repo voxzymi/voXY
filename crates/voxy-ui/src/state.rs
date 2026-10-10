@@ -94,6 +94,11 @@ pub struct EditorState {
     pub effect_clipboard: Vec<voxy_core::EffectInstance>,
     /// The Effects & Presets panel's view state.
     pub effects_panel: crate::effects_panel::EffectsPanel,
+    /// The effect last clicked in Effect Controls (on the selected layer);
+    /// the effect actions act on it.
+    pub selected_effect: Option<voxy_core::EffectId>,
+    /// The effect last applied, for Apply Last Effect.
+    pub last_effect: Option<std::sync::Arc<voxy_core::registry::EffectDef>>,
     /// The easing last copied with "Copy Easing" (or the graph editor's Copy
     /// button). Lives for the session.
     pub ease_clipboard: Option<SegmentEase>,
@@ -145,6 +150,8 @@ impl EditorState {
             effects: std::sync::Arc::new(voxy_core::registry::builtins().clone()),
             effect_clipboard: Vec::new(),
             effects_panel: crate::effects_panel::EffectsPanel::default(),
+            selected_effect: None,
+            last_effect: None,
             ease_clipboard: None,
             recovery: None,
             pending_recovery: None,
@@ -1525,6 +1532,23 @@ impl EditorState {
             Action::EasePaste if self.ease_clipboard.is_none() => {
                 Err("Copy an easing first.".to_owned())
             }
+            Action::EffectPaste if self.effect_clipboard.is_empty() => {
+                Err("Copy an effect first.".to_owned())
+            }
+            Action::EffectApplyLast if self.last_effect.is_none() => {
+                Err("Apply an effect first.".to_owned())
+            }
+            Action::EffectCopy | Action::EffectRemoveAll
+                if self.selected_layer_effects().is_empty() =>
+            {
+                Err("The selected layer has no effects.".to_owned())
+            }
+            Action::EffectDuplicate
+            | Action::EffectRemove
+            | Action::EffectToggle
+            | Action::EffectMoveUp
+            | Action::EffectMoveDown
+            | Action::EffectReset => self.effect_action_check(action),
             Action::EditUndo if !self.history.can_undo() => Err("Nothing to undo.".to_owned()),
             Action::EditRedo if !self.history.can_undo() && !self.history.can_redo() => {
                 Err("Nothing to redo.".to_owned())
@@ -1630,8 +1654,114 @@ impl EditorState {
             Action::EaseApplyOscillation => self.apply_kind(InterpKind::Oscillation),
             Action::EaseApplySteps => self.apply_kind(InterpKind::Steps),
             Action::EaseApplySteppedRamp => self.apply_kind(InterpKind::SteppedRamp),
+            Action::EffectApplyLast
+            | Action::EffectCopy
+            | Action::EffectPaste
+            | Action::EffectDuplicate
+            | Action::EffectRemove
+            | Action::EffectRemoveAll
+            | Action::EffectToggle
+            | Action::EffectMoveUp
+            | Action::EffectMoveDown
+            | Action::EffectReset => self.perform_effect_action(action),
         }
         None
+    }
+
+    /// The selected layer's effects (empty without a selected layer).
+    pub fn selected_layer_effects(&self) -> Vec<voxy_core::EffectInstance> {
+        self.selection
+            .and_then(|id| self.history.current().find_layer(id))
+            .map(|(_, l)| l.effects.clone())
+            .unwrap_or_default()
+    }
+
+    /// The effect the effect actions act on: the selected effect, if it is
+    /// on the selected layer, with its index and the stack's length.
+    pub fn effect_target(&self) -> Option<(LayerId, voxy_core::EffectInstance, usize, usize)> {
+        let layer = self.selection?;
+        let id = self.selected_effect?;
+        let effects = self.selected_layer_effects();
+        let i = effects.iter().position(|e| e.id == id)?;
+        Some((layer, effects[i].clone(), i, effects.len()))
+    }
+
+    fn effect_action_check(&self, action: Action) -> Result<(), String> {
+        let Some((_, fx, i, n)) = self.effect_target() else {
+            return Err("Click an effect's name in Effect Controls first.".to_owned());
+        };
+        match action {
+            Action::EffectMoveUp if i == 0 => Err("It is already applied first.".to_owned()),
+            Action::EffectMoveDown if i + 1 == n => Err("It is already applied last.".to_owned()),
+            Action::EffectDuplicate | Action::EffectReset if fx.is_placeholder() => {
+                Err("This effect is not installed.".to_owned())
+            }
+            _ => Ok(()),
+        }
+    }
+
+    fn perform_effect_action(&mut self, action: Action) {
+        use voxy_core::command::{
+            DuplicateEffects, MoveEffect, PasteEffects, RemoveEffects, ResetEffect,
+            SetEffectsEnabled,
+        };
+        if let Err(why) = self.availability(action) {
+            self.info(why);
+            return;
+        }
+        let Some(layer) = self.selection else { return };
+        let target = self.effect_target();
+        match (action, target) {
+            (Action::EffectApplyLast, _) => {
+                if let Some(def) = self.last_effect.clone() {
+                    crate::effects_panel::apply(self, layer, def);
+                }
+            }
+            (Action::EffectCopy, Some((_, fx, _, _))) => self.effect_clipboard = vec![fx],
+            (Action::EffectCopy, None) => self.effect_clipboard = self.selected_layer_effects(),
+            (Action::EffectPaste, target) => {
+                let items = self.effect_clipboard.clone();
+                self.execute_reported(PasteEffects {
+                    layers: vec![layer],
+                    index: target.map(|(_, _, i, _)| i + 1),
+                    items,
+                });
+            }
+            (Action::EffectRemoveAll, _) => {
+                let ids = self.selected_layer_effects().iter().map(|e| e.id).collect();
+                self.execute(RemoveEffects { layer, ids });
+            }
+            (Action::EffectDuplicate, Some((_, fx, _, _))) => self.execute(DuplicateEffects {
+                layer,
+                ids: vec![fx.id],
+            }),
+            (Action::EffectRemove, Some((_, fx, _, _))) => {
+                self.execute(RemoveEffects {
+                    layer,
+                    ids: vec![fx.id],
+                });
+                self.selected_effect = None;
+            }
+            (Action::EffectToggle, Some((_, fx, _, _))) => self.execute(SetEffectsEnabled {
+                layer,
+                ids: vec![fx.id],
+                enabled: !fx.enabled,
+            }),
+            (Action::EffectMoveUp, Some((_, fx, i, _))) => self.execute(MoveEffect {
+                layer,
+                id: fx.id,
+                to_index: i.saturating_sub(1),
+            }),
+            (Action::EffectMoveDown, Some((_, fx, i, _))) => self.execute(MoveEffect {
+                layer,
+                id: fx.id,
+                to_index: i + 1,
+            }),
+            (Action::EffectReset, Some((_, fx, _, _))) => {
+                self.execute(ResetEffect { layer, id: fx.id });
+            }
+            _ => {}
+        }
     }
 }
 

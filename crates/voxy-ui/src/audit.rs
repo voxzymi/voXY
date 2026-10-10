@@ -183,6 +183,26 @@ fn every_panel_draws_with_effects_and_a_placeholder() {
 }
 
 #[test]
+fn no_action_panics_with_effects_and_a_selected_effect() {
+    for &action in Action::ALL {
+        if spawns_a_process(action) {
+            continue;
+        }
+        let mut s = with_effects();
+        let doc = s.history.current().clone();
+        let layer = s.selection.unwrap();
+        s.selected_effect = Some(doc.find_layer(layer).unwrap().1.effects[2].id);
+        let _ = s.availability(action);
+        let _ = s.perform(action);
+        s.history
+            .current()
+            .validate()
+            .expect("document stays valid");
+        draw(&mut s, 1);
+    }
+}
+
+#[test]
 fn every_panel_draws_with_no_composition() {
     draw(&mut empty(), 3);
 }

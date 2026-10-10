@@ -3,9 +3,9 @@
 use egui::{Id, RichText, Ui, WidgetText};
 use egui_dock::TabViewer;
 use voxy_core::command::{
-    AddEffect, AddKeyframe, ApplyEasePreset, DuplicateEffects, MoveEffect, PasteEffects,
-    RemoveEffects, RemoveKeyframes, RenameEffect, RenameLayer, ResetEffect, SetAnimated,
-    SetEffectsEnabled, SetInterpolation, SetProperty, SetWorkingSpace,
+    AddKeyframe, ApplyEasePreset, DuplicateEffects, MoveEffect, PasteEffects, RemoveEffects,
+    RemoveKeyframes, RenameEffect, RenameLayer, ResetEffect, SetAnimated, SetEffectsEnabled,
+    SetInterpolation, SetProperty, SetWorkingSpace,
 };
 use voxy_core::glam::DVec2;
 use voxy_core::registry::{EffectParamDef, ParamVisibility};
@@ -370,7 +370,11 @@ impl Panels<'_> {
         if fx.is_placeholder() {
             name = name.color(ui.visuals().warn_fg_color);
         }
-        let label = ui.label(name);
+        let selected = self.state.selected_effect == Some(fx.id);
+        let label = ui.selectable_label(selected, name);
+        if label.clicked() || label.secondary_clicked() {
+            self.state.selected_effect = Some(fx.id);
+        }
         label.context_menu(|ui| {
             let mut rename = fx.name.clone();
             ui.horizontal(|ui| {
@@ -487,11 +491,7 @@ impl Panels<'_> {
                             .on_hover_text(def.description.as_ref())
                             .clicked()
                         {
-                            self.state.execute(AddEffect {
-                                layer,
-                                index: None,
-                                def,
-                            });
+                            crate::effects_panel::apply(self.state, layer, def);
                             ui.close();
                         }
                     }

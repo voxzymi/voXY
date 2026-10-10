@@ -59,6 +59,7 @@ pub fn listing(state: &EditorState, search: &str) -> Vec<(Category, Vec<Arc<Effe
 /// Applies `def` to `layer` (one undo step), at the end of its stack.
 pub fn apply(state: &mut EditorState, layer: LayerId, def: Arc<EffectDef>) {
     let name = def.name.clone();
+    state.last_effect = Some(def.clone());
     if state
         .execute_reported(AddEffect {
             layer,
@@ -336,5 +337,48 @@ mod tests {
                 .len(),
             0
         );
+    }
+
+    #[test]
+    fn effect_actions_act_on_the_selected_effect_one_step_each() {
+        use crate::actions::Action;
+        let (mut s, layer) = state_with_layer();
+        let blur = listing(&s, "gaussian")[0].1[0].clone();
+        let invert = listing(&s, "invert")[0].1[0].clone();
+        apply(&mut s, layer, blur);
+        apply(&mut s, layer, invert);
+        let effects = |s: &EditorState| s.selected_layer_effects();
+        let ids: Vec<_> = effects(&s).iter().map(|e| e.id).collect();
+
+        // Without a selected effect, the single-effect actions say why.
+        assert!(s.availability(Action::EffectToggle).is_err());
+        s.selected_effect = Some(ids[1]);
+        assert!(
+            s.availability(Action::EffectMoveDown).is_err(),
+            "already last"
+        );
+
+        s.perform(Action::EffectMoveUp);
+        assert_eq!(effects(&s)[0].id, ids[1]);
+        s.perform(Action::EffectToggle);
+        assert!(!effects(&s)[0].enabled);
+        s.perform(Action::EffectDuplicate);
+        assert_eq!(effects(&s).len(), 3);
+        s.perform(Action::EffectCopy);
+        assert_eq!(s.effect_clipboard.len(), 1);
+        s.perform(Action::EffectPaste);
+        assert_eq!(effects(&s).len(), 4);
+        s.perform(Action::EffectApplyLast);
+        assert_eq!(effects(&s).len(), 5);
+        assert_eq!(effects(&s)[4].type_id, effects(&s)[0].type_id);
+        s.perform(Action::EffectRemove);
+        assert_eq!(effects(&s).len(), 4);
+        s.perform(Action::EffectRemoveAll);
+        assert_eq!(effects(&s).len(), 0);
+        // Seven edits (copying is not one), seven undo steps.
+        for _ in 0..7 {
+            assert!(s.history.undo());
+        }
+        assert_eq!(effects(&s).iter().map(|e| e.id).collect::<Vec<_>>(), ids);
     }
 }

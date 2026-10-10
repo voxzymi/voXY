@@ -225,6 +225,21 @@ impl VoxyApp {
                 self.item(ui, Action::RevealSourceInProject);
                 self.item(ui, Action::RevealInFileManager);
             });
+            ui.menu_button("Effect", |ui| {
+                self.item(ui, Action::EffectApplyLast);
+                ui.separator();
+                self.item(ui, Action::EffectCopy);
+                self.item(ui, Action::EffectPaste);
+                self.item(ui, Action::EffectDuplicate);
+                ui.separator();
+                self.item(ui, Action::EffectToggle);
+                self.item(ui, Action::EffectMoveUp);
+                self.item(ui, Action::EffectMoveDown);
+                self.item(ui, Action::EffectReset);
+                ui.separator();
+                self.item(ui, Action::EffectRemove);
+                self.item(ui, Action::EffectRemoveAll);
+            });
             ui.menu_button("Keyframe", |ui| {
                 self.item(ui, Action::EaseCopy);
                 self.item(ui, Action::EasePaste);
