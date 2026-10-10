@@ -73,6 +73,7 @@ pub enum Action {
     FileImport,
     FileQuit,
     CompositionSettings,
+    CompositionGoToParent,
     EditUndo,
     EditRedo,
     EditKeyboardShortcuts,
@@ -174,6 +175,7 @@ impl Action {
         Action::FileImport,
         Action::FileQuit,
         Action::CompositionSettings,
+        Action::CompositionGoToParent,
         Action::EditUndo,
         Action::EditRedo,
         Action::EditKeyboardShortcuts,
@@ -291,6 +293,14 @@ impl Action {
                     const { &[cmd(Key::Q)] },
                 )
             },
+            // Alt+Up conflicts with the window manager on some Linux desktops.
+            Action::CompositionGoToParent => def(
+                "composition.go_to_parent",
+                "Go to Parent Composition",
+                Composition,
+                Global,
+                const { &[cmd_shift(Key::ArrowUp)] },
+            ),
             Action::CompositionSettings => ActionDef {
                 fires_while_typing: true,
                 ..def(

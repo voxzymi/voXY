@@ -232,6 +232,7 @@ impl VoxyApp {
             });
             ui.menu_button("Composition", |ui| {
                 self.item(ui, Action::CompositionSettings);
+                self.item(ui, Action::CompositionGoToParent);
                 ui.separator();
                 crate::project_panel::reveal_in_composition_menu(ui, &mut self.state);
                 ui.separator();
@@ -254,6 +255,21 @@ impl VoxyApp {
                             let _ = self.dock.set_active_tab(path);
                         }
                         ui.close();
+                    }
+                }
+                ui.separator();
+                ui.label(RichText::new("Double-click a precomp layer").weak());
+                for (choice, label) in [
+                    (
+                        crate::prefs::PrecompOpen::CurrentTab,
+                        "Navigate in this tab",
+                    ),
+                    (crate::prefs::PrecompOpen::OwnTab, "Open in its own tab"),
+                ] {
+                    let current = self.state.prefs.precomp_double_click;
+                    if ui.radio(current == choice, label).clicked() && current != choice {
+                        self.state.prefs.precomp_double_click = choice;
+                        self.state.save_prefs();
                     }
                 }
                 ui.separator();

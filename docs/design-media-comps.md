@@ -883,3 +883,47 @@ What landed in `voxy-core`, and where it refines the design above.
   parent backdrop (§7.5), and region-of-interest clipping (the plan keeps the
   child's bounds so it can be added without an API change). Tabs and
   navigation (§7) are the next part of this milestone.
+
+## Implementation notes (Milestone E, tabs and navigation)
+
+- **Workspace** (`workspace.rs`, view state only). `Workspace { tabs, active }`;
+  a tab is a breadcrumb `path` of `NavStep { comp, via_layer }` whose last
+  step is the composition shown, plus a `trail` of the parent views so going
+  up finds the playhead and selection as they were. **One tab per
+  composition**: opening switches to the existing tab; navigating into a
+  composition that has its own tab switches to it; going up into a
+  composition another tab shows closes this tab and switches to that one. A
+  500-step random walk test asserts the invariants and that no command runs
+  (the document and its revision are untouched).
+- **Live view.** The playhead, selection, timeline and graph views are still
+  `EditorState` fields (the active tab's); the other tabs keep theirs in the
+  workspace and `EditorState` swaps them on every tab change, so no panel code
+  changed. Playback pauses when the tab changes.
+- **No tabs is the empty-state screen**, even when compositions exist. A new
+  or opened project shows its main composition (`open_default_tab`); nothing
+  else opens a tab on its own, except creating a composition and Reveal.
+- **Navigation.** Double-click on a precomp layer (name or bar) navigates the
+  current tab (default) or opens its own tab, by the preference "Double-click
+  a precomp layer" in the Window menu; Shift does the other. The layer menu
+  has "Open Composition" and "Open in New Tab". Entering sets the playhead to
+  `child_time` clamped into the child and snapped down to its frame grid
+  (§7.2). The Project panel's double-click always uses the composition's own
+  tab. **Composition > Go to Parent Composition** (Ctrl/Cmd+Shift+Up) steps up
+  the breadcrumb or, with none, goes to the composition that uses this one
+  most (the Reveal tie rule), selecting the layer; it is disabled with a
+  reason when nothing uses the composition.
+- **Breadcrumb** in the timeline panel's header, folded to first, "…" and the
+  last two beyond four levels; labels are read from the document every frame.
+- **Undo across tabs (§7.4).** After undo or redo the tabs are reconciled
+  (closing those whose composition is gone, cutting breadcrumbs) and, if the
+  active composition did not change but another did, the editor goes to the
+  changed one (lowest ID) and selects the layers whose `Arc`s changed.
+  `History` itself is unchanged.
+- **Persistence.** `ui_state` gains `tabs` (path and playhead per tab) and
+  `active_tab`. A file without `tabs` shows the main composition; an empty
+  list means every tab was closed; unreadable entries drop one by one and
+  tabs for compositions that no longer exist are dropped. No format version
+  change (the section is read per field and ignored by older builds).
+- **Not yet** (tracked in `deferred.md`): linked playheads, the parent-time
+  indicator and the parent backdrop (§7.2, §7.3, §7.5), and viewport
+  double-click (needs hit testing).

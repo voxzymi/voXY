@@ -48,6 +48,7 @@ pub enum AppRequest {
 struct CreatedComp {
     comp: CompId,
     selection: std::collections::BTreeSet<PoolItem>,
+    /// The composition that was open before.
     active: Option<CompId>,
 }
 
@@ -107,15 +108,16 @@ pub struct EditorState {
     preview_counter: u64,
     /// What a just-created composition replaced, so undo can put it back.
     last_create: Option<CreatedComp>,
-    /// The composition being edited. View state until composition tabs land
-    /// (Milestone E); falls back to the main composition when it is `None`
-    /// or no longer exists.
-    active: Option<CompId>,
+    /// The open composition tabs. View state only: nothing here is ever a
+    /// command. The active tab's playhead, selection, timeline and graph
+    /// are the live fields above; the other tabs keep theirs in the
+    /// workspace (see `workspace.rs`).
+    pub workspace: crate::workspace::Workspace,
 }
 
 impl EditorState {
     pub fn new(doc: Document) -> Self {
-        EditorState {
+        let mut state = EditorState {
             history: History::new(doc),
             project_path: None,
             selection: None,
@@ -142,8 +144,10 @@ impl EditorState {
             preview: None,
             preview_counter: 0,
             last_create: None,
-            active: None,
-        }
+            workspace: crate::workspace::Workspace::default(),
+        };
+        state.open_default_tab();
+        state
     }
 
     /// A new project: no compositions, no media. Nothing creates one for
@@ -211,14 +215,12 @@ impl EditorState {
             )
     }
 
-    /// The composition the editor shows: the one opened from the Project
-    /// panel or by a Reveal, else the main one, else none. `None` is a
-    /// normal state: every caller must handle it.
+    /// The composition the editor shows: the active tab's. `None` (no tabs,
+    /// the empty-state screen) is a normal state: every caller must handle it.
     pub fn comp_id(&self) -> Option<CompId> {
         let doc = self.history.current();
-        self.active
-            .filter(|id| doc.comps.contains_key(id))
-            .or(doc.main_comp)
+        self.workspace
+            .active_comp()
             .filter(|id| doc.comps.contains_key(id))
     }
 
@@ -227,15 +229,254 @@ impl EditorState {
         self.history.current().comps.get(&id).cloned()
     }
 
-    /// Shows `id` in the timeline and viewport. View state only.
+    /// A new project or a freshly loaded one shows its main composition, if
+    /// it has one. Nothing else opens a tab on its own.
+    pub(crate) fn open_default_tab(&mut self) {
+        self.workspace = crate::workspace::Workspace::default();
+        if let Some(main) = self.history.current().main_comp
+            && self.history.current().comps.contains_key(&main)
+        {
+            self.workspace.open(main);
+        }
+    }
+
+    /// The active tab's view, taken out of the live fields.
+    fn take_live(&mut self) -> crate::workspace::TabView {
+        crate::workspace::TabView {
+            time: std::mem::take(&mut self.time),
+            selection: self.selection.take(),
+            timeline: std::mem::take(&mut self.timeline),
+            graph: std::mem::take(&mut self.graph),
+        }
+    }
+
+    /// Makes `view` the live view.
+    fn load_live(&mut self, view: crate::workspace::TabView) {
+        self.time = view.time;
+        self.selection = view.selection;
+        self.timeline = view.timeline;
+        self.graph = view.graph;
+    }
+
+    /// Runs `change` on the workspace and keeps the live view in step: the
+    /// view of the active tab is saved before, and the (possibly different)
+    /// active tab's is loaded after. Pauses playback when the tab changes.
+    pub(crate) fn change_workspace<R>(
+        &mut self,
+        change: impl FnOnce(&mut crate::workspace::Workspace) -> R,
+    ) -> R {
+        let rate = self.frame_rate();
+        let before = self.workspace.active;
+        if let Some(i) = before.filter(|i| *i < self.workspace.tabs.len()) {
+            let live = self.take_live();
+            self.workspace.tabs[i].saved = live;
+        }
+        let result = change(&mut self.workspace);
+        if self.workspace.active != before {
+            self.transport.pause(rate);
+        }
+        let view = match self.workspace.active {
+            Some(i) => std::mem::take(&mut self.workspace.tabs[i].saved),
+            None => crate::workspace::TabView::default(),
+        };
+        self.load_live(view);
+        result
+    }
+
+    /// Shows `id` in its own tab (switching to the tab that already shows it
+    /// or opening one, with a fresh breadcrumb). View state only.
     pub fn open_comp(&mut self, id: CompId) {
         if self.history.current().comps.contains_key(&id) && self.comp_id() != Some(id) {
-            let rate = self.frame_rate();
-            self.transport.pause(rate);
-            self.active = Some(id);
-            self.selection = None;
-            self.time = Time::ZERO;
+            self.change_workspace(|w| w.open(id));
         }
+    }
+
+    /// Switches to tab `i`.
+    pub fn switch_tab(&mut self, i: usize) {
+        if self.workspace.active != Some(i) && i < self.workspace.tabs.len() {
+            self.change_workspace(|w| w.activate(i));
+        }
+    }
+
+    /// Closes tab `i`. Never touches the document.
+    pub fn close_tab(&mut self, i: usize) {
+        self.change_workspace(|w| w.close(i));
+    }
+
+    /// Enters the precomp layer `layer` in the active tab: the breadcrumb
+    /// grows and the playhead goes to the child time the parent's playhead
+    /// shows (design §7.2). If the child already has its own tab, switches to
+    /// it instead.
+    pub fn navigate_into_layer(&mut self, layer: LayerId) {
+        let doc = self.history.current().clone();
+        let Some((_, l)) = doc.find_layer(layer) else {
+            return;
+        };
+        let voxy_core::LayerKind::Precomp { comp: child, .. } = l.kind else {
+            return;
+        };
+        let Some(child_comp) = doc.comp(child) else {
+            return;
+        };
+        if let Some(i) = self.workspace.tab_of(child) {
+            self.switch_tab(i);
+            return;
+        }
+        if self.workspace.active.is_none() {
+            return;
+        }
+        // Entering sets the child's playhead to the mapped time, clamped into
+        // the child and snapped down to its frame grid.
+        let mapped = l
+            .child_time(
+                self.time
+                    .clamp(l.in_point, (l.out_point - Time(1)).max(l.in_point)),
+                child_comp.duration,
+            )
+            .unwrap_or(Time::ZERO);
+        let rate = child_comp.frame_rate;
+        let last = (rate.time_to_frame(child_comp.duration) - 1).max(0);
+        let frame = rate.time_to_frame(mapped.max(Time::ZERO)).clamp(0, last);
+        let time = rate.frame_to_time(frame);
+        let own_rate = self.frame_rate();
+        self.transport.pause(own_rate);
+        let parent_view = self.take_live();
+        self.workspace.navigate_into(child, layer, parent_view);
+        self.load_live(crate::workspace::TabView {
+            time,
+            ..crate::workspace::TabView::default()
+        });
+    }
+
+    /// Whether "Go to Parent Composition" has somewhere to go: a step up in
+    /// the breadcrumb, or a composition that uses this one.
+    pub fn can_go_to_parent(&self) -> bool {
+        self.workspace.can_go_up() || self.parent_target().is_some()
+    }
+
+    fn parent_target(&self) -> Option<CompTarget> {
+        let comp = self.comp_id()?;
+        let targets = reveal::comp_targets(self.history.current(), &[PoolItem::Comp(comp)]);
+        reveal::primary_target(&targets).cloned()
+    }
+
+    /// Composition > Go to Parent Composition: one step up the breadcrumb;
+    /// with none (a composition opened from the Project panel), the
+    /// composition that uses this one most, ties going to the first by name
+    /// (the same rule as Reveal in Composition, design §6.2).
+    pub fn go_to_parent(&mut self) {
+        if let Some(tab) = self
+            .workspace
+            .active
+            .and_then(|i| self.workspace.tabs.get(i))
+            .filter(|t| t.path.len() > 1)
+        {
+            let index = tab.path.len() - 2;
+            self.go_to_crumb(index);
+        } else if let Some(target) = self.parent_target() {
+            self.reveal_in_composition(&target);
+        } else {
+            self.error("This composition is not used in another composition.");
+        }
+    }
+
+    /// Goes to entry `index` of the active tab's breadcrumb.
+    pub fn go_to_crumb(&mut self, index: usize) {
+        if let Some(view) = self.change_workspace(|w| w.go_to_crumb(index)) {
+            self.load_live(view);
+        }
+    }
+
+    /// Double-click on a precomp layer: navigate in this tab or open the
+    /// composition's own tab, by preference; Shift does the other one.
+    pub fn open_precomp_layer(&mut self, layer: LayerId, shift: bool) {
+        let in_own_tab =
+            (self.prefs.precomp_double_click == crate::prefs::PrecompOpen::OwnTab) != shift;
+        if in_own_tab {
+            self.open_precomp_in_own_tab(layer);
+        } else {
+            self.navigate_into_layer(layer);
+        }
+    }
+
+    /// Opens the composition a precomp layer shows in its own tab.
+    pub fn open_precomp_in_own_tab(&mut self, layer: LayerId) {
+        let child = self
+            .history
+            .current()
+            .find_layer(layer)
+            .and_then(|(_, l)| match l.kind {
+                voxy_core::LayerKind::Precomp { comp, .. } => Some(comp),
+                _ => None,
+            });
+        if let Some(child) = child {
+            self.open_comp(child);
+        }
+    }
+
+    /// Closes tabs whose composition is gone (a removed composition, or an
+    /// undo that took it away). Cheap when nothing is wrong.
+    pub fn sync_workspace(&mut self) {
+        let doc = self.history.current().clone();
+        let stale = self
+            .workspace
+            .tabs
+            .iter()
+            .any(|t| t.path.iter().any(|s| doc.comp(s.comp).is_none()));
+        if stale {
+            self.change_workspace(|w| {
+                w.reconcile(&doc);
+            });
+        }
+    }
+
+    /// After undo or redo (design §7.4): tabs are reconciled with the
+    /// document, and if the active composition did not change but another
+    /// did, the editor goes to the changed composition (the lowest ID if
+    /// several) and selects the layers that changed, so the user sees what
+    /// the undo did.
+    fn after_history_jump(&mut self, before: &Arc<Document>) {
+        let now = self.history.current().clone();
+        self.change_workspace(|w| {
+            w.reconcile(&now);
+        });
+        let changed: Vec<CompId> = now
+            .comps
+            .iter()
+            .filter(|(id, c)| before.comps.get(id).is_none_or(|b| !Arc::ptr_eq(b, c)))
+            .map(|(id, _)| *id)
+            .collect();
+        let active = self.comp_id();
+        if changed.is_empty() || active.is_some_and(|a| changed.contains(&a)) {
+            return;
+        }
+        let Some(&first) = changed.iter().min() else {
+            return;
+        };
+        self.open_comp(first);
+        let layers_changed: Vec<LayerId> = match (now.comp(first), before.comp(first)) {
+            (Some(n), Some(b)) => n
+                .layers
+                .iter()
+                .filter(|l| !b.layers.iter().any(|o| Arc::ptr_eq(o, l)))
+                .map(|l| l.id)
+                .collect(),
+            _ => Vec::new(),
+        };
+        if let Some(&l) = layers_changed.first() {
+            self.selection = Some(l);
+            self.timeline.reveal = Some(l);
+        }
+    }
+
+    /// Redo, with the same view follow-up as [`EditorState::undo`].
+    pub fn redo(&mut self) -> bool {
+        let before = self.history.current().clone();
+        let done = self.history.redo();
+        if done {
+            self.after_history_jump(&before);
+        }
+        done
     }
 
     fn frame_rate(&self) -> FrameRate {
@@ -277,8 +518,10 @@ impl EditorState {
         self.transport.pause(rate);
         self.project = ProjectState::default();
         self.selection = None;
-        self.active = None;
         self.time = Time::ZERO;
+        self.timeline = crate::timeline::TimelineView::default();
+        self.graph = crate::graph_editor::GraphView::default();
+        self.open_default_tab();
     }
 
     pub fn new_document(&mut self) {
@@ -302,8 +545,7 @@ impl EditorState {
                 // without saving; the user decides (see `recover`).
                 self.pending_recovery = recovery::offer_for_project(path);
                 if let Some(state) = ui_state {
-                    self.project.view = crate::compat::from_ui_state(&state);
-                    self.dialog_tab = crate::compat::dialog_tab_from(&state);
+                    self.restore_ui_state(&state);
                 }
                 self.project.forget_missing(self.history.current());
                 self.info(format!("Opened {}", path.display()));
@@ -343,8 +585,31 @@ impl EditorState {
         self.save_to(&path)
     }
 
+    /// The view state saved with the project (and with an autosave).
+    fn ui_state(&self) -> serde_json::Value {
+        let (tabs, active) = self.workspace.to_saved(self.time);
+        crate::compat::to_ui_state(&self.project.view, self.dialog_tab, &tabs, active)
+    }
+
+    /// Restores the view state saved with a project: the Project panel, the
+    /// dialog tab and the open tabs. A file without a `tabs` entry (from
+    /// before tabs) keeps the default: the main composition.
+    fn restore_ui_state(&mut self, state: &serde_json::Value) {
+        self.project.view = crate::compat::from_ui_state(state);
+        self.dialog_tab = crate::compat::dialog_tab_from(state);
+        if let Some((tabs, active)) = crate::compat::tabs_from_ui_state(state) {
+            let doc = self.history.current().clone();
+            self.workspace = crate::workspace::Workspace::from_saved(tabs, active, &doc);
+            let view = match self.workspace.active {
+                Some(i) => std::mem::take(&mut self.workspace.tabs[i].saved),
+                None => crate::workspace::TabView::default(),
+            };
+            self.load_live(view);
+        }
+    }
+
     fn save_to(&mut self, path: &Path) -> bool {
-        let ui_state = crate::compat::to_ui_state(&self.project.view, self.dialog_tab);
+        let ui_state = self.ui_state();
         match persist::save_with_ui(self.history.current(), Some(&ui_state), path) {
             Ok(()) => {
                 // What was autosaved (under the old or the new name) is now
@@ -477,6 +742,7 @@ impl EditorState {
 
     /// Drops selections whose targets no longer exist (after undo etc.).
     pub fn fix_selection(&mut self) {
+        self.sync_workspace();
         if let Some(id) = self.selection
             && self.history.current().find_layer(id).is_none()
         {
@@ -588,14 +854,20 @@ impl EditorState {
     /// Undo. When it removes the composition the last create made, the
     /// Project panel selection and the open composition come back too.
     pub fn undo(&mut self) -> bool {
+        let before = self.history.current().clone();
         let done = self.history.undo();
+        if done {
+            self.after_history_jump(&before);
+        }
         if let Some(c) = self
             .last_create
             .take_if(|c| !self.history.current().comps.contains_key(&c.comp))
         {
             self.project.selection.items = c.selection;
             self.project.selection.anchor = self.project.selection.items.iter().next().copied();
-            self.active = c.active;
+            if let Some(prev) = c.active {
+                self.open_comp(prev);
+            }
         }
         done
     }
@@ -1163,6 +1435,9 @@ impl EditorState {
                 Err(reveal::NOT_USED.to_owned())
             }
             Action::RevealInFileManager => self.file_manager_target().map(|_| ()),
+            Action::CompositionGoToParent if !self.can_go_to_parent() => {
+                Err("This composition is not used in another composition.".to_owned())
+            }
             Action::EasePaste if self.ease_clipboard.is_none() => {
                 Err("Copy an easing first.".to_owned())
             }
@@ -1198,6 +1473,7 @@ impl EditorState {
             Action::FileQuit => return Some(AppRequest::Quit),
             Action::FileNewComposition => self.open_new_comp_dialog(),
             Action::FileNewCompositionFromFootage => self.new_comp_from_footage(),
+            Action::CompositionGoToParent => self.go_to_parent(),
             Action::CompositionSettings => {
                 if let Some(id) = self.comp_id() {
                     self.open_comp_settings(id);
@@ -1214,7 +1490,7 @@ impl EditorState {
                 self.undo();
             }
             Action::EditRedo => {
-                self.history.redo();
+                self.redo();
             }
             Action::EditKeyboardShortcuts => {
                 self.shortcut_editor = Some(crate::shortcut_editor::Editor::default());
@@ -1344,7 +1620,10 @@ impl EditorState {
             Some(project) => Ok(recovery::autosave_path(project)),
             None => rec.session.untitled_path(),
         };
-        let ui_state = crate::compat::to_ui_state(&self.project.view, self.dialog_tab);
+        // Field by field: `rec` borrows `self.recovery`.
+        let (tabs, active) = self.workspace.to_saved(self.time);
+        let ui_state =
+            crate::compat::to_ui_state(&self.project.view, self.dialog_tab, &tabs, active);
         let written = target.map_err(|e| e.to_string()).and_then(|path| {
             persist::save_with_ui(self.history.current(), Some(&ui_state), &path)
                 .map(|()| path)
@@ -1392,8 +1671,7 @@ impl EditorState {
                 self.project_path.clone_from(&offer.project);
                 self.reset_view();
                 if let Some(state) = ui_state {
-                    self.project.view = crate::compat::from_ui_state(&state);
-                    self.dialog_tab = crate::compat::dialog_tab_from(&state);
+                    self.restore_ui_state(&state);
                 }
                 self.project.forget_missing(self.history.current());
                 if offer.project.is_none()
@@ -2032,12 +2310,13 @@ mod tests {
             Some(a),
             "the first stays main"
         );
-        s.history.undo();
+        s.undo();
         assert_eq!(
             s.comp_id(),
             Some(a),
-            "undo falls back to a composition that exists"
+            "undo closes the tab of the composition it removed"
         );
+        assert_eq!(s.workspace.tabs.len(), 1);
     }
 
     #[test]
@@ -2487,5 +2766,317 @@ mod tests {
             s.availability(Action::RevealInFileManager),
             Err("Compositions and folders have no file.".to_owned())
         );
+    }
+
+    // ---- composition tabs and navigation -------------------------------
+
+    /// A project with compositions `names`, none open yet except the first.
+    fn tabs_state(names: &[&str]) -> (EditorState, Vec<CompId>) {
+        let mut s = EditorState::new(Document::empty("tabs"));
+        let ids = names
+            .iter()
+            .map(|n| {
+                s.create_composition(
+                    CompSettings {
+                        name: (*n).to_owned(),
+                        width: 64,
+                        height: 36,
+                        duration: Time::from_secs(10),
+                        ..CompSettings::default()
+                    },
+                    None,
+                )
+                .expect("test setup")
+            })
+            .collect();
+        // Creating a composition opens its tab; tests open what they need.
+        s.change_workspace(|w| *w = crate::workspace::Workspace::default());
+        (s, ids)
+    }
+
+    /// Adds a solid layer to `comp`; returns its id.
+    fn solid(s: &mut EditorState, comp: CompId) -> LayerId {
+        s.history
+            .execute(voxy_core::command::AddSolidLayer {
+                comp,
+                name: None,
+                color: voxy_core::LinearRgba::WHITE,
+                index: 0,
+            })
+            .expect("test setup");
+        s.history.current().comp(comp).expect("comp").layers[0].id
+    }
+
+    /// Adds a precomp layer of `child` to `parent`; returns its id.
+    fn nest(s: &mut EditorState, parent: CompId, child: CompId) -> LayerId {
+        s.history
+            .execute_reported(voxy_core::command::AddSourceLayer {
+                comp: parent,
+                source: voxy_core::SourceRef::Comp(child),
+                index: 0,
+                in_point: Time::ZERO,
+            })
+            .expect("test setup")
+            .created_layers[0]
+    }
+
+    #[test]
+    fn a_new_project_opens_its_main_composition_and_closing_the_last_tab_empties_the_editor() {
+        let (mut s, c) = tabs_state(&["A"]);
+        s.open_comp(c[0]);
+        assert_eq!(s.comp_id(), Some(c[0]));
+        // A project opened from a file shows its main composition.
+        let doc = Document::clone(s.history.current());
+        assert_eq!(EditorState::new(doc).comp_id(), Some(c[0]));
+        s.close_tab(0);
+        assert!(s.comp_id().is_none(), "no tab: the empty-state screen");
+        assert_eq!(s.history.current().comps.len(), 1, "the composition stays");
+        // A project with no compositions has no tab either.
+        let empty = EditorState::new(Document::empty("e"));
+        assert!(empty.workspace.tabs.is_empty() && empty.comp_id().is_none());
+    }
+
+    #[test]
+    fn each_tab_keeps_its_own_playhead_and_selection() {
+        let (mut s, c) = tabs_state(&["A", "B"]);
+        let (la, lb) = (solid(&mut s, c[0]), solid(&mut s, c[1]));
+        s.open_comp(c[0]);
+        s.time = Time::from_secs(3);
+        s.selection = Some(la);
+        s.open_comp(c[1]);
+        assert_eq!((s.time, s.selection), (Time::ZERO, None), "a fresh tab");
+        s.time = Time::from_secs(5);
+        s.selection = Some(lb);
+        s.open_comp(c[0]);
+        assert_eq!((s.time, s.selection), (Time::from_secs(3), Some(la)));
+        s.switch_tab(1);
+        assert_eq!((s.time, s.selection), (Time::from_secs(5), Some(lb)));
+        assert_eq!(s.workspace.tabs.len(), 2, "never a duplicate tab");
+    }
+
+    #[test]
+    fn navigating_into_a_precomp_maps_the_playhead_and_going_back_restores_it() {
+        let (mut s, c) = tabs_state(&["Parent", "Child"]);
+        let l = nest(&mut s, c[0], c[1]);
+        s.history
+            .execute(voxy_core::command::SetPrecompTiming {
+                layer: l,
+                speed: 2.0,
+                looping: false,
+                time_remap: false,
+            })
+            .expect("test setup");
+        s.open_comp(c[0]);
+        s.time = Time::from_secs(1);
+        s.selection = Some(l);
+        let rev = s.history.revision();
+        s.navigate_into_layer(l);
+        assert_eq!(s.comp_id(), Some(c[1]));
+        assert_eq!(
+            s.time,
+            Time::from_secs(2),
+            "speed 2: 1 s in the parent is 2 s in the child"
+        );
+        assert_eq!(s.selection, None);
+        let tab = &s.workspace.tabs[s.workspace.active.expect("active")];
+        assert_eq!(tab.path.len(), 2);
+        assert_eq!(tab.path[1].via_layer, Some(l));
+        s.go_to_crumb(0);
+        assert_eq!(s.comp_id(), Some(c[0]));
+        assert_eq!(
+            (s.time, s.selection),
+            (Time::from_secs(1), Some(l)),
+            "as it was"
+        );
+        assert_eq!(s.history.revision(), rev, "navigation runs no command");
+    }
+
+    #[test]
+    fn the_entry_time_is_clamped_into_the_child_and_snapped_to_its_frames() {
+        let (mut s, c) = tabs_state(&["Parent", "Child"]);
+        let l = nest(&mut s, c[0], c[1]);
+        // The layer starts 0.5 s into the child.
+        s.history
+            .execute(voxy_core::command::SetLayerTiming {
+                layer: l,
+                in_point: Time::ZERO,
+                out_point: Time::from_secs(10),
+                start_offset: Time::from_millis(500),
+            })
+            .expect("test setup");
+        s.open_comp(c[0]);
+        s.time = Time::from_secs(9) + Time::from_millis(990);
+        s.navigate_into_layer(l);
+        let rate = FrameRate::FPS_30;
+        let last = rate.frame_to_time(rate.time_to_frame(Time::from_secs(10)) - 1);
+        assert_eq!(s.time, last, "past the end of the child: its last frame");
+    }
+
+    #[test]
+    fn double_click_follows_the_preference_and_shift_does_the_other_thing() {
+        let (mut s, c) = tabs_state(&["Parent", "Child"]);
+        let l = nest(&mut s, c[0], c[1]);
+        s.open_comp(c[0]);
+        // Default: navigate in the current tab.
+        s.open_precomp_layer(l, false);
+        assert_eq!(s.workspace.tabs.len(), 1);
+        assert_eq!(s.workspace.tabs[0].path.len(), 2);
+        s.go_to_crumb(0);
+        // Shift: the child's own tab.
+        s.open_precomp_layer(l, true);
+        assert_eq!(s.workspace.tabs.len(), 2);
+        assert_eq!(s.comp_id(), Some(c[1]));
+        assert_eq!(s.workspace.tabs[1].path.len(), 1, "a fresh breadcrumb");
+        s.switch_tab(0);
+        // The preference flipped: its own tab by default, Shift navigates.
+        s.prefs.precomp_double_click = crate::prefs::PrecompOpen::OwnTab;
+        s.open_precomp_layer(l, false);
+        assert_eq!(s.comp_id(), Some(c[1]));
+        assert_eq!(s.workspace.tabs.len(), 2, "switched to the existing tab");
+        s.close_tab(1);
+        s.open_precomp_layer(l, true);
+        assert_eq!(s.workspace.tabs[0].path.len(), 2, "Shift navigates");
+    }
+
+    #[test]
+    fn navigating_into_a_comp_that_has_its_own_tab_switches_to_it() {
+        let (mut s, c) = tabs_state(&["Parent", "Child"]);
+        let l = nest(&mut s, c[0], c[1]);
+        s.open_comp(c[0]);
+        s.open_comp(c[1]);
+        s.switch_tab(0);
+        s.navigate_into_layer(l);
+        assert_eq!(s.comp_id(), Some(c[1]));
+        assert_eq!(s.workspace.tabs.len(), 2);
+        assert_eq!(
+            s.workspace.tabs[0].path.len(),
+            1,
+            "the parent tab did not move"
+        );
+    }
+
+    #[test]
+    fn go_to_parent_steps_up_or_finds_the_user_of_the_composition() {
+        let (mut s, c) = tabs_state(&["Parent", "Child", "Loner"]);
+        let l = nest(&mut s, c[0], c[1]);
+        // From the Project panel: the child's own tab, no breadcrumb.
+        s.open_comp(c[1]);
+        assert!(s.availability(Action::CompositionGoToParent).is_ok());
+        s.perform(Action::CompositionGoToParent);
+        assert_eq!(s.comp_id(), Some(c[0]), "the composition that uses it");
+        assert_eq!(s.selection, Some(l), "with the layer selected");
+        // Inside a breadcrumb: one step up.
+        s.navigate_into_layer(l);
+        assert_eq!(s.comp_id(), Some(c[1]));
+        s.perform(Action::CompositionGoToParent);
+        assert_eq!(
+            s.workspace.tabs.iter().filter(|t| t.comp() == c[0]).count(),
+            1
+        );
+        assert_eq!(s.comp_id(), Some(c[0]));
+        // Unused: disabled with the reason.
+        s.open_comp(c[2]);
+        let why = s
+            .availability(Action::CompositionGoToParent)
+            .expect_err("unused");
+        assert!(why.contains("not used"), "{why}");
+        // Nothing open: the generic reason.
+        s.close_tab(s.workspace.active.expect("active"));
+    }
+
+    #[test]
+    fn removing_a_composition_closes_its_tab_and_breadcrumb() {
+        let (mut s, c) = tabs_state(&["Parent", "Child"]);
+        let l = nest(&mut s, c[0], c[1]);
+        s.open_comp(c[0]);
+        s.navigate_into_layer(l);
+        s.open_comp(c[0]);
+        s.remove_items(vec![PoolItem::Comp(c[1])], RemoveMode::PlaceholderLayers);
+        s.fix_selection();
+        assert_eq!(s.workspace.tabs.len(), 1);
+        assert_eq!(s.workspace.tabs[0].path.len(), 1, "the breadcrumb is cut");
+        assert_eq!(s.comp_id(), Some(c[0]));
+    }
+
+    #[test]
+    fn undo_goes_to_the_composition_it_changed_and_redo_selects_the_layer() {
+        let (mut s, c) = tabs_state(&["A", "B"]);
+        s.open_comp(c[1]);
+        let added = solid(&mut s, c[1]);
+        // The user is looking at A when they press Undo.
+        s.open_comp(c[0]);
+        assert!(s.undo());
+        assert_eq!(
+            s.comp_id(),
+            Some(c[1]),
+            "went to the composition the undo changed"
+        );
+        s.open_comp(c[0]);
+        assert!(s.redo());
+        assert_eq!(s.comp_id(), Some(c[1]));
+        assert_eq!(s.selection, Some(added), "the layer the redo brought back");
+        // An undo that changes the open composition stays where it is.
+        s.open_comp(c[1]);
+        assert!(s.undo());
+        assert_eq!(s.comp_id(), Some(c[1]));
+        assert_eq!(s.workspace.tabs.len(), 2);
+    }
+
+    #[test]
+    fn the_open_tabs_are_saved_with_the_project_and_restored() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("tabs.voxy");
+        let (mut s, c) = tabs_state(&["Parent", "Child", "Other"]);
+        let l = nest(&mut s, c[0], c[1]);
+        s.open_comp(c[2]);
+        s.time = Time::from_secs(4);
+        s.open_comp(c[0]);
+        s.time = Time::from_secs(1);
+        s.navigate_into_layer(l);
+        s.time = Time::from_secs(2);
+        assert!(s.save_to(&path));
+        let mut t = EditorState::new(Document::empty("x"));
+        t.open_path(&path);
+        assert_eq!(t.workspace.tabs.len(), 2);
+        assert_eq!(t.comp_id(), Some(c[1]), "the navigated-into composition");
+        assert_eq!(t.time, Time::from_secs(2), "its playhead");
+        assert_eq!(t.workspace.tabs[1].path.len(), 2, "the breadcrumb");
+        t.switch_tab(0);
+        assert_eq!((t.comp_id(), t.time), (Some(c[2]), Time::from_secs(4)));
+    }
+
+    #[test]
+    #[allow(clippy::many_single_char_names)] // s, c: the state and its compositions, as in the other tab tests.
+    fn closing_every_tab_is_remembered_and_old_files_show_the_main_composition() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("closed.voxy");
+        let (mut s, c) = tabs_state(&["A"]);
+        s.open_comp(c[0]);
+        s.close_tab(0);
+        assert!(s.save_to(&path));
+        let mut closed = EditorState::new(Document::empty("x"));
+        closed.open_path(&path);
+        assert!(
+            closed.comp_id().is_none(),
+            "the empty-state screen, as left"
+        );
+        assert_eq!(closed.history.current().comps.len(), 1);
+        // A project saved before tabs existed has no `tabs` entry.
+        let old = dir.path().join("old.voxy");
+        let ui = serde_json::json!({"version": 2, "project_panel": {}});
+        persist::save_with_ui(s.history.current(), Some(&ui), &old).expect("save");
+        let mut older = EditorState::new(Document::empty("x"));
+        older.open_path(&old);
+        assert_eq!(older.comp_id(), Some(c[0]), "the main composition");
+        // And a file with tabs for compositions that are gone opens cleanly.
+        let stale = dir.path().join("stale.voxy");
+        let ui = serde_json::json!({
+            "tabs": [{"path": [{"comp": 999}], "time": 0}],
+            "active_tab": 0
+        });
+        persist::save_with_ui(s.history.current(), Some(&ui), &stale).expect("save");
+        let mut gone = EditorState::new(Document::empty("x"));
+        gone.open_path(&stale);
+        assert!(gone.comp_id().is_none() && gone.workspace.tabs.is_empty());
     }
 }

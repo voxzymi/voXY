@@ -26,11 +26,13 @@ mod recovery;
 mod reveal;
 mod shortcut_editor;
 mod state;
+mod tabs_ui;
 mod theme;
 mod timeline;
 mod tips;
 mod transport;
 mod viewport;
+mod workspace;
 
 use std::path::PathBuf;
 

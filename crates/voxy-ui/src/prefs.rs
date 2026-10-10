@@ -13,6 +13,18 @@ use voxy_core::{FrameRate, PixelAspect, SegmentEase, Time};
 
 use crate::reveal::Os;
 
+/// What double-clicking a precomp layer does (design §13 Q6). Shift does the
+/// other one.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PrecompOpen {
+    /// Navigate into it in the current tab (the breadcrumb grows).
+    #[default]
+    CurrentTab,
+    /// Open (or switch to) the composition's own tab.
+    OwnTab,
+}
+
 /// A composition preset the user saved. Built-in presets live in code.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UserPreset {
@@ -108,6 +120,8 @@ pub struct Preferences {
     /// Where the panels sit, as text (see `layout.rs`). `None` is the default
     /// layout. A layout that is not sound is ignored when it is loaded.
     pub dock_layout: Option<String>,
+    /// What double-clicking a precomp layer does.
+    pub precomp_double_click: PrecompOpen,
 }
 
 /// Reads the shortcut table entry by entry (like [`lenient_list`]).
@@ -139,6 +153,7 @@ impl Default for Preferences {
             last_tip: None,
             shortcuts: BTreeMap::new(),
             dock_layout: None,
+            precomp_double_click: PrecompOpen::CurrentTab,
         }
     }
 }

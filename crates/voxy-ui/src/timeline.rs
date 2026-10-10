@@ -470,7 +470,23 @@ fn layer_rows(ui: &mut Ui, state: &mut EditorState, layer: &Layer, cx: Cx) {
     if name_resp.clicked() || name_resp.secondary_clicked() {
         state.selection = Some(layer.id);
     }
+    // Double-click on a precomp layer goes into it (Shift: the other way).
+    let shift = ui.input(|i| i.modifiers.shift);
+    if name_resp.double_clicked() && matches!(layer.kind, LayerKind::Precomp { .. }) {
+        state.open_precomp_layer(layer.id, shift);
+    }
     name_resp.context_menu(|ui| {
+        if matches!(layer.kind, LayerKind::Precomp { .. }) {
+            if ui.button("Open Composition").clicked() {
+                state.navigate_into_layer(layer.id);
+                ui.close();
+            }
+            if ui.button("Open in New Tab").clicked() {
+                state.open_precomp_in_own_tab(layer.id);
+                ui.close();
+            }
+            ui.separator();
+        }
         for a in [
             crate::actions::Action::RevealSourceInProject,
             crate::actions::Action::RevealInFileManager,
@@ -584,6 +600,9 @@ fn layer_rows(ui: &mut Ui, state: &mut EditorState, layer: &Layer, cx: Cx) {
             .on_hover_cursor(CursorIcon::Grab);
         if body.clicked() {
             state.selection = Some(layer.id);
+        }
+        if body.double_clicked() && matches!(layer.kind, LayerKind::Precomp { .. }) {
+            state.open_precomp_layer(layer.id, shift);
         }
         if body.drag_started() {
             start_layer_drag(ui, state, layer, DragKind::MoveLayer, cx);

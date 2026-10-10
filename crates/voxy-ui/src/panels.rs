@@ -169,6 +169,7 @@ impl Panels<'_> {
     }
 
     fn timeline_ui(&mut self, ui: &mut Ui) {
+        crate::tabs_ui::show(ui, self.state);
         let Some(comp) = self.state.comp() else {
             crate::empty_state::show(ui, self.state);
             return;
