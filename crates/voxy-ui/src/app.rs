@@ -185,6 +185,17 @@ impl VoxyApp {
                 self.item(ui, Action::RevealSourceInProject);
                 self.item(ui, Action::RevealInFileManager);
             });
+            ui.menu_button("Keyframe", |ui| {
+                self.item(ui, Action::EaseCopy);
+                self.item(ui, Action::EasePaste);
+                ui.separator();
+                ui.label(RichText::new("Apply to selected keyframes").weak());
+                self.item(ui, Action::EaseApplySpring);
+                self.item(ui, Action::EaseApplyBounce);
+                self.item(ui, Action::EaseApplyOscillation);
+                self.item(ui, Action::EaseApplySteps);
+                self.item(ui, Action::EaseApplySteppedRamp);
+            });
             ui.menu_button("Composition", |ui| {
                 self.item(ui, Action::CompositionSettings);
                 ui.separator();
@@ -365,6 +376,10 @@ impl eframe::App for VoxyApp {
         }
         if self.state.transport.is_playing() {
             ctx.request_repaint();
+        }
+
+        if let Some(text) = self.state.outgoing_clipboard.take() {
+            ctx.copy_text(text);
         }
 
         egui::Panel::top("voxy-menu").show(ui, |ui| self.menu_bar(ui));

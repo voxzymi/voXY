@@ -1,5 +1,14 @@
 # Alight Motion format notes (living document)
 
+> **ON HOLD BY DECISION.** Alight Motion compatibility is not being worked on:
+> the project owner dropped it (no import, no export, no easing-graph
+> mapping, no second sample batch, no fidelity tests against reference
+> renders). **Do not pick it up by accident.** Nothing here is deleted so the
+> work can resume if the decision changes: the `voxy-am-compat` crate (lossless
+> container, inspection, inventory and diff tooling), this document and the
+> sample requests below all stay as they are. The sample requests are
+> **withdrawn**: nothing is being waited for. Only the owner can lift the hold.
+
 **Status: no samples received yet. Nothing below is known about the format.**
 
 This document records what voXY learns about Alight Motion's project
@@ -103,23 +112,85 @@ reports it; **export writes what it can represent and reports what it cannot**.
 If an approximation (for example a sampled or bézier fit) turns out to be the
 only way to export a type, the export report will say so explicitly.
 
-**Requested sample batch for these graphs.** Same app version and OS as the
-first batch, each with the matching rendered video for the fidelity tests.
-Use a single scalar property (opacity or rotation) from 0 to 100 over 2 s so
-the curve is easy to read, and change nothing else.
+**Requested sample batch for these graphs (second batch, "H" files).** One
+export pass, in this order, so every file differs from its neighbor in exactly
+one thing. **(Withdrawn: Alight Motion compatibility is on hold by decision, see
+the note at the top. Kept for reference only; nothing is waiting on these.)**
 
-| # | File | What to make in the app |
-|---|---|---|
-| 12 | `12-ease-spring-default` | Two keyframes with the spring graph at its default parameters. |
-| 13 | `13-ease-spring-<param>` | #12 with exactly one spring parameter changed, one file per parameter (name what you changed in the file name). |
-| 14 | `14-ease-bounce-default` | The same with the bounce graph; then one file per changed parameter. |
-| 15 | `15-ease-oscillation-default` | The oscillation graph; then one file per changed parameter. |
-| 16 | `16-ease-steps-default` | The steps graph; then one file per changed parameter, including each jump position. |
-| 17 | `17-ease-stepped-ramp-default` | The stepped-ramp graph; then one file per changed parameter. |
-| 18 | `18-ease-handles` | For each type, one export with only the main handle dragged and one with only the secondary handle dragged, and a note of which numbers the app shows. |
+### The one scene every file uses
 
-Also useful: a screenshot of each graph's editor with its handles, so the
-yellow/white handle roles can be confirmed against the real UI.
+Same app version and OS as the first batch. Make this once and save it as
+`H00`; every other file is `H00` with the easing changed and *nothing else*.
+
+- Composition 1280×720, 30 fps, 3 s, background black.
+- One solid layer, 600×200 px (not a square: a square looks identical at 0°
+  and 90°), a mid-gray color, centered, anchor in the center.
+- **Rotation** keyframed: **0° at 0.5 s** and **60° at 2.5 s**, two keyframes
+  only. (Rotation does not clamp, so overshoot stays visible; opacity would
+  clip it.) Nothing else animated.
+- The graph under test is applied to **that segment** (the 0.5 s to 2.5 s one).
+  Say in the notes which keyframe(s) carry it if the app stores it on one or
+  both.
+
+For **every** file send:
+
+1. the project export (`.alightmotion`), unchanged;
+2. the **rendered video** of it with the same name (`.mp4`, 1280×720, 30 fps,
+   the app's highest quality, no audio): the fidelity reference;
+3. one line of notes: the parameter values *as the app displays them*, and
+   which control you changed (a screenshot of the graph editor is welcome and
+   is the only way I can check the handle colors and roles).
+
+### Tier 1: required (the minimum that identifies the encoding)
+
+| File | What to make |
+|---|---|
+| `H00-baseline-linear` | The scene with the keyframes' normal interpolation, no special graph (linear if the app has it, else the app's default; say which). |
+| `H01-spring-default` | Spring graph, every parameter at its default. |
+| `H02-bounce-default` | Bounce graph, defaults. |
+| `H03-oscillation-default` | Oscillation graph, defaults. |
+| `H04-steps-default` | Steps graph, defaults. |
+| `H05-stepped-ramp-default` | Stepped-ramp graph, defaults. |
+| `H1x-spring-<param>` | `H01` with **exactly one** spring parameter changed, one file per parameter the app exposes. Change it to a clearly different value (about double or half, not a tiny nudge) and note the exact number. |
+| `H2x-bounce-<param>` | Same for bounce, one file per parameter. |
+| `H3x-oscillation-<param>` | Same for oscillation, one file per parameter. |
+| `H4x-steps-<param>` | Same for steps, one file per parameter; a parameter that is a choice (jump position, for example) gets **one file per non-default option**. |
+| `H5x-stepped-ramp-<param>` | Same for stepped ramp, including each non-default option. |
+
+Name `<param>` after what the app calls it (`H12-spring-damping`). If a type
+has *N* parameters, that is *N* files, so with four to five parameters a type
+Tier 1 is roughly 25 to 30 files.
+
+### Tier 2: strongly useful (gives ranges and scaling)
+
+For each Tier 1 parameter file, a second one named `…-max` or `…-min` with the
+parameter dragged to the **app's extreme** (the largest or smallest value it
+allows), same notes. Two values per parameter, plus the default, are what let
+me tell a linear scale from a log one and find the units.
+
+### Tier 3: handles (checks the provisional handle mapping)
+
+For each of the five types, two files, with the default graph and **only one
+handle moved**:
+
+| File | What to make |
+|---|---|
+| `H6x-<type>-main-handle` | Only the **main** (yellow) handle dragged to a clearly different spot. Note which direction you dragged and the numbers the app shows before and after. |
+| `H7x-<type>-secondary-handle` | Only the **secondary** (white) handle dragged. Same notes. |
+
+If a type has only one handle, say so instead of making the second file.
+
+### Also, if the app makes it easy
+
+- An exported **preset or element XML** of a layer carrying one of these
+  graphs, and a **share-link/clipboard payload** of the same (the lossless
+  path in `docs/am-format.md` needs to see how a graph travels outside a whole
+  project).
+- A note of the app **version string and OS** once, at the top of the notes.
+
+Put everything in `tests/am-samples/` (or send it any way you like and I will
+place it). Whether they are committed is your call; the folder's README
+explains that the tests skip when it is empty.
 
 ## Container
 

@@ -18,7 +18,7 @@ use crate::color::{LinearRgba, WorkingSpace};
 use crate::document::{Document, ValidationError};
 use crate::easing::{EaseHandle, EasePreset};
 use crate::id::{CompId, LayerId, PropId};
-use crate::keyframe::{Interp, Keyframe, SpatialTangents};
+use crate::keyframe::{Interp, Keyframe, SegmentEase, SpatialTangents};
 use crate::layer::{BlendMode, ForeignData, Layer, LayerFlags, LayerKind, Transform};
 use crate::property::{Property, PropertyError, keys};
 use crate::time::{FrameRate, Time};
@@ -577,6 +577,43 @@ impl Command for SetEasing {
             kind: "set-easing",
             target: self.prop.raw(),
         })
+    }
+}
+
+/// Writes one [`SegmentEase`] onto many segments, possibly across several
+/// properties, as a single undoable step: paste, a user preset, or "apply to
+/// all selected keyframes". Each target lists the times of the segments' left
+/// keys; the last key of a track starts no segment and is skipped. Fails
+/// without changes if a key or property does not exist or the easing is
+/// invalid, or if there was no segment to write to.
+#[derive(Debug, Clone)]
+pub struct ApplyEasing {
+    pub targets: Vec<(PropId, Vec<Time>)>,
+    pub ease: SegmentEase,
+}
+
+impl Command for ApplyEasing {
+    fn label(&self) -> Cow<'static, str> {
+        let name = self.ease.label();
+        let segments: usize = self.targets.iter().map(|(_, t)| t.len()).sum();
+        if segments > 1 {
+            format!("Apply {name} to {segments} Segments").into()
+        } else {
+            format!("Apply {name}").into()
+        }
+    }
+
+    fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
+        let mut applied = 0;
+        for (prop, times) in &self.targets {
+            applied += prop_mut(doc, *prop)?.apply_easing(times, &self.ease)?;
+        }
+        if applied == 0 {
+            return Err(CommandError::Invalid(
+                "there is no keyframe segment to apply the easing to".into(),
+            ));
+        }
+        Ok(())
     }
 }
 

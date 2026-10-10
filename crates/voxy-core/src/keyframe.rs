@@ -333,6 +333,39 @@ impl Keyframe {
     }
 }
 
+/// The easing of one segment as a value: the left key's [`Interp`] and, for
+/// Bézier segments, the two handles. It is what copy and paste carry, what a
+/// user preset stores, and what "apply to many segments" writes.
+///
+/// The handles are only *used* when `interp` is [`Interp::Bezier`]; they are
+/// kept for every kind so that a segment's Bézier curve survives a detour
+/// through another type, and applying a non-Bézier easing leaves the target
+/// segment's own handles alone.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct SegmentEase {
+    pub interp: Interp,
+    #[serde(default = "linear_out")]
+    pub ease_out: EaseHandle,
+    #[serde(default = "linear_in")]
+    pub ease_in: EaseHandle,
+}
+
+impl SegmentEase {
+    /// An easing with neutral (linear) handles.
+    pub fn new(interp: Interp) -> Self {
+        SegmentEase {
+            interp,
+            ease_out: EaseHandle::LINEAR_OUT,
+            ease_in: EaseHandle::LINEAR_IN,
+        }
+    }
+
+    /// Display name: the type's label, or `"Bézier"` for a custom curve.
+    pub fn label(&self) -> &'static str {
+        self.interp.label()
+    }
+}
+
 /// Structural problems with a track.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum TrackError {
@@ -517,6 +550,42 @@ impl KeyframeTrack {
         }
         self.keys = keys;
         Ok(())
+    }
+
+    /// The easing of segment `index` (from key `index` to the next), or
+    /// `None` for the last key, which has no segment.
+    pub fn segment_ease(&self, index: usize) -> Option<SegmentEase> {
+        let (k0, k1) = (self.keys.get(index)?, self.keys.get(index + 1)?);
+        Some(SegmentEase {
+            interp: k0.interp,
+            ease_out: k0.ease_out,
+            ease_in: k1.ease_in,
+        })
+    }
+
+    /// Writes `ease` onto the segment that starts at the key at `time`.
+    /// Returns `false` (changing nothing) if that key is the last one and
+    /// so starts no segment.
+    pub(crate) fn apply_segment_ease(
+        &mut self,
+        time: Time,
+        ease: &SegmentEase,
+    ) -> Result<bool, TrackError> {
+        ease.interp
+            .validate()
+            .map_err(|reason| TrackError::InvalidEase { time, reason })?;
+        let i = self
+            .search(time)
+            .map_err(|_| TrackError::NoKeyframe(time))?;
+        if i + 1 >= self.keys.len() {
+            return Ok(false);
+        }
+        self.keys[i].interp = ease.interp;
+        if ease.interp == Interp::Bezier {
+            self.keys[i].ease_out = ease.ease_out;
+            self.keys[i + 1].ease_in = ease.ease_in;
+        }
+        Ok(true)
     }
 
     /// Applies a preset to the segment that starts at the key at `time`: that

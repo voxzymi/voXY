@@ -16,7 +16,8 @@ use voxy_core::command::{
 };
 use voxy_core::{
     Asset, AssetId, AssetKind, Command, CommandReport, CompId, CompSettings, Composition, Document,
-    FolderId, FrameRate, History, LayerId, LinearRgba, PoolItem, Time, persist,
+    FolderId, FrameRate, History, InterpKind, LayerId, LinearRgba, PoolItem, PropId, SegmentEase,
+    Time, persist,
 };
 
 use crate::actions::{Action, ActionContext, Keymap};
@@ -78,6 +79,13 @@ pub struct EditorState {
     /// The last tab the dialog showed (saved in `ui_state`).
     pub dialog_tab: DialogTab,
     pub prefs: Preferences,
+    /// The easing last copied with "Copy Easing" (or the graph editor's Copy
+    /// button). Lives for the session.
+    pub ease_clipboard: Option<SegmentEase>,
+    /// Text for the shell to put on the system clipboard (the copied
+    /// easing as JSON), so it can be pasted elsewhere, e.g. into a bug
+    /// report. Taken by the app each frame.
+    pub outgoing_clipboard: Option<String>,
     /// Where preferences are saved; `None` keeps them in memory (tests).
     pub prefs_path: Option<PathBuf>,
     /// The GPU's largest texture side, once the viewport knows it.
@@ -109,6 +117,8 @@ impl EditorState {
             comp_dialog: None,
             dialog_tab: DialogTab::Basic,
             prefs: Preferences::default(),
+            ease_clipboard: None,
+            outgoing_clipboard: None,
             prefs_path: None,
             gpu_max_texture: None,
             preview: None,
@@ -994,7 +1004,64 @@ impl EditorState {
                 .selection
                 .is_some_and(|l| self.history.current().find_layer(l).is_some()),
             project_selection: self.project.selection.items.len(),
+            selected_segments: self.selected_segments().iter().map(|(_, t)| t.len()).sum(),
         }
+    }
+
+    /// The segments the selected keyframes start, grouped by property, in a
+    /// fixed order (property id, then time). Keys that no longer exist and
+    /// the last key of each property (which starts no segment) are left out.
+    pub fn selected_segments(&self) -> Vec<(PropId, Vec<Time>)> {
+        let Some((_, layer)) = self
+            .selection
+            .and_then(|id| self.history.current().find_layer(id))
+        else {
+            return Vec::new();
+        };
+        segments_of(&self.timeline.selected_keys, &layer.properties())
+    }
+
+    /// Where an easing edit made in the graph editor for the segment
+    /// starting at `time` applies: every selected segment if that one is
+    /// part of a larger selection, otherwise just that segment.
+    pub fn easing_targets(&self, prop: PropId, time: Time) -> Vec<(PropId, Vec<Time>)> {
+        let selected = self.selected_segments();
+        let in_selection = selected
+            .iter()
+            .any(|(p, times)| *p == prop && times.contains(&time));
+        let many = selected.iter().map(|(_, t)| t.len()).sum::<usize>() > 1;
+        if in_selection && many {
+            selected
+        } else {
+            vec![(prop, vec![time])]
+        }
+    }
+
+    /// Puts `ease` on the clipboard (and its JSON on the system clipboard).
+    pub fn copy_easing(&mut self, ease: SegmentEase) {
+        self.outgoing_clipboard = serde_json::to_string_pretty(&ease).ok();
+        self.ease_clipboard = Some(ease);
+        self.info(format!("Copied {} easing.", ease.label()));
+    }
+
+    /// Writes `ease` onto `targets` as one undoable step.
+    pub fn apply_easing(&mut self, targets: Vec<(PropId, Vec<Time>)>, ease: SegmentEase) {
+        self.execute(voxy_core::command::ApplyEasing { targets, ease });
+    }
+
+    /// The easing of the first selected segment (the one "Copy Easing"
+    /// takes).
+    fn first_selected_easing(&self) -> Option<SegmentEase> {
+        let (prop, times) = self.selected_segments().into_iter().next()?;
+        let (_, layer) = self
+            .selection
+            .and_then(|id| self.history.current().find_layer(id))?;
+        let track = layer
+            .properties()
+            .into_iter()
+            .find(|p| p.id == prop)?
+            .track()?;
+        track.segment_ease(track.search(*times.first()?).ok()?)
     }
 
     /// `Ok` if `action` can run now, otherwise the tooltip saying why not.
@@ -1014,6 +1081,9 @@ impl EditorState {
                 Err(reveal::NOT_USED.to_owned())
             }
             Action::RevealInFileManager => self.file_manager_target().map(|_| ()),
+            Action::EasePaste if self.ease_clipboard.is_none() => {
+                Err("Copy an easing first.".to_owned())
+            }
             Action::EditUndo if !self.history.can_undo() => Err("Nothing to undo.".to_owned()),
             Action::EditRedo if !self.history.can_undo() && !self.history.can_redo() => {
                 Err("Nothing to redo.".to_owned())
@@ -1099,9 +1169,58 @@ impl EditorState {
             Action::RevealSourceInProject => self.reveal_source_in_project(),
             Action::RevealInComposition => self.reveal_in_primary_composition(),
             Action::RevealInFileManager => self.reveal_in_file_manager(),
+            Action::EaseCopy => {
+                if let Some(ease) = self.first_selected_easing() {
+                    self.copy_easing(ease);
+                }
+            }
+            Action::EasePaste => {
+                if let Some(ease) = self.ease_clipboard {
+                    self.apply_easing(self.selected_segments(), ease);
+                }
+            }
+            Action::EaseApplySpring => self.apply_kind(InterpKind::Spring),
+            Action::EaseApplyBounce => self.apply_kind(InterpKind::Bounce),
+            Action::EaseApplyOscillation => self.apply_kind(InterpKind::Oscillation),
+            Action::EaseApplySteps => self.apply_kind(InterpKind::Steps),
+            Action::EaseApplySteppedRamp => self.apply_kind(InterpKind::SteppedRamp),
         }
         None
     }
+}
+
+impl EditorState {
+    /// Applies `kind` with default parameters to every selected segment.
+    fn apply_kind(&mut self, kind: InterpKind) {
+        let targets = self.selected_segments();
+        self.apply_easing(targets, SegmentEase::new(kind.default_interp()));
+    }
+}
+
+/// The segments that `keys` start on `props`: for each property that has
+/// selected keys, the times of those keys that exist and are not the last
+/// key. Properties come out in id order and times ascending, so the result
+/// is deterministic.
+pub(crate) fn segments_of(
+    keys: &std::collections::HashSet<(PropId, Time)>,
+    props: &[&voxy_core::Property],
+) -> Vec<(PropId, Vec<Time>)> {
+    let mut out = Vec::new();
+    for prop in props {
+        let Some(track) = prop.track() else { continue };
+        let last = track.last().time;
+        let mut times: Vec<Time> = keys
+            .iter()
+            .filter(|(p, t)| *p == prop.id && *t != last && track.search(*t).is_ok())
+            .map(|(_, t)| *t)
+            .collect();
+        if !times.is_empty() {
+            times.sort();
+            out.push((prop.id, times));
+        }
+    }
+    out.sort_by_key(|(p, _)| p.raw());
+    out
 }
 
 /// `"<base> 1"`, or the smallest number that is not `taken`.
@@ -1195,6 +1314,157 @@ mod tests {
         let mut s = EditorState::new(EditorState::untitled());
         s.dialogs = Box::new(NoDialogs);
         s
+    }
+
+    /// A project whose one solid has rotation and opacity keyed at 0 s, 1 s
+    /// and 2 s, with the layer selected. Returns the two property ids.
+    fn keyed_state() -> (EditorState, PropId, PropId) {
+        use voxy_core::command::{AddKeyframe, AddSolidLayer, SetProperty};
+        let mut s = state();
+        s.new_composition(false).unwrap();
+        let comp = s.comp_id().unwrap();
+        s.execute(AddSolidLayer {
+            comp,
+            name: None,
+            color: LinearRgba::WHITE,
+            index: 0,
+        });
+        let layer = s.history.current().comp(comp).unwrap().layers[0].clone();
+        s.selection = Some(layer.id);
+        let (rot, opa) = (layer.transform.rotation.id, layer.transform.opacity.id);
+        for prop in [rot, opa] {
+            s.execute(AddKeyframe {
+                prop,
+                time: Time::ZERO,
+            });
+            for (secs, v) in [(1, 0.5), (2, 1.0)] {
+                s.execute(SetProperty {
+                    prop,
+                    time: Time::from_secs(secs),
+                    value: voxy_core::Value::Scalar(v),
+                });
+            }
+        }
+        (s, rot, opa)
+    }
+
+    fn select(s: &mut EditorState, keys: &[(PropId, i64)]) {
+        s.timeline.selected_keys = keys
+            .iter()
+            .map(|&(p, secs)| (p, Time::from_secs(secs)))
+            .collect();
+    }
+
+    fn easing_of(s: &EditorState, prop: PropId, segment: usize) -> SegmentEase {
+        let layer = &s
+            .history
+            .current()
+            .comp(s.comp_id().unwrap())
+            .unwrap()
+            .layers[0];
+        let p = layer
+            .properties()
+            .into_iter()
+            .find(|p| p.id == prop)
+            .unwrap();
+        p.track().unwrap().segment_ease(segment).unwrap()
+    }
+
+    #[test]
+    fn selected_segments_skip_last_keys_and_unknown_keys_in_a_fixed_order() {
+        let (mut s, rot, opa) = keyed_state();
+        assert_eq!(s.selected_segments().len(), 0);
+        // The last key of each property starts no segment; time 7 s has no
+        // key at all.
+        select(
+            &mut s,
+            &[(opa, 1), (rot, 2), (rot, 1), (rot, 0), (opa, 2), (rot, 7)],
+        );
+        let segs = s.selected_segments();
+        let expect: Vec<(PropId, Vec<Time>)> = {
+            let mut v = vec![
+                (rot, vec![Time::ZERO, Time::from_secs(1)]),
+                (opa, vec![Time::from_secs(1)]),
+            ];
+            v.sort_by_key(|(p, _)| p.raw());
+            v
+        };
+        assert_eq!(segs, expect);
+        assert_eq!(s.action_context().selected_segments, 3);
+        // Selecting only last keys leaves the actions unavailable.
+        select(&mut s, &[(rot, 2), (opa, 2)]);
+        assert_eq!(s.action_context().selected_segments, 0);
+        assert!(s.availability(Action::EaseApplySpring).is_err());
+    }
+
+    #[test]
+    fn easing_targets_follow_the_selection_only_when_the_segment_is_part_of_it() {
+        let (mut s, rot, opa) = keyed_state();
+        let t = Time::from_secs;
+        select(&mut s, &[(rot, 0), (opa, 0)]);
+        // Segment inside a multi-segment selection: all of them.
+        assert_eq!(
+            s.easing_targets(rot, t(0))
+                .iter()
+                .map(|(_, v)| v.len())
+                .sum::<usize>(),
+            2
+        );
+        // A segment outside the selection, or a selection of one: just it.
+        assert_eq!(s.easing_targets(rot, t(1)), vec![(rot, vec![t(1)])]);
+        select(&mut s, &[(rot, 0)]);
+        assert_eq!(s.easing_targets(rot, t(0)), vec![(rot, vec![t(0)])]);
+    }
+
+    #[test]
+    fn apply_actions_copy_and_paste_work_on_the_selection_in_one_undo_step() {
+        use voxy_core::{Interp, InterpKind};
+        let (mut s, rot, opa) = keyed_state();
+        // Nothing selected: refused with the reason, nothing changes.
+        assert!(s.perform(Action::EaseApplySpring).is_none());
+        assert!(s.status.as_ref().is_some_and(|st| st.is_error));
+        assert!(s.availability(Action::EasePaste).is_err());
+
+        select(&mut s, &[(rot, 0), (rot, 1), (opa, 0)]);
+        let before = s.history.current().clone();
+        s.perform(Action::EaseApplyBounce);
+        for (prop, seg) in [(rot, 0), (rot, 1), (opa, 0)] {
+            assert_eq!(easing_of(&s, prop, seg).interp.kind(), InterpKind::Bounce);
+        }
+        assert_eq!(easing_of(&s, opa, 1).interp, Interp::Linear, "unselected");
+        assert!(s.history.undo());
+        assert_eq!(s.history.current(), &before, "one undo reverts all three");
+
+        // Copy the first selected segment (rotation 0 s) and paste it elsewhere.
+        select(&mut s, &[(rot, 0)]);
+        s.perform(Action::EaseApplySteps);
+        s.perform(Action::EaseCopy);
+        let copied = s.ease_clipboard.unwrap();
+        assert_eq!(copied.interp.kind(), InterpKind::Steps);
+        let json = s.outgoing_clipboard.take().unwrap();
+        assert_eq!(serde_json::from_str::<SegmentEase>(&json).unwrap(), copied);
+        select(&mut s, &[(opa, 0), (opa, 1)]);
+        s.perform(Action::EasePaste);
+        assert_eq!(easing_of(&s, opa, 0), copied);
+        assert_eq!(easing_of(&s, opa, 1), copied);
+    }
+
+    #[test]
+    fn every_ease_action_is_in_the_menu_table_with_a_unique_id_and_no_default_shortcut() {
+        for a in [
+            Action::EaseCopy,
+            Action::EasePaste,
+            Action::EaseApplySpring,
+            Action::EaseApplyBounce,
+            Action::EaseApplyOscillation,
+            Action::EaseApplySteps,
+            Action::EaseApplySteppedRamp,
+        ] {
+            assert!(Action::ALL.contains(&a));
+            assert!(a.id().starts_with("ease."), "{a:?}");
+            assert_eq!(Action::from_id(a.id()), Some(a));
+            assert!(a.def().defaults.is_empty(), "rebindable, not bound");
+        }
     }
 
     fn write_png(path: &Path) {
