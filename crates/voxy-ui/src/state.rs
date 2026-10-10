@@ -92,6 +92,8 @@ pub struct EditorState {
     pub effects: std::sync::Arc<voxy_core::registry::EffectRegistry>,
     /// Effects last copied (Copy Effect), for pasting onto other layers.
     pub effect_clipboard: Vec<voxy_core::EffectInstance>,
+    /// The Effects & Presets panel's view state.
+    pub effects_panel: crate::effects_panel::EffectsPanel,
     /// The easing last copied with "Copy Easing" (or the graph editor's Copy
     /// button). Lives for the session.
     pub ease_clipboard: Option<SegmentEase>,
@@ -142,6 +144,7 @@ impl EditorState {
             prefs: Preferences::default(),
             effects: std::sync::Arc::new(voxy_core::registry::builtins().clone()),
             effect_clipboard: Vec::new(),
+            effects_panel: crate::effects_panel::EffectsPanel::default(),
             ease_clipboard: None,
             recovery: None,
             pending_recovery: None,

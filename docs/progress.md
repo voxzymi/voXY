@@ -195,8 +195,18 @@ at `743b053` (merge of #3).
         graph editor, because they are layer properties.
       - Audit: every panel draws with all effects, a keyframed parameter, a
         disabled effect and a placeholder.
-   2. Next: the Effects & Presets panel (search, categories, double-click
-      or drag to apply).
+   2. **Done:** the Effects & Presets panel (`effects_panel.rs`).
+      - It is a new dock tab, grouped with the Project panel by default.
+      - Search matches every word in an effect's name, category or
+        description. Categories are collapsible, with small painted glyphs
+        as icons (no icon font).
+      - Double-click applies an effect to the selected layer, in one undo
+        step. Effects can be dragged onto a timeline layer, or onto the
+        viewport, which applies them to the selected layer (the viewport
+        has no layer picking yet).
+      - Saved dock layouts from before the panel existed are kept: the
+        panel joins the Project panel's group instead of the whole layout
+        being refused (tested).
    3. Actions in the action table (copy, paste, duplicate, remove,
       enable, move, reset, open the panel).
    4. Effect presets (`effect_presets.toml`, tolerant loader, save from the

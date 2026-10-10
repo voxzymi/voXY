@@ -28,16 +28,23 @@ pub enum Tab {
     /// The Project panel (called the Media panel before it listed
     /// compositions and folders).
     Project,
+    /// The Effects & Presets panel (Milestone E-C).
+    Effects,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 5] = [
+    pub const ALL: [Tab; 6] = [
         Tab::Viewport,
         Tab::Timeline,
         Tab::Graph,
         Tab::Properties,
         Tab::Project,
+        Tab::Effects,
     ];
+
+    /// Panels added after layouts were first saved. A saved layout without
+    /// them gets them next to the Project panel instead of being refused.
+    pub const ADDED_LATER: [Tab; 1] = [Tab::Effects];
 
     pub(crate) fn title(self) -> &'static str {
         match self {
@@ -46,6 +53,7 @@ impl Tab {
             Tab::Graph => "Graph Editor",
             Tab::Properties => "Properties",
             Tab::Project => "Project",
+            Tab::Effects => "Effects & Presets",
         }
     }
 
@@ -80,7 +88,7 @@ pub fn default_layout() -> egui_dock::DockState<Tab> {
     let [top, _timeline] =
         tree.split_below(NodeIndex::root(), 0.68, vec![Tab::Timeline, Tab::Graph]);
     let [center, _properties] = tree.split_right(top, 0.76, vec![Tab::Properties]);
-    let [_project, _viewport] = tree.split_left(center, 0.26, vec![Tab::Project]);
+    let [_project, _viewport] = tree.split_left(center, 0.26, vec![Tab::Project, Tab::Effects]);
     dock
 }
 
@@ -113,6 +121,7 @@ impl TabViewer for Panels<'_> {
             Tab::Graph => crate::graph_editor::show(ui, self.state),
             Tab::Properties => self.properties_ui(ui),
             Tab::Project => self.project_ui(ui),
+            Tab::Effects => crate::effects_panel::show(ui, self.state),
         }
         // A press inside a panel gives it keyboard focus, which decides what
         // Delete, Enter and Select All mean (Project panel or editor).
@@ -139,6 +148,7 @@ impl Panels<'_> {
                 ui.max_rect(),
             );
         }
+        crate::effects_panel::drop_on_rect(ui, self.state, ui.max_rect());
         let Some(viewport) = self.viewport.as_deref_mut() else {
             ui.centered_and_justified(|ui| ui.label("GPU viewport unavailable"));
             return;
@@ -190,6 +200,7 @@ impl Panels<'_> {
         self.time_scrubber(ui, &comp);
         ui.separator();
         crate::timeline::show(ui, self.state);
+        crate::effects_panel::drop_on_rows(ui, self.state);
     }
 
     fn properties_ui(&mut self, ui: &mut Ui) {

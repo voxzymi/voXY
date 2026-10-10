@@ -23,12 +23,13 @@ use crate::dialogs::NoDialogs;
 use crate::panels::{Panels, Tab};
 use crate::state::EditorState;
 
-const TABS: [Tab; 5] = [
+const TABS: [Tab; 6] = [
     Tab::Viewport,
     Tab::Timeline,
     Tab::Graph,
     Tab::Properties,
     Tab::Project,
+    Tab::Effects,
 ];
 
 /// A new project: what the app starts with.
@@ -298,5 +299,5 @@ fn no_action_panics_with_animated_layers_and_selected_keys() {
 #[test]
 fn the_audit_covers_every_action_and_every_tab() {
     assert!(Action::ALL.len() >= 33, "{}", Action::ALL.len());
-    assert_eq!(TABS.len(), 5);
+    assert_eq!(TABS.len(), Tab::ALL.len());
 }

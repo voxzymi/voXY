@@ -44,6 +44,7 @@ pub fn panel_name(saved: &str) -> Option<&'static str> {
         "Graph Editor",
         "Properties",
         "Project",
+        "Effects & Presets",
     ]
     .into_iter()
     .find(|n| *n == saved)

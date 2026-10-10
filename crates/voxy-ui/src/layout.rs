@@ -45,11 +45,29 @@ pub fn from_text(text: &str) -> Option<DockState<Tab>> {
             return None;
         }
     };
+    let mut dock = dock;
+    add_new_panels(&mut dock);
     if sound(&dock) {
         Some(dock)
     } else {
         tracing::warn!("ignoring a dock layout that is not well formed");
         None
+    }
+}
+
+/// Panels newer than a saved layout join the Project panel's group, so a
+/// layout saved before they existed is kept. Without a Project panel the
+/// layout is not sound anyway and falls back to the default.
+fn add_new_panels(dock: &mut DockState<Tab>) {
+    for tab in Tab::ADDED_LATER {
+        if dock.find_tab(&tab).is_some() {
+            continue;
+        }
+        if let Some(path) = dock.find_tab(&Tab::Project)
+            && path.surface == egui_dock::SurfaceIndex::main()
+        {
+            dock.main_surface_mut()[path.node].append_tab(tab);
+        }
     }
 }
 
@@ -195,6 +213,18 @@ mod tests {
             assert_eq!(to_text(&restored).unwrap(), default_text, "{name}");
         }
         assert_eq!(to_text(&restore(None)).unwrap(), default_text);
+    }
+
+    #[test]
+    fn a_layout_saved_before_a_new_panel_gets_it_next_to_the_project_panel() {
+        let mut old = default_layout();
+        let at = old.find_tab(&Tab::Effects).unwrap();
+        old.remove_tab(at);
+        let text = to_text(&old).unwrap();
+        let back = from_text(&text).expect("kept, not refused");
+        let effects = back.find_tab(&Tab::Effects).unwrap();
+        let project = back.find_tab(&Tab::Project).unwrap();
+        assert_eq!(effects.node, project.node, "same group");
     }
 
     #[test]

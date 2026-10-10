@@ -12,6 +12,7 @@ mod dialogs;
 mod drops;
 mod ease_params;
 mod ease_ui;
+mod effects_panel;
 mod empty_state;
 mod footage;
 mod graph_editor;
