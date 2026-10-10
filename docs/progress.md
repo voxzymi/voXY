@@ -131,7 +131,14 @@ at `743b053` (merge of #3).
         - The golden harness helpers moved to `tests/common/mod.rs`; the
           existing goldens are unchanged.
         - `docs/effects.md` started.
-   2. The blend modes (ping-pong shader), with CPU reference tests.
+   2. **Done:** the blend modes. Normal keeps fixed-function "over", so
+      existing goldens are unchanged. Any other mode copies the target
+      into a backdrop texture and draws through `shaders/blend.wgsl`.
+      - CPU reference in `voxy_render::blend`, with hand-computed values.
+      - GPU test: 17 modes × 5 colour pairs × 2 working spaces, within
+        2/255 (1/255 observed).
+      - Golden `blend_modes`.
+      - The draw's blend mode is part of the plan key.
    3. The blurs (gaussian, box, directional), with goldens and the ROI test.
    4. The colour basics (brightness/contrast, exposure, invert, tint,
       hue/saturation), with goldens.

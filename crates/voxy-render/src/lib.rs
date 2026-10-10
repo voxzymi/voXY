@@ -11,6 +11,7 @@
 //! Preview and export call the same functions; only [`RenderSettings`]
 //! differ.
 
+pub mod blend;
 mod compositor;
 mod gpu;
 pub mod kernels;

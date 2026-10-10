@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use voxy_core::glam::{DAffine2, DMat2, DVec2};
-use voxy_core::{AssetId, AssetTable, Time, WorkingSpace};
+use voxy_core::{AssetId, AssetTable, BlendMode, Time, WorkingSpace};
 use voxy_media::VideoFrame;
 
 use crate::kernels::Kernel;
@@ -141,7 +141,7 @@ struct NestedEntry {
     complete: bool,
     view: wgpu::TextureView,
     bind_group: wgpu::BindGroup,
-    _texture: wgpu::Texture,
+    texture: wgpu::Texture,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -204,7 +204,14 @@ struct WorkingTarget {
     size: (u32, u32),
     view: wgpu::TextureView,
     output_bind_group: wgpu::BindGroup,
-    _texture: wgpu::Texture,
+    texture: wgpu::Texture,
+}
+
+/// A copy of a composite target, read by the blend shader.
+struct Backdrop {
+    size: (u32, u32),
+    bind_group: wgpu::BindGroup,
+    texture: wgpu::Texture,
 }
 
 struct Readback {
@@ -247,6 +254,8 @@ pub struct Compositor {
     effect_input_layout: wgpu::BindGroupLayout,
     effect_uniforms: Option<(wgpu::Buffer, wgpu::BindGroup, u64)>,
     effect_stride: u64,
+    blend_pipeline: wgpu::RenderPipeline,
+    backdrop: Option<Backdrop>,
 }
 
 impl std::fmt::Debug for Compositor {
@@ -470,6 +479,23 @@ impl Compositor {
                 label: Some("voxy-effect-input"),
                 entries: &[texture_entry(0)],
             });
+        let blend_pipeline = pipeline(
+            device,
+            "voxy-blend",
+            &shader(
+                device,
+                "voxy-blend",
+                include_str!("shaders/blend.wgsl"),
+                false,
+            ),
+            &[
+                Some(&layer_uniform_layout),
+                Some(&image_layout),
+                Some(&effect_input_layout),
+            ],
+            WORKING_FORMAT,
+            None,
+        );
         let effect_pipelines = Kernel::ALL
             .iter()
             .map(|&k| {
@@ -528,6 +554,8 @@ impl Compositor {
             effect_input_layout,
             effect_uniforms: None,
             effect_stride,
+            blend_pipeline,
+            backdrop: None,
         }
     }
 
@@ -656,6 +684,7 @@ impl Compositor {
             video,
             plan,
             &working.view,
+            &working.texture,
             0,
             &mut report,
         );
@@ -712,6 +741,7 @@ impl Compositor {
         video: &dyn VideoFrames,
         plan: &RenderPlan,
         target: &wgpu::TextureView,
+        target_texture: &wgpu::Texture,
         depth: usize,
         report: &mut RenderReport,
     ) {
@@ -854,58 +884,146 @@ impl Compositor {
                 col2: [m.translation.x as f32, m.translation.y as f32, 0.0, 0.0],
                 size: [size.x as f32, size.y as f32, 0.0, 0.0],
                 color,
-                mode: [mode, 0, 0, 0],
+                mode: [mode, crate::blend::mode_index(draw.blend), 0, 0],
             };
             let offset = uniform_bytes.len() as u64;
             uniform_bytes.extend_from_slice(bytemuck::bytes_of(&u));
             uniform_bytes.resize((offset + self.uniform_stride) as usize, 0);
-            draws.push((offset as u32, bind));
+            draws.push((offset as u32, bind, draw.blend != BlendMode::Normal));
         }
         if !uniform_bytes.is_empty() {
             self.ensure_layer_uniforms(device, uniform_bytes.len() as u64);
             let (buffer, _, _) = self.layer_uniforms.as_ref().expect("ensured");
             queue.write_buffer(buffer, 0, &uniform_bytes);
         }
-        {
-            let [r, g, b, a] = plan.clear;
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("voxy-composite"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: target,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color { r, g, b, a }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                ..Default::default()
-            });
-            if let Some((_, uniforms, _)) = &self.layer_uniforms {
-                pass.set_pipeline(&self.layer_pipeline);
-                for (offset, bind) in &draws {
-                    let image_group = match bind {
-                        Some(Bind::Image(a)) => self
-                            .images
-                            .get(a)
-                            .map_or(&self.blank_image, |e| &e.bind_group),
-                        Some(Bind::Video(slot)) => &self.video[*slot].bind_group,
-                        Some(Bind::Nested(key)) => self
-                            .nested
-                            .get(key)
-                            .map_or(&self.blank_image, |e| &e.bind_group),
-                        Some(Bind::Chain(key)) => self
-                            .chains
-                            .get(key)
-                            .map_or(&self.blank_image, chain::ChainEntry::draw_group),
-                        None => &self.blank_image,
-                    };
-                    pass.set_bind_group(0, uniforms, &[*offset]);
-                    pass.set_bind_group(1, image_group, &[]);
-                    pass.draw(0..6, 0..1);
+        if draws.iter().any(|d| d.2) {
+            self.ensure_backdrop(device, (plan.width, plan.height));
+        }
+        // Normal draws share one pass; each draw with another blend mode
+        // copies the target into the backdrop first and gets its own pass.
+        let [r, g, b, a] = plan.clear;
+        let mut load = wgpu::LoadOp::Clear(wgpu::Color { r, g, b, a });
+        let mut start = 0;
+        loop {
+            let end = draws[start..]
+                .iter()
+                .position(|d| d.2)
+                .map_or(draws.len(), |p| start + p);
+            {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("voxy-composite"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: target,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    ..Default::default()
+                });
+                if let Some((_, uniforms, _)) = &self.layer_uniforms {
+                    pass.set_pipeline(&self.layer_pipeline);
+                    for (offset, bind, _) in &draws[start..end] {
+                        pass.set_bind_group(0, uniforms, &[*offset]);
+                        pass.set_bind_group(1, self.image_group(*bind), &[]);
+                        pass.draw(0..6, 0..1);
+                    }
                 }
             }
+            load = wgpu::LoadOp::Load;
+            if end == draws.len() {
+                break;
+            }
+            let (offset, bind, _) = draws[end];
+            if let (Some((_, uniforms, _)), Some(backdrop)) = (&self.layer_uniforms, &self.backdrop)
+            {
+                encoder.copy_texture_to_texture(
+                    target_texture.as_image_copy(),
+                    backdrop.texture.as_image_copy(),
+                    wgpu::Extent3d {
+                        width: plan.width,
+                        height: plan.height,
+                        depth_or_array_layers: 1,
+                    },
+                );
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("voxy-blend"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: target,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    ..Default::default()
+                });
+                pass.set_pipeline(&self.blend_pipeline);
+                pass.set_bind_group(0, uniforms, &[offset]);
+                pass.set_bind_group(1, self.image_group(bind), &[]);
+                pass.set_bind_group(2, &backdrop.bind_group, &[]);
+                pass.draw(0..6, 0..1);
+            }
+            start = end + 1;
         }
+    }
+
+    /// The image bind group a draw samples.
+    fn image_group(&self, bind: Option<Bind>) -> &wgpu::BindGroup {
+        match bind {
+            Some(Bind::Image(a)) => self
+                .images
+                .get(&a)
+                .map_or(&self.blank_image, |e| &e.bind_group),
+            Some(Bind::Video(slot)) => &self.video[slot].bind_group,
+            Some(Bind::Nested(key)) => self
+                .nested
+                .get(&key)
+                .map_or(&self.blank_image, |e| &e.bind_group),
+            Some(Bind::Chain(key)) => self
+                .chains
+                .get(&key)
+                .map_or(&self.blank_image, chain::ChainEntry::draw_group),
+            None => &self.blank_image,
+        }
+    }
+
+    /// A backdrop texture of `size` (the composite target's size).
+    fn ensure_backdrop(&mut self, device: &wgpu::Device, size: (u32, u32)) {
+        if self.backdrop.as_ref().is_some_and(|b| b.size == size) {
+            return;
+        }
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("voxy-backdrop"),
+            size: wgpu::Extent3d {
+                width: size.0,
+                height: size.1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: WORKING_FORMAT,
+            usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("voxy-backdrop"),
+            layout: &self.effect_input_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&view),
+            }],
+        });
+        self.backdrop = Some(Backdrop {
+            size,
+            bind_group,
+            texture,
+        });
     }
 
     /// Renders a nested composition's plan offscreen (or finds it already
@@ -963,6 +1081,7 @@ impl Compositor {
             video,
             plan,
             &entry.view,
+            &entry.texture,
             depth,
             &mut sub,
         );
@@ -1047,7 +1166,9 @@ impl Compositor {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: WORKING_FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -1060,7 +1181,7 @@ impl Compositor {
             complete: false,
             view,
             bind_group,
-            _texture: texture,
+            texture,
         }
     }
 
@@ -1098,7 +1219,9 @@ impl Compositor {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: WORKING_FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -1107,7 +1230,7 @@ impl Compositor {
             size,
             view,
             output_bind_group,
-            _texture: texture,
+            texture,
         });
     }
 

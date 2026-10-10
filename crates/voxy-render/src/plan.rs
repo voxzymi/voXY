@@ -14,8 +14,8 @@ use std::sync::Arc;
 
 use voxy_core::glam::{DAffine2, DVec2};
 use voxy_core::{
-    AssetId, EvaluatedComp, EvaluatedContent, EvaluatedEffect, LinearRgba, Nested, Time, Value,
-    WorkingSpace,
+    AssetId, BlendMode, EvaluatedComp, EvaluatedContent, EvaluatedEffect, LinearRgba, Nested, Time,
+    Value, WorkingSpace,
 };
 
 use crate::kernels::Kernel;
@@ -196,6 +196,9 @@ pub struct DrawOp {
     pub local_size: Option<DVec2>,
     /// Maps layer-local pixels to output pixels (resolution scale applied).
     pub output_from_local: DAffine2,
+    /// How the layer combines with what is below it. Normal uses the
+    /// fixed-function "over"; every other mode the blend shader.
+    pub blend: BlendMode,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -382,6 +385,7 @@ impl Builder<'_> {
             self.draws.push(DrawOp {
                 source,
                 local_size,
+                blend: l.blend,
                 output_from_local: base * l.world,
             });
         }
@@ -483,6 +487,7 @@ impl RenderPlan {
         for d in &self.draws {
             hash_source(&d.source, h);
             hash_size(d.local_size, h);
+            h.u32(crate::blend::mode_index(d.blend));
             let m = d.output_from_local;
             for v in m.to_cols_array() {
                 h.f64(v);
