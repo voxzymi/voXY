@@ -1,7 +1,7 @@
 # Free third-party OpenFX plugins: research and shortlist
 
-**Status: P-0 shortlist, waiting for the owner's approval. Nothing listed
-here has been downloaded into the repository or built.** The research read
+**Status: shortlist approved by the owner (answers in §4).** Nothing is
+built yet: fixtures are first built in O-A and O-B. The research read
 license files, READMEs, build files and plugin source code on the upstream
 sites, and git tree metadata, which gives submodule pins without checking
 out any source. All of it was done on 2026-10-10.
@@ -85,17 +85,17 @@ preferences (#5), transitions (#9) and several plugins per bundle (#11).
 **What it does not cover:** a blur, a transform and a keyer. No permissive
 plugin for these exists upstream.
 
-### 2.2 Natron `openfx-misc` (GPL-2.0-or-later, owner decision needed)
+### 2.2 Natron `openfx-misc` (GPL-2.0-or-later): rejected by the owner (Q2)
 
 These plugins would close the gaps. Each one would be built on its own with
 the `nomulti` target.
 
 | # | Plugin (identifier) | What it does | Contexts | Params | Extra licenses | Verdict |
 |---|---|---|---|---|---|---|
-| 13 | CImgBlur (`net.sf.cimg.CImgBlur`) | Gaussian and quasi-gaussian blur | F, Gen | Double, Choice, Boolean | CImg: CeCILL-C or CeCILL v2 | **Proposed fixture, copyleft.** Blur, and ROI growth. |
-| 14 | TransformOFX (`net.sf.openfx.TransformPlugin`) | Translate, rotate, scale, skew | F, Gen | Double, Double2D, Boolean, Choice; transform interact | SupportExt: GPL-2.0 | **Proposed fixture, copyleft.** Transform, RoD and ROI. |
-| 15 | ChromaKeyerOFX (`net.sf.openfx.ChromaKeyerPlugin`) | Chroma key | F, Gen | RGB, Double (×4), Choice (×3), Boolean, Page | — | **Proposed fixture, copyleft.** Keyer. |
-| 16 | ColorCorrectOFX (`net.sf.openfx.ColorCorrectPlugin`) | Saturation, contrast, gamma, gain, offset | F, Gen | Group, Page, RGBA, RGBAScale, Double2D, Choice, **Parametric** | — | **Proposed fixture, copyleft.** A real colour corrector, and it exercises the "unsupported param type shows read-only" path. |
+| 13 | CImgBlur (`net.sf.cimg.CImgBlur`) | Gaussian and quasi-gaussian blur | F, Gen | Double, Choice, Boolean | CImg: CeCILL-C or CeCILL v2 | **Rejected (owner, Q2): no GPL plugins.** Was proposed as a copyleft fixture: Blur, and ROI growth. |
+| 14 | TransformOFX (`net.sf.openfx.TransformPlugin`) | Translate, rotate, scale, skew | F, Gen | Double, Double2D, Boolean, Choice; transform interact | SupportExt: GPL-2.0 | **Rejected (owner, Q2): no GPL plugins.** Was proposed as a copyleft fixture: Transform, RoD and ROI. |
+| 15 | ChromaKeyerOFX (`net.sf.openfx.ChromaKeyerPlugin`) | Chroma key | F, Gen | RGB, Double (×4), Choice (×3), Boolean, Page | — | **Rejected (owner, Q2): no GPL plugins.** Was proposed as a copyleft fixture: Keyer. |
+| 16 | ColorCorrectOFX (`net.sf.openfx.ColorCorrectPlugin`) | Saturation, contrast, gamma, gain, offset | F, Gen | Group, Page, RGBA, RGBAScale, Double2D, Choice, **Parametric** | — | **Rejected (owner, Q2): no GPL plugins.** Was proposed as a copyleft fixture: A real colour corrector, and it exercises the "unsupported param type shows read-only" path. |
 | — | Every other `openfx-misc` plugin, plus `openfx-io`, `openfx-arena`, `openfx-gmic` | — | — | — | GPL or CeCILL, heavy dependencies | **Reject.** Not needed for coverage. They need large libraries (OIIO, FFmpeg, ImageMagick, G'MIC). |
 
 ### 2.3 Other projects
@@ -150,6 +150,23 @@ after O-C.
 | Q2 | For blur, transform and keyer: (a) use `openfx-misc` #13 to #16 as **CI-only** fixtures, never uploaded or distributed; (b) write our own three small test plugins; or (c) both? | **(b)**, our own plugins: no copyleft near the project, and simpler to debug. (a) is acceptable under the CI-only rule if you want third-party coverage of the Support Extensions and Natron-style plugins. |
 | Q3 | OpenFX 1.5 adds a **Bytes** parameter type (binary data), used by #12. Persist it as base64 in a hidden `String` property (plugin state, like Custom), or show it read-only and not save it? | Persist it like Custom. That widens the approved "Custom parameters only" rule to "Custom and Bytes". |
 | Q4 | "Get free plugins" download: skip for now? | Skip; revisit after O-C. |
+
+---
+
+### Owner's answers
+
+- **Q1: yes.** The 11 BSD-3 OpenFX samples (#1 to #11) are CI test
+  fixtures, pinned to `ab77951` like the headers. They are built in CI
+  only and never shipped to users.
+- **Q2: (b).** We write three small test plugins of our own (blur,
+  transform, chroma key), licensed with the project. **No GPL plugins
+  anywhere:** not in CI, not as artifacts, not offered to users. Using
+  Natron's plugins would be a separate decision by the owner. Entries #13
+  to #16 are therefore **rejected**.
+- **Q3: yes.** Bytes parameters are stored as hidden base64 text, like
+  Custom parameters. Values are capped at 1 MiB and validated on load
+  (design §6.8).
+- **Q4: skip** the "Get free plugins" download. It is revisited after O-C.
 
 ---
 

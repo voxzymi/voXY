@@ -43,12 +43,13 @@ use = "host-api"
 status = "approved"
 note = "voXY's OpenFX host is written against these headers and the OpenFX specification."
 
-# --- Shortlist from docs/ofx-plugins.md, waiting for the owner's approval ---
-# All from the same pinned OpenFX commit as the API above.
+# --- Test fixtures approved by the owner in P-0 (docs/ofx-plugins.md §4) ---
+# All from the same pinned OpenFX commit as the API above. Built in CI only,
+# never shipped. No GPL plugins are used anywhere (owner decision P-0 Q2).
 
 [[credit]]
 id = "openfx-examples"
-name = "OpenFX example plugins (Invert, Basic, Rectangle, ChoiceParams, DepthConverter, Test, Custom)"
+name = "OpenFX example plugins (Invert, Basic, Rectangle, ChoiceParams, DepthConverter, Test; Custom in O-D)"
 authors = ["OpenFX and contributors to the OpenFX project"]
 url = "https://github.com/AcademySoftwareFoundation/openfx/tree/ab779510b2655b4d11a7e01e5c521f9aa8c88976/Examples"
 version = "OFX_Release_1.5.1"
@@ -57,7 +58,7 @@ license = "BSD-3-Clause"
 license_url = "https://github.com/AcademySoftwareFoundation/openfx/blob/ab779510b2655b4d11a7e01e5c521f9aa8c88976/LICENSE.md"
 copyright = "Copyright (c) 2025, OpenFX and contributors to the OpenFX project"
 use = "fixture"
-status = "proposed"
+status = "approved"
 
 [[credit]]
 id = "openfx-support-plugins"
@@ -70,20 +71,4 @@ license = "BSD-3-Clause"
 license_url = "https://github.com/AcademySoftwareFoundation/openfx/blob/ab779510b2655b4d11a7e01e5c521f9aa8c88976/Support/LICENSE"
 copyright = "Copyright OpenFX and contributors to the OpenFX project"
 use = "fixture"
-status = "proposed"
-
-# Optional, copyleft: only if the owner chooses Q2 (a) or (c) in
-# docs/ofx-plugins.md. CI-only, never uploaded or distributed.
-
-[[credit]]
-id = "natron-openfx-misc"
-name = "openfx-misc (CImgBlur, Transform, ChromaKeyer, ColorCorrect)"
-authors = ["The Natron Developers", "INRIA"]
-url = "https://github.com/NatronGitHub/openfx-misc"
-commit = "0abd46b5a8cbc98fa24579042129460d0aa87b8f"
-license = "GPL-2.0-or-later"
-license_url = "https://github.com/NatronGitHub/openfx-misc/blob/0abd46b5a8cbc98fa24579042129460d0aa87b8f/LICENSE"
-copyright = "(C) 2018-2021 The Natron Developers, (C) 2013-2018 INRIA"
-use = "fixture"
-status = "proposed"
-note = "Built with submodules openfx 2303ff811bee3ffe085287602f684fe5fe5357e0 and SupportExt 2485505dbe55885ee92ca9f164e7732a85856a13 (GPL-2.0), and CImg.h b33dcc8f9f1acf1f276ded92c04f8231f6c23fcd (CeCILL-C or CeCILL v2)."
+status = "approved"

@@ -91,7 +91,18 @@ License: BSD-3-Clause
 voXY's host implements this API. The headers will be vendored in
 `third_party/openfx/` with this license file.
 
-No third-party plugins are used yet.
+**OpenFX example plugins** (`Examples/`) and **OpenFX Support library
+sample plugins** (`Support/Plugins/`): same repository, tag and commit.
+License: BSD-3-Clause
+([`LICENSE.md`](https://github.com/AcademySoftwareFoundation/openfx/blob/ab779510b2655b4d11a7e01e5c521f9aa8c88976/LICENSE.md),
+[`Support/LICENSE`](https://github.com/AcademySoftwareFoundation/openfx/blob/ab779510b2655b4d11a7e01e5c521f9aa8c88976/Support/LICENSE)),
+"Copyright (c) 2025, OpenFX and contributors to the OpenFX project" and
+"Copyright OpenFX and contributors to the OpenFX project". Use: built from
+source in CI as test fixtures only. They are never shipped, uploaded or
+linked into voXY, so no binary-distribution notice obligation arises.
+
+voXY uses no copyleft (GPL, LGPL, AGPL) plugins anywhere, and offers no
+plugins for download.
 <!-- credits:end -->
 
 ## FFmpeg (from Milestone 3)

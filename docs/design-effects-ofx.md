@@ -580,7 +580,8 @@ leaves a choice to the host, the choice is written down there.
 | String | `String` |
 | RGBA / RGB | `Color` (RGB hides alpha) |
 | Double2D/3D, Integer2D/3D | `Vec2`/`Vec3`, with `integer_display` for the integer types |
-| Custom | `String`, hold-only (the plugin's own state) |
+| Custom | `String`, hold-only (the plugin's own state, §6.8) |
+| Bytes (1.5) | Hidden `String`, base64, hold-only, capped (§6.8) |
 | Group / Page | Collapsible groups (pages are flattened into sections) |
 | PushButton | A button that sends `InstanceChanged` (reason: user edit); it has no value |
 | Parametric (curves) | Read-only, with an "unsupported in this version" note |
@@ -659,8 +660,21 @@ One process runs per plugin bundle:
 An OFX effect stores the plugin identifier, the plugin version
 (major.minor), the context, and its parameters as ordinary properties.
 **OpenFX has no general "state blob" API.** A plugin's private state lives
-in its Custom parameters (strings) and is saved with them. That is the only
-state voXY persists, and it is written down rather than invented. A missing
+in its **Custom and Bytes parameters**, and voXY saves those. That is the
+only plugin state voXY persists, and it is written down rather than
+invented.
+
+- **Custom** values are stored as `Value::String`.
+- **Bytes** values (new in OpenFX 1.5) are stored base64-encoded in a hidden
+  `Value::String` property (owner decision, P-0 Q3).
+- Both are hold-only.
+- **Size cap: 1 MiB per value**, measured after base64 decoding for Bytes.
+  A plugin that sets a larger value gets `kOfxStatErrMemory`, and the effect
+  reports a warning.
+- **Validation on load.** A value over the cap, Bytes that are not valid
+  base64, or a value of the wrong type resets that one parameter to its
+  default, with a warning in the load report. The rest of the effect loads
+  normally, and nothing panics. A missing
 plugin, or a newer major version, loads as a placeholder (§1.1). A newer
 minor version loads normally, as the spec's versioning rules allow.
 
@@ -698,8 +712,8 @@ These are the prompt's hard rules, and P-0 applies them.
 - CI binaries are test fixtures only. Offering them to users is a separate
   owner decision.
 
-Context: Natron's `openfx-misc` and `openfx-io` are GPL-2.0, as far as I
-know, and P-0 will verify that from the license files. The OpenFX
+P-0 confirmed from the license files that Natron's sets are GPL-2.0 or
+GPL-2.0-or-later. By owner decision they are not used anywhere. The OpenFX
 repository's `Examples` and `Support/Plugins` are BSD-3. That would make
 the OpenFX samples the main permissive fixtures, with Natron's sets needing
 a copyleft decision.
@@ -787,4 +801,9 @@ These go into `docs/deferred.md` when the design is approved:
 - **D6:** effects ship in small groups.
 - Also approved: headers pinned to OpenFX 1.5.1, the macOS universal-folder
   correction (§6.2), and no plugin state blob, only Custom parameters
-  (§6.8).
+  (§6.8). P-0 Q3 widened this to Custom and Bytes parameters.
+- **P-0 (plugin shortlist):** the 11 BSD-3 OpenFX samples are CI test
+  fixtures at commit `ab77951`, never shipped. Blur, transform and keyer
+  coverage comes from three test plugins of our own, licensed with voXY.
+  **No GPL plugins anywhere** (not in CI, not as artifacts, not offered).
+  "Get free plugins" is skipped until after O-C. See `docs/ofx-plugins.md`.

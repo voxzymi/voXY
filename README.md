@@ -291,9 +291,11 @@ affiliated with or endorsed by voXY. voXY only hosts them.**
 | Project | Authors | License | Used for |
 |---|---|---|---|
 | [OpenFX (OFX) image-effect API](https://github.com/AcademySoftwareFoundation/openfx) (OFX_Release_1.5.1) | OpenFX and contributors to the OpenFX project, Academy Software Foundation | BSD-3-Clause | voXY's OpenFX host is written against these headers and the OpenFX specification. |
+| [OpenFX example plugins](https://github.com/AcademySoftwareFoundation/openfx/tree/ab779510b2655b4d11a7e01e5c521f9aa8c88976/Examples) (OFX_Release_1.5.1) | OpenFX and contributors to the OpenFX project | BSD-3-Clause | CI test fixtures only; not shipped. |
+| [OpenFX Support library sample plugins](https://github.com/AcademySoftwareFoundation/openfx/tree/ab779510b2655b4d11a7e01e5c521f9aa8c88976/Support/Plugins) (OFX_Release_1.5.1) | OpenFX and contributors to the OpenFX project | BSD-3-Clause | CI test fixtures only; not shipped. |
 
-No third-party plugins are built or offered yet. The candidates and their
-licenses are in [`docs/ofx-plugins.md`](docs/ofx-plugins.md).
+voXY offers no plugins for download. Details, and the plugins that were
+considered, are in [`docs/ofx-plugins.md`](docs/ofx-plugins.md).
 <!-- credits:end -->
 
 ## Licensing

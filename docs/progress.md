@@ -24,17 +24,31 @@ at `743b053` (merge of #3).
 
 - **Step 1: design note** `docs/design-effects-ofx.md`, approved with
   D1 to D8.
+- **P-0: plugin research.** The shortlist in `docs/ofx-plugins.md` is
+  approved (Q1 to Q4). The credits data file is `third_party/credits.toml`,
+  and the README and LICENSING.md credit blocks (between the
+  `credits:begin` and `credits:end` markers) are kept in sync by hand until
+  `cargo xtask credits --check` arrives in O-A. `docs/ofx-host.md` is
+  started.
 
 ## Next, in order
 
-1. P-0 done, waiting for approval. Step 1: research and shortlist in
-   `docs/ofx-plugins.md`. Step 2: `third_party/credits.toml` and the README
-   and LICENSING sections between the `credits:begin` and `credits:end`
-   markers, kept in sync by hand until `cargo xtask credits --check` arrives
-   in O-A. Then: plugin research and shortlist in `docs/ofx-plugins.md`,
-   the credits TOML, and README/LICENSING scaffolding, then stop for
-   approval. Research only: nothing is downloaded or built.
-2. E-A, E-B, E-C, then E-D, then O-A to O-D.
+1. E-A: the effect data model, the registry, commands and undo,
+   placeholders for missing effects, format 0.7.0 only when used, and
+   headless tests. It goes in small steps:
+   1. `Value::Layer`, `Value::Curve` and `Value::Asset`, plus
+      `AssetKind::Lut` (with validation).
+   2. `EffectId`, `EffectInstance`, `Layer::effects`, and effect
+      parameters in `Layer::properties()`.
+   3. The registry and the built-in definitions for group 1 (schemas only).
+   4. `BlendMode` variants and `LayerKind::Adjustment` (model only).
+   5. Commands: add, remove, move, duplicate, enable, rename, matte,
+      paste, set blend mode, new adjustment layer, and clearing layer
+      references on delete.
+   6. Persistence: format 0.7.0 when used, placeholders kept verbatim, and
+      migrations.
+   7. Tests: undo proptest, round trips, placeholders.
+2. E-B, E-C, then E-D, then O-A to O-D.
 
 ## Approved decisions
 
@@ -58,15 +72,19 @@ at `743b053` (merge of #3).
   - D8: W3C luma weights.
   - Also: OpenFX 1.5.1 headers, the macOS universal folder, and Custom
     parameters as the only plugin state.
+- P-0 answers:
+  - Q1: the 11 BSD-3 OpenFX samples at `ab77951` are CI-only fixtures,
+    never shipped.
+  - Q2: blur, transform and keyer test plugins are written by us and
+    licensed with voXY. No GPL plugins anywhere (CI, artifacts or downloads);
+    Natron's plugins would need a separate decision.
+  - Q3: Bytes parameters are stored as hidden base64, like Custom, capped
+    at 1 MiB per value and validated on load.
+  - Q4: no "Get free plugins" for now; revisit after O-C.
 
 ## Open questions waiting on the owner
 
-- The P-0 shortlist, Q1 to Q4 in `docs/ofx-plugins.md` §4:
-  - Q1: the BSD core as fixtures;
-  - Q2: GPL `openfx-misc` CI-only, or our own blur, transform and keyer
-    test plugins;
-  - Q3: whether to persist the 1.5 Bytes parameter;
-  - Q4: skip "Get free plugins" for now.
+- None.
 
 ## Verified only on Linux
 
