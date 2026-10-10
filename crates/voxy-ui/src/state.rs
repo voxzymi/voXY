@@ -83,6 +83,8 @@ pub struct EditorState {
     pub footage_prompt: Option<crate::footage::Prompt>,
     /// Index into [`crate::tips::all`] of the tip on the empty-state screen.
     pub tip: Option<usize>,
+    /// The Keyboard Shortcuts dialog, while it is open.
+    pub shortcut_editor: Option<crate::shortcut_editor::Editor>,
     pub prefs: Preferences,
     /// The easing last copied with "Copy Easing" (or the graph editor's Copy
     /// button). Lives for the session.
@@ -129,6 +131,7 @@ impl EditorState {
             dialog_tab: DialogTab::Basic,
             footage_prompt: None,
             tip: None,
+            shortcut_editor: None,
             prefs: Preferences::default(),
             ease_clipboard: None,
             recovery: None,
@@ -705,6 +708,12 @@ impl EditorState {
         }
     }
 
+    /// Keeps the saved shortcut overrides in step with the keymap.
+    pub fn save_shortcuts(&mut self) {
+        self.prefs.shortcuts = self.keymap.to_saved();
+        self.save_prefs();
+    }
+
     pub fn save_prefs(&mut self) {
         if let Some(path) = self.prefs_path.clone()
             && let Err(e) = self.prefs.save_to(&path)
@@ -1206,6 +1215,9 @@ impl EditorState {
             }
             Action::EditRedo => {
                 self.history.redo();
+            }
+            Action::EditKeyboardShortcuts => {
+                self.shortcut_editor = Some(crate::shortcut_editor::Editor::default());
             }
             Action::SelectionClear => {
                 if self.project.focused {

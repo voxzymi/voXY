@@ -31,10 +31,6 @@ pub const PANEL_ALIASES: &[(&str, &str)] = &[
 ];
 
 /// The current name of a saved panel name, or `None` if it is not a panel.
-#[allow(
-    dead_code,
-    reason = "used when the dock layout is saved (Preferences, P-D); covered by tests"
-)]
 pub fn panel_name(saved: &str) -> Option<&'static str> {
     if let Some((_, to)) = PANEL_ALIASES.iter().find(|(from, _)| *from == saved) {
         return Some(to);

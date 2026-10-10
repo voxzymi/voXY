@@ -28,6 +28,8 @@ enum Discarding {
 pub struct VoxyApp {
     state: EditorState,
     dock: DockState<Tab>,
+    /// The layout text last written to the preferences.
+    saved_layout: Option<String>,
     viewport: Option<ViewportRenderer>,
     pending: Option<Discarding>,
     allow_close: bool,
@@ -57,6 +59,7 @@ impl VoxyApp {
         if let Some(path) = &state.prefs_path {
             state.prefs = crate::prefs::Preferences::load_from(path);
         }
+        state.keymap.load_saved(&state.prefs.shortcuts);
         state.choose_startup_tip(clock_seed());
         state.gpu_max_texture = viewport
             .as_ref()
@@ -76,9 +79,11 @@ impl VoxyApp {
         } else {
             state.offer_orphaned_recovery();
         }
+        let dock = crate::layout::restore(state.prefs.dock_layout.as_deref());
         VoxyApp {
+            saved_layout: crate::layout::to_text(&dock),
             state,
-            dock: default_layout(),
+            dock,
             viewport,
             pending: None,
             allow_close: false,
@@ -107,10 +112,30 @@ impl VoxyApp {
         }
     }
 
+    /// Writes the dock layout to the preferences once a drag has ended and
+    /// the arrangement differs from what was last written.
+    fn save_layout(&mut self, ctx: &egui::Context) {
+        if ctx.input(|i| i.pointer.any_down()) {
+            return;
+        }
+        let Some(text) = crate::layout::to_text(&self.dock) else {
+            return;
+        };
+        if self.saved_layout.as_deref() != Some(text.as_str()) {
+            self.state.prefs.dock_layout = Some(text.clone());
+            self.state.save_prefs();
+            self.saved_layout = Some(text);
+        }
+    }
+
     /// Runs the actions whose shortcuts were pressed this frame. An action
     /// that cannot run says why in the status bar and does nothing.
     fn shortcuts(&mut self, ctx: &egui::Context) {
         // Text fields keep their own editing shortcuts.
+        // The shortcut editor reads keys itself while it is open.
+        if self.state.shortcut_editor.is_some() {
+            return;
+        }
         let typing = ctx.egui_wants_keyboard_input();
         let project_focused = self.state.project.focused;
         let fired = ctx.input_mut(|i| self.state.keymap.dispatch(i, project_focused, typing));
@@ -181,6 +206,8 @@ impl VoxyApp {
                     .redo_label()
                     .map_or_else(|| "Redo".to_owned(), |l| format!("Redo {l}"));
                 self.item_labelled(ui, Action::EditRedo, &redo);
+                ui.separator();
+                self.item(ui, Action::EditKeyboardShortcuts);
             });
             ui.menu_button("Layer", |ui| {
                 self.item(ui, Action::LayerNewSolid);
@@ -314,6 +341,7 @@ impl VoxyApp {
     fn dialogs(&mut self, ctx: &egui::Context) {
         crate::comp_dialog::show(ctx, &mut self.state);
         crate::footage::show_prompt(ctx, &mut self.state);
+        crate::shortcut_editor::show(ctx, &mut self.state);
         if let Some(action) = self.pending {
             let name = self.state.display_name();
             let mut choice = None;
@@ -475,6 +503,7 @@ impl eframe::App for VoxyApp {
 
         self.dialogs(&ctx);
         self.state.fix_selection();
+        self.save_layout(&ctx);
 
         // A drag or text edit has ended: the next edit starts a new undo step.
         if !ctx.input(|i| i.pointer.any_down()) && !ctx.egui_wants_keyboard_input() {

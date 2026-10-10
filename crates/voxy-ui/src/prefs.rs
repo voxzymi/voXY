@@ -4,6 +4,7 @@
 //! The file is TOML. A missing, unreadable or corrupt file gives the
 //! defaults, and saving problems are logged, never fatal.
 
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
@@ -99,6 +100,32 @@ pub struct Preferences {
     pub show_tips: bool,
     /// The `id` of the tip shown last, so the next launch picks another.
     pub last_tip: Option<String>,
+    /// Shortcut overrides by action id (`file.save = ["Ctrl+Alt+S"]`); an
+    /// empty list unbinds the action. Only what differs from the defaults is
+    /// saved. One unreadable entry is dropped alone.
+    #[serde(deserialize_with = "lenient_shortcuts")]
+    pub shortcuts: BTreeMap<String, Vec<String>>,
+    /// Where the panels sit, as text (see `layout.rs`). `None` is the default
+    /// layout. A layout that is not sound is ignored when it is loaded.
+    pub dock_layout: Option<String>,
+}
+
+/// Reads the shortcut table entry by entry (like [`lenient_list`]).
+fn lenient_shortcuts<'de, D>(d: D) -> Result<BTreeMap<String, Vec<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = BTreeMap::<String, toml::Value>::deserialize(d)?;
+    Ok(raw
+        .into_iter()
+        .filter_map(|(id, v)| match v.try_into::<Vec<String>>() {
+            Ok(list) => Some((id, list)),
+            Err(e) => {
+                tracing::warn!("ignoring unreadable shortcuts for {id}: {e}");
+                None
+            }
+        })
+        .collect())
 }
 
 impl Default for Preferences {
@@ -110,6 +137,8 @@ impl Default for Preferences {
             autosave_seconds: DEFAULT_AUTOSAVE_SECONDS,
             show_tips: true,
             last_tip: None,
+            shortcuts: BTreeMap::new(),
+            dock_layout: None,
         }
     }
 }
@@ -457,5 +486,28 @@ mod tests {
         let path = dir.path().join("p.toml");
         off.save_to(&path).unwrap();
         assert_eq!(Preferences::load_from(&path), off);
+    }
+
+    #[test]
+    fn shortcuts_and_layout_are_saved_and_one_bad_entry_costs_only_itself() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("p.toml");
+        let mut p = Preferences::default();
+        assert!(p.shortcuts.is_empty() && p.dock_layout.is_none());
+        p.shortcuts
+            .insert("file.save".into(), vec!["Ctrl+Alt+S".into()]);
+        p.shortcuts.insert("file.quit".into(), vec![]);
+        p.dock_layout = Some(crate::layout::to_text(&crate::panels::default_layout()).unwrap());
+        p.save_to(&path).unwrap();
+        assert_eq!(Preferences::load_from(&path), p);
+        // A wrongly typed entry is dropped; the rest of the file survives.
+        let text = "show_tips = false\n[shortcuts]\n\"file.save\" = \"oops\"\n\"file.open\" = [\"Ctrl+O\"]\n";
+        let loaded = Preferences::parse(text);
+        assert!(!loaded.show_tips);
+        assert_eq!(loaded.shortcuts.len(), 1);
+        assert_eq!(loaded.shortcuts["file.open"], ["Ctrl+O"]);
+        // Older files have neither.
+        let old = Preferences::parse("autosave_seconds = 30");
+        assert!(old.shortcuts.is_empty() && old.dock_layout.is_none());
     }
 }

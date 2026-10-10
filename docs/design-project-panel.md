@@ -504,3 +504,38 @@ What landed, and where it refines the design above.
   smallest tiles. Tab order is New Composition, From Footage, Next tip.
 - **Still to do in P-D:** saving the dock layout, saved shortcut overrides and
   the shortcut editor (see [`deferred.md`](deferred.md)).
+
+## Implementation notes (P-D, part 2: shortcuts and dock layout)
+
+All of this lives in `preferences.toml` (per user), never in a project file,
+and none of it changes the project format.
+
+- **Saved shortcuts.** `[shortcuts]` maps an action id to a list of shortcuts
+  as text: `"file.save" = ["Ctrl+Alt+S"]`, an empty list unbinds. `Ctrl` is
+  the platform's command key (Cmd on macOS); `Cmd`, `Command` and `Control`
+  are accepted when reading. Only what differs from the defaults is written.
+  Ids resolve through the aliases (so `media_panel.*` still loads). Unknown
+  ids, unreadable shortcuts and wrongly typed entries are dropped one at a
+  time and never cost the rest of the file.
+- **Keyboard Shortcuts dialog** (Edit > Keyboard Shortcuts…, an action with no
+  default shortcut). Every action in the table, filterable. "+ Add" captures
+  the next key press (Esc cancels the capture only; Esc itself can't be bound
+  this way), × removes one shortcut, Reset and Reset All restore defaults.
+  Changes save immediately. **Decision taken (conventional default, say if you
+  want it otherwise):** assigning a shortcut that another action already uses
+  *in a scope that can be active at the same time* moves it to the new action
+  and the dialog says so, so there is never an ambiguous key. Delete is
+  legitimately shared between Delete Layer (editor scope) and Remove from
+  Project (Project panel scope) and stays that way. While the dialog is open
+  the normal shortcut dispatch is off.
+- **Dock layout.** `dock_layout` holds the arrangement as one JSON string
+  (egui_dock's own serialization, with the per-frame rectangles stripped so
+  resizing the window does not rewrite the file). It is written when a drag
+  ends and the arrangement changed, and read at launch. A saved layout is used
+  only if it is sound: one surface, a well-formed tree, every panel exactly
+  once; otherwise the default layout is used and a warning is logged. Old
+  panel names ("Media") load as "Project". Window > Reset Layout restores the
+  default and saves it.
+- **New dependency feature.** egui_dock's `serde` feature, which adds one
+  small crate to the lockfile: `enumn` (MIT OR Apache-2.0, a derive macro by
+  the author of serde), allowed by `deny.toml`.

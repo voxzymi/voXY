@@ -14,7 +14,8 @@ use voxy_core::{
 use crate::state::EditorState;
 use crate::viewport::ViewportRenderer;
 
-/// A dockable panel.
+/// A dockable panel. Saved by its title; [`Tab::from_saved`] also reads the
+/// names from before the Media panel became the Project panel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Tab {
     Viewport,
@@ -47,13 +48,23 @@ impl Tab {
 
     /// The panel a saved layout's panel name stands for, including names
     /// from before the rename ("Media").
-    #[allow(
-        dead_code,
-        reason = "used when the dock layout is saved (Preferences, P-D); covered by tests"
-    )]
     pub fn from_saved(name: &str) -> Option<Tab> {
         let current = crate::compat::panel_name(name)?;
         Tab::ALL.into_iter().find(|t| t.title() == current)
+    }
+}
+
+impl serde::Serialize for Tab {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(self.title())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Tab {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Tab, D::Error> {
+        let name = String::deserialize(d)?;
+        Tab::from_saved(&name)
+            .ok_or_else(|| serde::de::Error::custom(format!("unknown panel {name:?}")))
     }
 }
 

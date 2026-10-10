@@ -5,7 +5,9 @@ where the code is ready for it, and when it is due. Nothing here is dropped;
 an item leaves this list only when it ships or the owner removes it.
 
 **Shipped and removed from this list:** autosave and crash recovery (see
-[`design-autosave.md`](design-autosave.md)).
+[`design-autosave.md`](design-autosave.md)); saved shortcuts, the shortcut
+editor and the saved dock layout (see "P-D part 2" in
+[`design-project-panel.md`](design-project-panel.md)).
 
 | Item | Waits for | Code ready for it | Due |
 |---|---|---|---|
@@ -17,4 +19,3 @@ an item leaves this list only when it ships or the owner removes it.
 | **Footage blend / optical-flow resampling** | Later per-layer options. | Hold is the rule today (`design-media-comps.md` §8.2). | Unscheduled. |
 | **"Hold child frame rate when nested"** | Later per-composition option. | Continuous sampling is the rule today (§8.2). | Unscheduled. |
 | **Project panel thumbnails** (footage and compositions in the info header) | A preview renderer that can draw a composition other than the open one, cached by `(comp, revision, time)`. | The info header already reads the selected item and its settings; a painted icon stands in. | With composition tabs (Milestone E). |
-| **Saved shortcuts, dock layout and the shortcut editor** | `Preferences` (per-user config directory, tolerant of a missing or corrupt file). | `Keymap::apply_saved` resolves old action ids, `Keymap::conflicts` reports clashes, `compat::panel_name` maps old panel names. | Milestone P-D. |
