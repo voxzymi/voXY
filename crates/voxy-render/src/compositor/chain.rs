@@ -28,6 +28,7 @@ pub(super) struct EffectUniform {
     frame: [f32; 4],
     p: [[f32; 4]; 4],
     i: [u32; 4],
+    w: [[f32; 4]; 256],
 }
 
 /// Counters for rendered effect chains.
@@ -74,6 +75,10 @@ impl ChainEntry {
 pub(super) fn kernel_shader(kernel: Kernel) -> &'static str {
     match kernel {
         Kernel::Invert => include_str!("../shaders/effects/invert.wgsl"),
+        Kernel::GaussianBlur | Kernel::BoxBlur => {
+            include_str!("../shaders/effects/convolve.wgsl")
+        }
+        Kernel::DirectionalBlur => include_str!("../shaders/effects/directional.wgsl"),
     }
 }
 
@@ -278,26 +283,35 @@ impl Compositor {
             pass.draw(0..6, 0..1);
         }
 
-        // The effects, ping-ponging between the two textures.
+        // The effects, ping-ponging between the two textures; a kernel may
+        // take several passes (a separable blur takes one per axis).
         let stride = self.effect_stride;
-        let mut bytes = Vec::with_capacity(nodes.len() * stride as usize);
+        let mut bytes = Vec::new();
+        let mut passes = Vec::new();
         for (kernel, fx) in &nodes {
-            let k = kernel.params(fx, s);
-            let u = EffectUniform {
-                frame: [texels.0 as f32, texels.1 as f32, s as f32, 0.0],
-                p: k.p,
-                i: k.i,
-            };
-            let at = bytes.len();
-            bytes.extend_from_slice(bytemuck::bytes_of(&u));
-            bytes.resize(at + stride as usize, 0);
+            for k in kernel.passes(fx, s) {
+                let mut w = [[0.0f32; 4]; 256];
+                for (i, v) in k.w.iter().take(1024).enumerate() {
+                    w[i / 4][i % 4] = *v;
+                }
+                let u = EffectUniform {
+                    frame: [texels.0 as f32, texels.1 as f32, s as f32, 0.0],
+                    p: k.p,
+                    i: k.i,
+                    w,
+                };
+                let at = bytes.len();
+                bytes.extend_from_slice(bytemuck::bytes_of(&u));
+                bytes.resize(at + stride as usize, 0);
+                passes.push(*kernel);
+            }
         }
         let mut cur = 0;
         if !bytes.is_empty() {
             self.ensure_effect_uniforms(device, bytes.len() as u64);
             let (buffer, group, _) = self.effect_uniforms.as_ref().expect("ensured");
             queue.write_buffer(buffer, 0, &bytes);
-            for (i, (kernel, _)) in nodes.iter().enumerate() {
+            for (i, kernel) in passes.iter().enumerate() {
                 let Some(pipeline) = self.effect_pipelines.get(kernel) else {
                     continue;
                 };
@@ -412,10 +426,16 @@ impl Compositor {
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("voxy-effect-input"),
                 layout: &self.effect_input_layout,
-                entries: &[wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(view),
-                }],
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&self.sampler),
+                    },
+                ],
             })
         };
         let input_groups = [input(&views[0]), input(&views[1])];

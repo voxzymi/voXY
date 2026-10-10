@@ -477,7 +477,15 @@ impl Compositor {
         let effect_input_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("voxy-effect-input"),
-                entries: &[texture_entry(0)],
+                entries: &[
+                    texture_entry(0),
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                ],
             });
         let blend_pipeline = pipeline(
             device,
@@ -1014,10 +1022,16 @@ impl Compositor {
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("voxy-backdrop"),
             layout: &self.effect_input_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(&view),
-            }],
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+            ],
         });
         self.backdrop = Some(Backdrop {
             size,

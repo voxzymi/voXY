@@ -197,3 +197,142 @@ fn chains_render_once_while_static_and_again_when_changed() {
     assert_eq!(c.chain_stats().renders, 3);
     assert_eq!((half.width, half.height), (48, 32));
 }
+
+mod blurs {
+    use super::*;
+
+    /// A golden: file name, effect type and parameter values.
+    type Case<'a> = (&'a str, &'a str, Vec<(&'a str, Value)>);
+
+    fn blurred(id: &str, params: &[(&str, Value)]) -> (Document, Vec<LayerId>) {
+        let (mut doc, layers) = scene(WorkingSpace::Linear);
+        for l in &layers {
+            let fx = add_effect(&mut doc, *l, id);
+            for (name, v) in params {
+                set_param(&mut doc, *l, fx, name, v.clone());
+            }
+        }
+        (doc, layers)
+    }
+
+    #[test]
+    fn blur_goldens() {
+        let Some(gpu) = gpu() else { return };
+        let mut c = Compositor::new(&gpu.device);
+        let cases: [Case<'_>; 4] = [
+            (
+                "effect_blur_gaussian",
+                ids::GAUSSIAN_BLUR,
+                vec![("radius", Value::Scalar(8.0))],
+            ),
+            (
+                "effect_blur_box",
+                ids::BOX_BLUR,
+                vec![
+                    ("radius", Value::Scalar(3.0)),
+                    ("passes", Value::Int(3)),
+                    ("dimensions", Value::Enum(1)),
+                ],
+            ),
+            (
+                "effect_blur_directional",
+                ids::DIRECTIONAL_BLUR,
+                vec![
+                    ("direction", Value::Scalar(30.0)),
+                    ("length", Value::Scalar(16.0)),
+                ],
+            ),
+            (
+                "effect_blur_repeat_edges",
+                ids::GAUSSIAN_BLUR,
+                vec![
+                    ("radius", Value::Scalar(8.0)),
+                    ("repeat_edges", Value::Bool(true)),
+                ],
+            ),
+        ];
+        for (name, id, params) in cases {
+            let (doc, _) = blurred(id, &params);
+            let a = render(&gpu, &mut c, &doc, Time::ZERO, 1.0);
+            let b = render(
+                &gpu,
+                &mut Compositor::new(&gpu.device),
+                &doc,
+                Time::ZERO,
+                1.0,
+            );
+            assert_eq!(a, b, "{name}: deterministic across compositors");
+            compare(name, &a);
+        }
+    }
+
+    fn pixel(img: &RgbaImage, x: u32, y: u32) -> [u8; 4] {
+        let i = ((y * img.width + x) * 4) as usize;
+        img.pixels[i..i + 4].try_into().unwrap()
+    }
+
+    /// The design's ROI test: a large blur on a solid that fills its layer
+    /// must spread past the layer's edge instead of being clipped by it.
+    #[test]
+    fn a_large_blur_spreads_past_the_layer_edge() {
+        let Some(gpu) = gpu() else { return };
+        let mut c = Compositor::new(&gpu.device);
+        let (plain, _) = scene(WorkingSpace::Linear);
+        let (doc, _) = blurred(ids::GAUSSIAN_BLUR, &[("radius", Value::Scalar(24.0))]);
+        let before = render(&gpu, &mut c, &plain, Time::ZERO, 1.0);
+        let after = render(&gpu, &mut c, &doc, Time::ZERO, 1.0);
+        // The orange layer spans x 6..54, y 10..50; (3, 30) is 3 pixels
+        // outside its left edge, on the background.
+        assert_eq!(pixel(&before, 3, 30), pixel(&before, 1, 1), "background");
+        let near = pixel(&after, 3, 30);
+        assert!(
+            near[0] > pixel(&before, 3, 30)[0] + 20,
+            "the blur reaches past the edge: {near:?}"
+        );
+        // With repeated edges, nothing leaves the layer.
+        let (rep, _) = blurred(
+            ids::GAUSSIAN_BLUR,
+            &[
+                ("radius", Value::Scalar(24.0)),
+                ("repeat_edges", Value::Bool(true)),
+            ],
+        );
+        let inside = render(&gpu, &mut c, &rep, Time::ZERO, 1.0);
+        assert_eq!(pixel(&inside, 3, 30), pixel(&before, 3, 30));
+    }
+
+    #[test]
+    fn the_look_holds_at_half_preview_resolution() {
+        let Some(gpu) = gpu() else { return };
+        let mut c = Compositor::new(&gpu.device);
+        let (doc, _) = blurred(ids::GAUSSIAN_BLUR, &[("radius", Value::Scalar(10.0))]);
+        let full = render(&gpu, &mut c, &doc, Time::ZERO, 1.0);
+        let half = render(&gpu, &mut c, &doc, Time::ZERO, 0.5);
+        // Box-downsample the full frame and compare.
+        let mut sq = 0.0f64;
+        for y in 0..half.height {
+            for x in 0..half.width {
+                let h = pixel(&half, x, y);
+                for (ch, hv) in h.iter().take(3).enumerate() {
+                    let avg = (0..4)
+                        .map(|k| f64::from(pixel(&full, 2 * x + k % 2, 2 * y + k / 2)[ch]))
+                        .sum::<f64>()
+                        / 4.0;
+                    sq += (avg - f64::from(*hv)).powi(2);
+                }
+            }
+        }
+        let mse = sq / f64::from(half.width * half.height * 3);
+        let psnr = 10.0 * (255.0f64 * 255.0 / mse.max(1e-9)).log10();
+        assert!(psnr > 32.0, "PSNR {psnr:.1} dB");
+    }
+
+    #[test]
+    fn the_largest_radius_renders() {
+        let Some(gpu) = gpu() else { return };
+        let mut c = Compositor::new(&gpu.device);
+        let (doc, _) = blurred(ids::GAUSSIAN_BLUR, &[("radius", Value::Scalar(1000.0))]);
+        let img = render(&gpu, &mut c, &doc, Time::ZERO, 0.25);
+        assert_eq!((img.width, img.height), (24, 16));
+    }
+}

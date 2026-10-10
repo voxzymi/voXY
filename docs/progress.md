@@ -139,7 +139,18 @@ at `743b053` (merge of #3).
         2/255 (1/255 observed).
       - Golden `blend_modes`.
       - The draw's blend mode is part of the plan key.
-   3. The blurs (gaussian, box, directional), with goldens and the ROI test.
+   3. **Done:** the blurs. Gaussian and box share `convolve.wgsl`
+      (separable, CPU `f64` weights via `libm`, up to 1023 taps per side);
+      directional is `directional.wgsl`. Kernels can now take several
+      passes, and each pass carries its own weights. The RoD grows by the
+      reach unless Repeat Edge Pixels is on.
+      - Tests: weights normalized and finite over the range; region rules;
+        preview-scale parameters; the ROI test (a large blur spreads past
+        the layer edge, and repeated edges stay inside); the half-resolution
+        look matches full resolution (PSNR above 32 dB); radius 1000
+        renders; two compositors give identical frames.
+      - Four goldens: `effect_blur_gaussian`, `effect_blur_box`,
+        `effect_blur_directional` and `effect_blur_repeat_edges`.
    4. The colour basics (brightness/contrast, exposure, invert, tint,
       hue/saturation), with goldens.
    5. Determinism and cache tests, and `docs/effects.md` for group 1.

@@ -86,8 +86,8 @@ fn a_layer_with_effects_becomes_a_chain() {
 #[test]
 fn effects_without_kernels_and_placeholders_pass_through() {
     let (mut doc, comp, layer) = doc();
-    // No kernel for the gaussian blur yet (E-B step 3).
-    add(&mut doc, layer, ids::GAUSSIAN_BLUR);
+    // No kernels for exposure and tint yet (E-B step 4).
+    add(&mut doc, layer, ids::EXPOSURE);
     add(&mut doc, layer, ids::TINT);
     doc.layer_mut(layer).unwrap().effects[1].mark_missing(MissingReason::UnknownType);
     let p = plan(&doc, comp, Time::ZERO, 1.0);
@@ -146,4 +146,123 @@ fn per_pixel_kernels_keep_regions() {
     let chain = [(Kernel::Invert, fx), (Kernel::Invert, fx)];
     assert_eq!(chain_rod(&chain, r, 1.0), r);
     assert_eq!(chain_roi(&chain, r, 1.0), r);
+}
+
+mod blur_rules {
+    use std::sync::Arc;
+
+    use voxy_core::glam::DVec2;
+    use voxy_core::{EffectId, EffectTypeId, EvaluatedEffect, Value};
+    use voxy_render::kernels::{Kernel, MAX_TAPS, Rect, box_weights, gaussian_weights};
+
+    fn fx(id: &str, params: &[(&str, Value)]) -> EvaluatedEffect {
+        EvaluatedEffect {
+            id: EffectId(1),
+            type_id: EffectTypeId::new(id),
+            version: 1,
+            params: params
+                .iter()
+                .map(|(n, v)| (Arc::from(*n), v.clone()))
+                .collect(),
+            matte: None,
+            frame: 0,
+        }
+    }
+
+    #[test]
+    fn weights_are_normalized_and_finite_across_the_range() {
+        for r in [
+            0.0,
+            0.1,
+            0.5,
+            1.0,
+            2.5,
+            10.0,
+            99.9,
+            400.0,
+            1000.0,
+            5000.0,
+            f64::NAN,
+        ] {
+            let w = gaussian_weights(r);
+            assert!(w.len() <= MAX_TAPS + 1);
+            assert!(w.iter().all(|v| v.is_finite() && *v >= 0.0), "{r}");
+            let total = f64::from(w[0]) + 2.0 * w[1..].iter().map(|v| f64::from(*v)).sum::<f64>();
+            assert!((total - 1.0).abs() < 1e-4, "{r}: {total}");
+            // Monotone falloff from the centre.
+            assert!(w.windows(2).all(|p| p[0] >= p[1]), "{r}");
+        }
+        for t in [0, 1, 7, 2000] {
+            let w = box_weights(t);
+            let total = f64::from(w[0]) + 2.0 * w[1..].iter().map(|v| f64::from(*v)).sum::<f64>();
+            assert!((total - 1.0).abs() < 1e-4);
+        }
+    }
+
+    #[test]
+    #[allow(clippy::many_single_char_names)] // r, g, h, b, d read best short here.
+    fn blurs_grow_their_region_unless_edges_repeat() {
+        let r = Rect::of_size(DVec2::new(40.0, 20.0));
+        let g = fx(
+            voxy_core::registry::ids::GAUSSIAN_BLUR,
+            &[
+                ("radius", Value::Scalar(10.0)),
+                ("dimensions", Value::Enum(0)),
+                ("repeat_edges", Value::Bool(false)),
+            ],
+        );
+        let rod = Kernel::GaussianBlur.rod(&g, r, 1.0);
+        assert_eq!(rod, r.pad(DVec2::splat(11.0)));
+        // Horizontal only grows in x.
+        let mut h = g.clone();
+        h.params[1].1 = Value::Enum(1);
+        assert_eq!(
+            Kernel::GaussianBlur.rod(&h, r, 1.0),
+            r.pad(DVec2::new(11.0, 0.0))
+        );
+        // Repeat edge pixels keeps the output inside the input.
+        let mut rep = g.clone();
+        rep.params[2].1 = Value::Bool(true);
+        assert_eq!(Kernel::GaussianBlur.rod(&rep, r, 1.0), r);
+        // Box blur: each pass adds its radius to the reach.
+        let b = fx(
+            voxy_core::registry::ids::BOX_BLUR,
+            &[("radius", Value::Scalar(4.0)), ("passes", Value::Int(3))],
+        );
+        assert_eq!(Kernel::BoxBlur.rod(&b, r, 1.0), r.pad(DVec2::splat(13.0)));
+        assert_eq!(Kernel::BoxBlur.passes(&b, 1.0).len(), 6);
+        // Directional: along its angle only.
+        let d = fx(
+            voxy_core::registry::ids::DIRECTIONAL_BLUR,
+            &[
+                ("direction", Value::Scalar(90.0)),
+                ("length", Value::Scalar(20.0)),
+            ],
+        );
+        let rod = Kernel::DirectionalBlur.rod(&d, r, 1.0);
+        assert!(
+            (rod.min.x - 0.0).abs() < 1e-9 && (rod.min.y + 11.0).abs() < 1e-9,
+            "{rod:?}"
+        );
+        // Zero radius or length: no passes at all.
+        let none = fx(
+            voxy_core::registry::ids::GAUSSIAN_BLUR,
+            &[("radius", Value::Scalar(0.0))],
+        );
+        assert_eq!(Kernel::GaussianBlur.passes(&none, 1.0).len(), 0);
+    }
+
+    #[test]
+    fn pixel_parameters_follow_the_preview_scale() {
+        let g = fx(
+            voxy_core::registry::ids::GAUSSIAN_BLUR,
+            &[("radius", Value::Scalar(20.0))],
+        );
+        let full = &Kernel::GaussianBlur.passes(&g, 1.0)[0];
+        let half = &Kernel::GaussianBlur.passes(&g, 0.5)[0];
+        assert_eq!(full.i[1], 20);
+        assert_eq!(half.i[1], 10);
+        assert_eq!(full.w, gaussian_weights(20.0));
+        assert_eq!(half.w, gaussian_weights(10.0));
+    }
 }

@@ -17,6 +17,7 @@ voxy-media.workspace = true
 voxy-vector.workspace = true
 bytemuck.workspace = true
 glam.workspace = true
+libm.workspace = true
 pollster.workspace = true
 thiserror.workspace = true
 tracing.workspace = true

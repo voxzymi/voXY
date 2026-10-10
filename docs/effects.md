@@ -23,6 +23,65 @@ is the specification of the WGSL kernels in
 - **Version:** every entry gives the definition version the formula belongs
   to. A changed formula means a new version (design §1.3).
 
+## Blur
+
+### Gaussian Blur (`voxy.blur.gaussian`, v1)
+
+| Parameter | Type | Range | Default |
+|---|---|---|---|
+| Blurriness (`radius`) | scalar, layer px | 0–1000 (slider 0–100) | 10 |
+| Blur Dimensions (`dimensions`) | enum: Horizontal and Vertical, Horizontal, Vertical | — | both |
+| Repeat Edge Pixels (`repeat_edges`) | bool | — | off |
+
+- **Space:** working.
+- **Formula:** a separable gaussian, one pass per selected axis.
+  - `σ = r·s / 3` texels, where `r` is the radius and `s` the preview
+    scale.
+  - Taps `k = −K..K` with `K = ceil(3σ)`, capped at 1023.
+  - Weights `exp(−k² / 2σ²)`, normalized to sum to 1.
+  - The weights are computed on the CPU in `f64` with `libm` and uploaded
+    as `f32`, so they are identical on every platform.
+  - Computed on premultiplied values, so transparent pixels never bleed
+    colour.
+  - `σ ≤ 0.25` texels (a radius below about 0.75 px) does nothing.
+- **Edges:** off, pixels past the input are transparent and the blur
+  spreads outward. On, the edge pixels repeat and the output stays inside
+  the input.
+- **Regions:** off, RoD = input padded by `r + 1` px on each blurred axis,
+  and ROI = output padded the same way. On, RoD = input.
+
+### Box Blur (`voxy.blur.box`, v1)
+
+| Parameter | Type | Range | Default |
+|---|---|---|---|
+| Blur Radius (`radius`) | scalar, layer px | 0–1000 (slider 0–50) | 5 |
+| Passes (`passes`) | int | 1–5 | 1 |
+| Blur Dimensions (`dimensions`) | enum, as above | — | both |
+| Repeat Edge Pixels (`repeat_edges`) | bool | — | off |
+
+- **Space:** working.
+- **Formula:** the same separable pass as the gaussian, with equal weights
+  over `2K + 1` texels, where `K = round(r·s)`. It is repeated `passes`
+  times, and three passes look nearly gaussian. Because `K` is a whole
+  number of texels, the look is approximate at reduced preview resolution.
+- **Regions:** RoD = input padded by `r·passes + 1` px on each blurred axis
+  (none with repeated edges). ROI is the same padding.
+
+### Directional Blur (`voxy.blur.directional`, v1)
+
+| Parameter | Type | Range | Default |
+|---|---|---|---|
+| Direction (`direction`) | angle, degrees | any (slider ±180) | 0 |
+| Blur Length (`length`) | scalar, layer px | 0–2000 (slider 0–200) | 10 |
+
+- **Space:** working.
+- **Formula:** the average of `N` bilinear samples along the line through
+  the pixel at the given angle, where `N` is `ceil(L·s)` rounded up to odd
+  and `L` is the length. The samples are spaced evenly from `−L/2` to
+  `+L/2`. 0° is horizontal, and positive angles turn clockwise on screen.
+- **Regions:** RoD = input padded by `(|cos θ|, |sin θ|)·(L/2 + 1)` px, and
+  ROI is the same.
+
 ## Color
 
 ### Invert (`voxy.color.invert`, v1)

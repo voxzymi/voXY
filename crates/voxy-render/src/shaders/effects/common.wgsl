@@ -14,10 +14,13 @@ struct EffectUniform {
     p2: vec4<f32>,
     p3: vec4<f32>,
     i0: vec4<u32>,
+    // Convolution weights, centre first: weight k is w[k / 4][k % 4].
+    w: array<vec4<f32>, 256>,
 };
 
 @group(0) @binding(0) var<uniform> fx: EffectUniform;
 @group(1) @binding(0) var src: texture_2d<f32>;
+@group(1) @binding(1) var src_sampler: sampler;
 
 @vertex
 fn vs_main(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
@@ -31,6 +34,16 @@ fn load(p: vec2<i32>) -> vec4<f32> {
         return vec4<f32>(0.0);
     }
     return textureLoad(src, p, 0);
+}
+
+// The input texel at `p`, clamped to the buffer (edge pixels repeat).
+fn load_clamped(p: vec2<i32>) -> vec4<f32> {
+    let size = vec2<i32>(textureDimensions(src));
+    return textureLoad(src, clamp(p, vec2<i32>(0), size - vec2<i32>(1)), 0);
+}
+
+fn weight(k: u32) -> f32 {
+    return fx.w[k / 4u][k % 4u];
 }
 
 // Straight colour of a premultiplied texel (zero where alpha is zero).
