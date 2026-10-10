@@ -22,24 +22,29 @@ at `743b053` (merge of #3).
   | Project format | 0.6.0. A file is written as 0.6.0 only when it uses parametric easings. |
   | CI | Linux x64, Windows x64, macOS arm64, macOS x64. GPU golden tests run on Linux (lavapipe). There are cargo-deny and license-list checks. |
 
+- **Step 1: design note** `docs/design-effects-ofx.md` written (draft).
+
 ## Next, in order
 
-1. Answers on the missing pieces (see the open questions).
-2. Design note `docs/design-effects-ofx.md`, then stop for approval.
-3. P-0: plugin research and shortlist in `docs/ofx-plugins.md`, the credits
+1. Owner approval of the design note and decisions D1 to D8 (its §11).
+2. P-0: plugin research and shortlist in `docs/ofx-plugins.md`, the credits
    TOML, and README/LICENSING scaffolding, then stop for approval.
-4. E-A, E-B, E-C, then E-D, then O-A to O-D.
+3. E-A, E-B, E-C, then E-D, then O-A to O-D.
 
 ## Approved decisions
 
 - Taken over from earlier work: an out-of-process sandbox with one helper
   process per plugin bundle (design proposal Q3), and bindgen output checked
   into `voxy-ofx-sys` with headers vendored from a pinned tag.
+- Step 0: effects get an optional effect-matte reference only. Layer masks
+  and track mattes stay a later milestone, with a reserved slot in the render
+  order.
+- Step 0: add `Value::Layer` for layer-reference parameters.
 
 ## Open questions waiting on the owner
 
-- Masks and mattes do not exist yet, and neither does a layer-reference value
-  type. How should effects relate to them? (Asked in the session.)
+- Approval of `docs/design-effects-ofx.md`, including decisions D1 to D8
+  (§11 of that file).
 
 ## Verified only on Linux
 
