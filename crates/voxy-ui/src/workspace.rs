@@ -43,6 +43,10 @@ pub struct CompTab {
     pub trail: Vec<TabView>,
     /// The view while the tab is not the active one.
     pub saved: TabView,
+    /// "Link playhead" (design §7.2, §13 Q5): going up the breadcrumb takes
+    /// the parent's playhead to the time that shows what the child's playhead
+    /// shows, when the mapping can be inverted. Off by default; per tab.
+    pub link_playhead: bool,
 }
 
 impl CompTab {
@@ -54,6 +58,7 @@ impl CompTab {
             }],
             trail: Vec::new(),
             saved: TabView::default(),
+            link_playhead: false,
         }
     }
 
@@ -114,6 +119,7 @@ impl Workspace {
                     time: t.time,
                     ..TabView::default()
                 },
+                link_playhead: false,
             });
         }
         w.active = active

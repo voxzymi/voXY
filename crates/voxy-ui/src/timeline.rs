@@ -331,6 +331,35 @@ fn ruler(ui: &mut Ui, state: &mut EditorState, duration: Time, cx: Cx) {
         );
     }
 
+    // Entered through a precomp layer: shade the child times that layer
+    // never shows, with a tick where its range starts and ends (§7.3).
+    if let Some(crate::nav_time::ChildRange::Bounded { first, last }) = state.active_child_range() {
+        let shade = Color32::from_black_alpha(90);
+        let (x0, x1) = (cx.axis.x(first), cx.axis.x(last));
+        if x0 > lane.left() {
+            lane_painter.rect_filled(
+                Rect::from_min_max(lane.min, pos2(x0.min(lane.right()), lane.bottom())),
+                0.0,
+                shade,
+            );
+        }
+        if x1 < lane.right() {
+            lane_painter.rect_filled(
+                Rect::from_min_max(pos2(x1.max(lane.left()), lane.top()), lane.max),
+                0.0,
+                shade,
+            );
+        }
+        for x in [x0, x1] {
+            if x >= lane.left() && x <= lane.right() {
+                lane_painter.line_segment(
+                    [pos2(x, rect.top()), pos2(x, rect.bottom())],
+                    Stroke::new(1.0, ACCENT),
+                );
+            }
+        }
+    }
+
     // Tick spacing: the smallest "nice" step at least 70 px wide.
     let frame = 1.0 / cx.rate.as_f64();
     let step = [

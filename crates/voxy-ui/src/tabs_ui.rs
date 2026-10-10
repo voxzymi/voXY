@@ -41,6 +41,7 @@ struct Request {
     switch: Option<usize>,
     close: Option<usize>,
     crumb: Option<usize>,
+    link: Option<bool>,
 }
 
 /// Draws the tabs and, when the active tab has navigated into precomps, the
@@ -82,7 +83,20 @@ pub fn show(ui: &mut Ui, state: &mut EditorState) {
         .filter(|t| t.path.len() > 1)
     {
         let last = tab.path.len() - 1;
+        let linked = tab.link_playhead;
         ui.horizontal(|ui| {
+            let mut on = linked;
+            if ui
+                .checkbox(&mut on, "Link playhead")
+                .on_hover_text(
+                    "Going up takes the parent's playhead to the time that shows what \
+                     this one shows (when the layer's timing can be inverted)",
+                )
+                .changed()
+            {
+                req.link = Some(on);
+            }
+            ui.separator();
             ui.weak("In:");
             for (n, crumb) in crumb_plan(tab.path.len()).into_iter().enumerate() {
                 if n > 0 {
@@ -112,6 +126,9 @@ pub fn show(ui: &mut Ui, state: &mut EditorState) {
         });
     }
     // Apply after drawing: the workspace was borrowed above.
+    if let Some(on) = req.link {
+        state.set_link_playhead(on);
+    }
     if let Some(i) = req.close {
         state.close_tab(i);
     } else if let Some(i) = req.switch {

@@ -380,9 +380,72 @@ impl EditorState {
         }
     }
 
-    /// Goes to entry `index` of the active tab's breadcrumb.
+    /// The precomp layers the active tab came in through, innermost first,
+    /// each with the composition it sits in: `(layer, parent comp)`.
+    fn entry_layers(&self) -> Vec<(LayerId, CompId)> {
+        let Some(tab) = self
+            .workspace
+            .active
+            .and_then(|i| self.workspace.tabs.get(i))
+        else {
+            return Vec::new();
+        };
+        (1..tab.path.len())
+            .rev()
+            .filter_map(|i| Some((tab.path[i].via_layer?, tab.path[i - 1].comp)))
+            .collect()
+    }
+
+    /// The child times the active tab's entry layer shows, for shading the
+    /// ruler (§7.3). `None` when the tab was not entered through a layer.
+    pub fn active_child_range(&self) -> Option<crate::nav_time::ChildRange> {
+        let (layer, parent) = *self.entry_layers().first()?;
+        let doc = self.history.current();
+        let l = doc.comp(parent)?.layer(layer)?;
+        let child = doc.comp(self.comp_id()?)?;
+        crate::nav_time::child_range(l, child.duration, doc.comp(parent)?.frame_rate)
+    }
+
+    /// Turns "Link playhead" on or off for the active tab.
+    pub fn set_link_playhead(&mut self, on: bool) {
+        if let Some(tab) = self
+            .workspace
+            .active
+            .and_then(|i| self.workspace.tabs.get_mut(i))
+        {
+            tab.link_playhead = on;
+        }
+    }
+
+    pub fn link_playhead(&self) -> bool {
+        self.workspace
+            .active
+            .and_then(|i| self.workspace.tabs.get(i))
+            .is_some_and(|t| t.link_playhead)
+    }
+
+    /// Goes to entry `index` of the active tab's breadcrumb. With the tab's
+    /// playhead linked, the parent's playhead moves to the time that shows
+    /// what the child's shows now, step by step up the path, as far as every
+    /// mapping can be inverted.
     pub fn go_to_crumb(&mut self, index: usize) {
-        if let Some(view) = self.change_workspace(|w| w.go_to_crumb(index)) {
+        let linked_time = self.link_playhead().then(|| {
+            let doc = self.history.current();
+            let steps = self.entry_layers();
+            let up = steps.len().saturating_sub(index.min(steps.len()));
+            // The innermost `up` steps are crossed.
+            steps
+                .iter()
+                .take(up)
+                .try_fold(self.time, |t, (layer, parent)| {
+                    let l = doc.comp(*parent)?.layer(*layer)?;
+                    crate::nav_time::parent_time_of(l, t)
+                })
+        });
+        if let Some(mut view) = self.change_workspace(|w| w.go_to_crumb(index)) {
+            if let Some(Some(t)) = linked_time {
+                view.time = t;
+            }
             self.load_live(view);
         }
     }
@@ -3078,5 +3141,91 @@ mod tests {
         let mut gone = EditorState::new(Document::empty("x"));
         gone.open_path(&stale);
         assert!(gone.comp_id().is_none() && gone.workspace.tabs.is_empty());
+    }
+
+    #[test]
+    fn a_linked_playhead_takes_the_parent_to_the_matching_time_when_going_up() {
+        let (mut s, c) = tabs_state(&["Parent", "Child"]);
+        let l = nest(&mut s, c[0], c[1]);
+        s.history
+            .execute(voxy_core::command::SetLayerTiming {
+                layer: l,
+                in_point: Time::from_secs(2),
+                out_point: Time::from_secs(8),
+                start_offset: Time::from_millis(500),
+            })
+            .expect("test setup");
+        s.history
+            .execute(voxy_core::command::SetPrecompTiming {
+                layer: l,
+                speed: 2.0,
+                looping: false,
+                time_remap: false,
+            })
+            .expect("test setup");
+        s.open_comp(c[0]);
+        s.time = Time::from_secs(3);
+        s.navigate_into_layer(l);
+        // Not linked (the default): the parent comes back as it was.
+        s.time = Time::from_millis(4500);
+        s.go_to_crumb(0);
+        assert_eq!(s.time, Time::from_secs(3));
+        // Linked: child 4.5 s is parent 2 + (4.5 - 0.5) / 2 = 4 s.
+        s.navigate_into_layer(l);
+        s.set_link_playhead(true);
+        assert!(s.link_playhead());
+        s.time = Time::from_millis(4500);
+        s.go_to_crumb(0);
+        assert_eq!(s.time, Time::from_secs(4));
+        // A remap cannot be inverted: the parent keeps its own time.
+        s.history
+            .execute(voxy_core::command::SetPrecompTiming {
+                layer: l,
+                speed: 1.0,
+                looping: false,
+                time_remap: true,
+            })
+            .expect("test setup");
+        s.time = Time::from_secs(5);
+        s.navigate_into_layer(l);
+        s.set_link_playhead(true);
+        s.time = Time::from_secs(1);
+        s.go_to_crumb(0);
+        assert_eq!(s.time, Time::from_secs(5), "not invertible: unchanged");
+    }
+
+    #[test]
+    fn the_child_tab_knows_which_times_its_layer_shows() {
+        let (mut s, c) = tabs_state(&["Parent", "Child"]);
+        let l = nest(&mut s, c[0], c[1]);
+        s.history
+            .execute(voxy_core::command::SetLayerTiming {
+                layer: l,
+                in_point: Time::from_secs(1),
+                out_point: Time::from_secs(3),
+                start_offset: Time::from_secs(4),
+            })
+            .expect("test setup");
+        s.open_comp(c[0]);
+        assert!(
+            s.active_child_range().is_none(),
+            "the parent was not entered through a layer"
+        );
+        s.time = Time::from_secs(1);
+        s.navigate_into_layer(l);
+        let Some(crate::nav_time::ChildRange::Bounded { first, last }) = s.active_child_range()
+        else {
+            panic!("expected a bounded range")
+        };
+        assert_eq!(first, Time::from_secs(4));
+        assert!(
+            last > Time::from_secs(5) && last < Time::from_secs(6),
+            "{last:?}"
+        );
+        // Opened from the Project panel (a fresh tab, no layer): no shading.
+        s.go_to_crumb(0);
+        s.close_tab(0);
+        s.open_comp(c[1]);
+        assert!(s.active_child_range().is_none());
     }
 }

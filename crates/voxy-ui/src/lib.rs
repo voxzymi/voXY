@@ -18,6 +18,7 @@ mod graph_editor;
 mod layout;
 mod media;
 mod menu;
+mod nav_time;
 mod panels;
 mod prefs;
 mod project_panel;

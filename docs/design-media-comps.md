@@ -924,6 +924,17 @@ What landed in `voxy-core`, and where it refines the design above.
   list means every tab was closed; unreadable entries drop one by one and
   tabs for compositions that no longer exist are dropped. No format version
   change (the section is read per field and ignored by older builds).
-- **Not yet** (tracked in `deferred.md`): linked playheads, the parent-time
-  indicator and the parent backdrop (§7.2, §7.3, §7.5), and viewport
-  double-click (needs hit testing).
+- **Parent-time indicator (§7.3)** (`nav_time::child_range`). In a tab entered
+  through a precomp layer the ruler shades the child times that layer never
+  shows, with a tick where its range starts and ends. The range is found by
+  sampling `child_time` on the parent's frames (at most 4000 samples, ends
+  included), so remaps are followed; a loop that wraps shades nothing.
+- **Linked playhead (§7.2, Q5)**: a per-tab toggle next to the breadcrumb,
+  off by default and not saved. With it on, going up takes the parent's
+  playhead to the time that shows what the child's shows, one step at a time
+  up the path. The mapping is invertible only without a remap or loop and
+  with a speed that is not zero; otherwise the parent keeps its own time.
+  (Only one tab is visible at a time, so "scrubbing the parent drives the
+  child" is the entry mapping the tab already does when navigating in.)
+- **Not yet** (tracked in `deferred.md`): the parent backdrop (§7.5) and
+  viewport double-click (needs hit testing).
