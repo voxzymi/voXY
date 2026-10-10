@@ -10,13 +10,13 @@
 //! are one transaction, so one undo removes all of it.
 
 use std::fmt::Write as _;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use egui::{Align, ComboBox, Context, Id, Key, Layout, Modal, RadioButton, Ui};
-use voxy_core::command::{AddAssetLayer, CreateComposition, ImportAssets};
-use voxy_core::{Asset, AssetId, CommandReport, CompId, CompSettings, FrameRate, Time};
+use voxy_core::command::{DropItem, DropItems, DropTarget, Placement, Plan, resolve_drop};
+use voxy_core::{Asset, AssetId, FrameRate, Time};
 
-use crate::state::{EditorState, next_name};
+use crate::state::EditorState;
 
 /// What a composition takes from a footage item.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -53,36 +53,6 @@ pub fn all_agree(assets: &[Asset]) -> bool {
     assets
         .windows(2)
         .all(|w| Spec::of(&w[0]) == Spec::of(&w[1]))
-}
-
-/// The composition settings for `asset`: its size, rate and duration over the
-/// project's defaults. A still has no rate or duration, so it keeps the
-/// defaults'.
-pub fn settings_for(
-    asset: &Asset,
-    defaults: &CompSettings,
-    name: String,
-) -> Result<CompSettings, String> {
-    let spec = Spec::of(asset);
-    if spec.size[0] == 0 || spec.size[1] == 0 {
-        return Err(format!("{}: its size is unknown", asset.name));
-    }
-    Ok(CompSettings {
-        name,
-        width: spec.size[0],
-        height: spec.size[1],
-        frame_rate: spec.rate.unwrap_or(defaults.frame_rate),
-        duration: spec.duration.unwrap_or(defaults.duration),
-        ..defaults.clone()
-    })
-}
-
-/// "clip.mov" -> "clip"
-fn stem(name: &str) -> &str {
-    Path::new(name)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or(name)
 }
 
 /// One input: an asset already in the project, or a probed file that the
@@ -177,14 +147,6 @@ impl EditorState {
     /// Makes the composition now, or asks first when the items differ.
     fn begin_from_footage(&mut self, entries: Vec<Entry>) {
         let assets: Vec<Asset> = entries.iter().map(|e| e.asset().clone()).collect();
-        if assets.iter().any(|a| Spec::of(a).size == [0, 0]) {
-            let bad = assets
-                .iter()
-                .find(|a| Spec::of(a).size == [0, 0])
-                .map_or_else(String::new, |a| a.name.clone());
-            self.error(format!("{bad}: its size is unknown"));
-            return;
-        }
         if all_agree(&assets) {
             self.finish_from_footage(&entries, 0, false);
         } else {
@@ -206,104 +168,46 @@ impl EditorState {
         }
     }
 
-    /// Import, create and place as one undo step. On any failure nothing
-    /// changes.
+    /// Import, create and place as one undo step (`DropItems` onto "nowhere").
+    /// Nothing changes if the drop is blocked or anything fails.
     fn finish_from_footage(&mut self, entries: &[Entry], source: usize, per_item: bool) {
-        let doc = self.history.current().clone();
-        let defaults = doc.meta.settings.new_comp.clone();
+        let items: Vec<DropItem> = entries
+            .iter()
+            .map(|e| match e {
+                Entry::Existing(id, _) => DropItem::Asset(*id),
+                Entry::New(a) => DropItem::File(a.clone()),
+            })
+            .collect();
+        let target = DropTarget::NewComp { per_item, source };
+        if let Plan::Blocked(why) = resolve_drop(
+            self.history.current(),
+            &target,
+            &items,
+            Placement::default(),
+        ) {
+            self.error(why);
+            return;
+        }
         let folder = self.target_folder();
-        self.history.begin("New Composition From Footage");
-        let mut report = CommandReport::default();
-
-        let new_assets: Vec<Asset> = entries
-            .iter()
-            .filter_map(|e| match e {
-                Entry::New(a) => Some(a.clone()),
-                Entry::Existing(..) => None,
-            })
-            .collect();
-        let mut imported = Vec::new();
-        if !new_assets.is_empty() {
-            match self.history.execute_reported(ImportAssets {
-                assets: new_assets,
-                folder,
-            }) {
-                Ok(r) => {
-                    imported.clone_from(&r.created_assets);
-                    report.created_assets = r.created_assets;
-                }
-                Err(e) => return self.fail_footage(&e.to_string()),
-            }
-        }
-        let mut imported = imported.into_iter();
-        let ids: Vec<AssetId> = entries
-            .iter()
-            .filter_map(|e| match e {
-                Entry::Existing(id, _) => Some(*id),
-                Entry::New(_) => imported.next(),
-            })
-            .collect();
-        if ids.len() != entries.len() {
-            return self.fail_footage("the import did not add every file");
-        }
-
-        let groups: Vec<(usize, Vec<AssetId>)> = if per_item {
-            ids.iter()
-                .enumerate()
-                .map(|(i, &id)| (i, vec![id]))
-                .collect()
-        } else {
-            vec![(source.min(ids.len() - 1), ids.clone())]
+        let Some(report) = self.execute_reported(DropItems {
+            target,
+            items,
+            placement: Placement::default(),
+            folder,
+        }) else {
+            return;
         };
-        let mut taken: Vec<String> = doc.comps.values().map(|c| c.name.clone()).collect();
-        for (from, group) in groups {
-            let asset = entries[from].asset();
-            let base = stem(&asset.name).to_owned();
-            let name = if taken.contains(&base) {
-                next_name(&base, |n| taken.iter().any(|t| t == n))
-            } else {
-                base
-            };
-            taken.push(name.clone());
-            let settings = match settings_for(asset, &defaults, name) {
-                Ok(s) => s,
-                Err(e) => return self.fail_footage(&e),
-            };
-            let comp = match self
-                .history
-                .execute_reported(CreateComposition { settings, folder })
-            {
-                Ok(r) => match r.created_comps.first() {
-                    Some(&c) => c,
-                    None => return self.fail_footage("no composition was created"),
-                },
-                Err(e) => return self.fail_footage(&e.to_string()),
-            };
-            report.created_comps.push(comp);
-            for (index, asset) in group.into_iter().enumerate() {
-                if let Err(e) = self.history.execute(AddAssetLayer { comp, asset, index }) {
-                    return self.fail_footage(&e.to_string());
-                }
-            }
-        }
-        self.history.commit();
         self.project.missing.invalidate();
-        let first: Option<CompId> = report.created_comps.first().copied();
-        let count = report.created_comps.len();
         self.show_created(&report);
-        if let Some(c) = first {
-            self.open_comp(c);
+        let count = report.created_comps.len();
+        if let Some(&first) = report.created_comps.first() {
+            self.open_comp(first);
         }
         self.info(if count == 1 {
             "Created a composition from the footage".to_owned()
         } else {
             format!("Created {count} compositions from the footage")
         });
-    }
-
-    fn fail_footage(&mut self, why: &str) {
-        self.history.rollback();
-        self.error(format!("Could not create a composition: {why}"));
     }
 }
 
@@ -385,6 +289,8 @@ fn buttons(ui: &mut Ui, ok: &mut bool, cancel: &mut bool) {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::*;
     use voxy_core::AssetKind;
 
@@ -402,31 +308,6 @@ mod tests {
             pixel_size: Some([w, h]),
             ..Asset::new(AssetKind::Image, name.to_owned(), name.to_owned())
         }
-    }
-
-    #[test]
-    fn a_video_gives_its_size_rate_and_duration() {
-        let defaults = CompSettings::default();
-        let s = settings_for(&video("a.mov", 640, 360, 25, 7), &defaults, "a".into()).unwrap();
-        assert_eq!((s.width, s.height), (640, 360));
-        assert_eq!(s.frame_rate, FrameRate::new(25, 1).unwrap());
-        assert_eq!(s.duration, Time::from_secs(7));
-        assert_eq!(s.background, defaults.background);
-    }
-
-    #[test]
-    fn a_still_keeps_the_project_rate_and_duration() {
-        let defaults = CompSettings::default();
-        let s = settings_for(&still("a.png", 100, 50), &defaults, "a".into()).unwrap();
-        assert_eq!((s.width, s.height), (100, 50));
-        assert_eq!(s.frame_rate, defaults.frame_rate);
-        assert_eq!(s.duration, defaults.duration);
-    }
-
-    #[test]
-    fn an_unknown_size_is_refused() {
-        let a = Asset::new(AssetKind::Image, "x.png".to_owned(), "x.png".to_owned());
-        assert!(settings_for(&a, &CompSettings::default(), "x".into()).is_err());
     }
 
     #[test]
@@ -450,14 +331,8 @@ mod tests {
         assert_eq!(Spec::of(&still("a.png", 4, 3)).describe(), "4×3");
     }
 
-    #[test]
-    fn a_name_loses_its_extension() {
-        assert_eq!(stem("clip.final.mov"), "clip.final");
-        assert_eq!(stem("plain"), "plain");
-    }
-
     use crate::dialogs::{Dialogs, NoDialogs};
-    use voxy_core::{Document, PoolItem};
+    use voxy_core::{CompSettings, Document, PoolItem};
 
     /// A picker that returns fixed files.
     #[derive(Debug)]
@@ -657,6 +532,6 @@ mod tests {
             .map(|c| c.name.clone())
             .collect();
         names.sort();
-        assert_eq!(names, ["pic", "pic 1"]);
+        assert_eq!(names, ["pic", "pic 2"]);
     }
 }

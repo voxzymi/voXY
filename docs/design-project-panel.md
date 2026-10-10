@@ -468,13 +468,11 @@ What landed, and where it refines the design above.
   composition takes the first item's name, numbered if taken. Unreadable
   files are skipped and named in the status line; nothing happens if none can
   be read.
-  - **Deviation from §4.3, to fold into Milestone D.** The design has one
-    `DropItems { target: NewComp }` command; that command does not exist yet,
-    so the UI builds the same result as one history transaction (import,
-    create, place) using a new core command, `AddAssetLayer` (a layer for an
-    asset already in the project; no format change). It is still one undo
-    step, covered by a test. When `DropItems` lands, this flow becomes a call
-    to it.
+  - **Built on `DropItems` (Milestone D).** The flow is one
+    `DropItems { target: NewComp { per_item, source } }` command: it imports
+    the files, creates the composition(s) and places the layers in a single
+    `apply`, so one undo reverts all of it (tested). Blocked drops show their
+    reason and change nothing.
   - Items are placed in the project's own asset order (the Project panel's
     display order is not available to the command layer yet).
 - **Not in P-C:** the Tip of the Day (P-D). The layout already reserves its

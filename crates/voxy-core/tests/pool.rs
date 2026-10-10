@@ -4,12 +4,12 @@
 #![allow(clippy::many_single_char_names)] // a, b, c, h, l, k read best short in these scenarios.
 
 use voxy_core::command::{
-    AddAssetLayer, AddImageLayer, AddSolidLayer, AddSourceLayer, AddVideoLayer, Anchor,
-    CreateComposition, CreateFolder, DuplicateComposition, ImportAssets, MoveToFolder,
-    PRECOMPS_FOLDER, PrecomposeLayers, PrecomposeMode, RemoveItems, RemoveMode, RenameComposition,
-    RenameFolder, RenameMedia, ReplaceLayerSource, ReplaceMedia, ResizeMode, SetAnimated,
-    SetCompositionSettings, SetLayerTiming, SetPrecompTiming, SetProperty, SetWorkArea,
-    UnprecomposeLayer, nearest_frame_time, off_grid, validate_name,
+    AddImageLayer, AddSolidLayer, AddSourceLayer, AddVideoLayer, Anchor, CreateComposition,
+    CreateFolder, DuplicateComposition, ImportAssets, MoveToFolder, PRECOMPS_FOLDER,
+    PrecomposeLayers, PrecomposeMode, RemoveItems, RemoveMode, RenameComposition, RenameFolder,
+    RenameMedia, ReplaceLayerSource, ReplaceMedia, ResizeMode, SetAnimated, SetCompositionSettings,
+    SetLayerTiming, SetPrecompTiming, SetProperty, SetWorkArea, UnprecomposeLayer,
+    nearest_frame_time, off_grid, validate_name,
 };
 use voxy_core::glam::DVec2;
 use voxy_core::{
@@ -1492,52 +1492,4 @@ fn precompose_files_the_new_composition_in_one_precomps_folder() {
         &start,
         "five steps: two pre-composes, rename, solid, pre-compose"
     );
-}
-
-#[test]
-fn an_asset_already_in_the_project_gets_a_layer_without_a_second_copy() {
-    let mut h = history();
-    let c = main_id(&h);
-    let (asset, _) = add_image(&mut h, c);
-    let assets_before = h.current().assets.iter().count();
-    let rev = h.revision();
-    h.execute(AddAssetLayer {
-        comp: c,
-        asset,
-        index: 0,
-    })
-    .unwrap();
-    assert_eq!(h.current().assets.iter().count(), assets_before);
-    let l = &comp(&h, c).layers[0];
-    assert_eq!(l.kind.asset(), Some(asset));
-    assert_eq!(l.out_point, comp(&h, c).duration, "a still lasts the comp");
-    h.undo();
-    assert_eq!(h.revision(), rev);
-    assert_eq!(comp(&h, c).layers.len(), 1);
-}
-
-#[test]
-fn a_layer_for_a_missing_asset_or_comp_is_refused_and_changes_nothing() {
-    let mut h = history();
-    let c = main_id(&h);
-    let (asset, _) = add_image(&mut h, c);
-    let rev = h.revision();
-    let missing_asset = AssetId::from(u64::MAX - 1);
-    assert!(
-        h.execute(AddAssetLayer {
-            comp: c,
-            asset: missing_asset,
-            index: 0
-        })
-        .is_err()
-    );
-    assert!(
-        h.execute(AddAssetLayer {
-            comp: CompId::from(u64::MAX - 1),
-            asset,
-            index: 0
-        })
-        .is_err()
-    );
-    assert_eq!(h.revision(), rev);
 }

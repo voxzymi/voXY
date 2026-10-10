@@ -1,9 +1,11 @@
 //! Commands: every edit to a document is one.
 
+mod dropping;
 mod pool;
 mod precomp;
 mod settings;
 
+pub use dropping::*;
 pub use pool::*;
 pub use precomp::*;
 pub use settings::*;
@@ -226,69 +228,22 @@ fn add_media_layer(
     asset: Asset,
     kind: impl FnOnce(crate::id::AssetId) -> LayerKind,
 ) -> Result<(), CommandError> {
-    if doc.comp(comp).is_none() {
-        return Err(CommandError::NotFound(comp.to_string()));
-    }
-    let asset = doc.add_asset(asset);
-    place_asset_layer(doc, comp, index, asset, kind)
-}
-
-/// Adds a layer of kind `kind(asset)` for an asset that is already in the
-/// project, at native size and centered. A video ends with its source or the
-/// composition, whichever comes first; a still lasts the whole composition.
-fn place_asset_layer(
-    doc: &mut Document,
-    comp: CompId,
-    index: usize,
-    asset: crate::id::AssetId,
-    kind: impl FnOnce(crate::id::AssetId) -> LayerKind,
-) -> Result<(), CommandError> {
     let c = doc
         .comp(comp)
         .ok_or_else(|| CommandError::NotFound(comp.to_string()))?;
-    let a = doc
-        .assets
-        .get(asset)
-        .ok_or_else(|| CommandError::NotFound(asset.to_string()))?;
     let center = DVec2::new(f64::from(c.width), f64::from(c.height)) / 2.0;
-    let duration = match a.duration {
+    let duration = match asset.duration {
         Some(d) if d > Time::ZERO => d.min(c.duration),
         _ => c.duration,
     };
-    let name = a.name.clone();
-    let [w, h] = a.pixel_size.unwrap_or([0, 0]);
+    let name = asset.name.clone();
+    let [w, h] = asset.pixel_size.unwrap_or([0, 0]);
+    let asset = doc.add_asset(asset);
     let id = doc.alloc_id();
     let media_center = DVec2::new(f64::from(w), f64::from(h)) / 2.0;
     let transform = Transform::new(&mut || doc.alloc_id(), media_center, center);
     let layer = new_layer(id, name, kind(asset), duration, transform);
     insert_layer(doc, comp, index, layer)
-}
-
-/// Adds a layer showing an asset that is already in the project. `index` 0
-/// puts it on top.
-#[derive(Debug, Clone)]
-pub struct AddAssetLayer {
-    pub comp: CompId,
-    pub asset: crate::id::AssetId,
-    pub index: usize,
-}
-
-impl Command for AddAssetLayer {
-    fn label(&self) -> Cow<'static, str> {
-        "Add Layer".into()
-    }
-
-    fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
-        let kind = doc
-            .assets
-            .get(self.asset)
-            .ok_or_else(|| CommandError::NotFound(self.asset.to_string()))?
-            .kind;
-        place_asset_layer(doc, self.comp, self.index, self.asset, |asset| match kind {
-            AssetKind::Image => LayerKind::Image { asset },
-            AssetKind::Video => LayerKind::Video { asset },
-        })
-    }
 }
 
 pub(crate) fn new_layer(
