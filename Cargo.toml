@@ -31,7 +31,7 @@ vello = "0.11.0"
 eframe = { version = "0.36.2", default-features = false }
 egui = "0.36.2"
 egui-wgpu = "0.36.2"
-egui_dock = "0.21.1"
+egui_dock = { version = "0.21.1", features = ["serde"] }
 
 # Pure-Rust sin/cos/exp: bit-identical on every platform (see voxy-core shapes).
 libm = "0.2.16"

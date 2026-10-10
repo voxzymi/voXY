@@ -111,7 +111,7 @@ pub(crate) fn source_duration(doc: &Document, s: SourceRef) -> Option<Time> {
     }
 }
 
-fn source_exists(doc: &Document, s: SourceRef) -> Result<(), CommandError> {
+pub(crate) fn source_exists(doc: &Document, s: SourceRef) -> Result<(), CommandError> {
     let found = match s {
         SourceRef::Asset(a) => doc.assets.get(a).is_some(),
         SourceRef::Comp(c) => doc.comp(c).is_some(),
@@ -682,16 +682,30 @@ impl Command for ReplaceLayerSource {
     fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
         source_exists(doc, self.source)?;
         for &id in &self.layers {
-            let (comp, layer) = doc.find_layer(id).ok_or_else(|| not_found(id))?;
-            check_nesting(doc, comp, self.source)?;
-            let kind = kind_for_source(doc, self.source, Some(&layer.kind));
-            comp_mut(doc, comp)?
-                .layer_mut(id)
-                .expect("found above")
-                .kind = kind;
+            replace_layer_source(doc, id, self.source)?;
         }
         Ok(())
     }
+}
+
+/// Makes layer `id` show `source`, keeping its name, timing, transform,
+/// keyframes and flags (a placeholder becomes a real layer again, precomp
+/// timing options carry over between precomps). Checks nesting. The one
+/// place this rule lives: the menu command and a drop onto a layer both call
+/// it.
+pub(crate) fn replace_layer_source(
+    doc: &mut Document,
+    id: LayerId,
+    source: SourceRef,
+) -> Result<(), CommandError> {
+    let (comp, layer) = doc.find_layer(id).ok_or_else(|| not_found(id))?;
+    check_nesting(doc, comp, source)?;
+    let kind = kind_for_source(doc, source, Some(&layer.kind));
+    comp_mut(doc, comp)?
+        .layer_mut(id)
+        .expect("found above")
+        .kind = kind;
+    Ok(())
 }
 
 /// Adds a layer showing a project item: centered, starting at `in_point`.
@@ -726,32 +740,75 @@ impl Command for AddSourceLayer {
         source_exists(doc, self.source)?;
         check_nesting(doc, self.comp, self.source)?;
         let c = doc.comp(self.comp).ok_or_else(|| not_found(self.comp))?;
-        let center = DVec2::new(f64::from(c.width), f64::from(c.height)) / 2.0;
-        let frame = c.frame_rate.frame_to_time(1);
-        let until_end = c.duration - self.in_point;
-        let length = match (source_duration(doc, self.source), self.source) {
-            (Some(d), _) => d,
-            (None, SourceRef::Asset(_)) => doc
-                .meta
-                .settings
-                .default_still_duration
-                .unwrap_or(until_end),
-            (None, SourceRef::Comp(_)) => until_end,
-        }
-        .max(frame);
-        let [w, h] = source_size(doc, self.source).unwrap_or([0, 0]);
-        let name = doc.source_name(self.source).unwrap_or_default().to_owned();
-        let kind = kind_for_source(doc, self.source, None);
-        let id: LayerId = doc.alloc_id();
-        let local_center = DVec2::new(f64::from(w), f64::from(h)) / 2.0;
-        let transform = Transform::new(&mut || doc.alloc_id(), local_center, center);
-        let mut layer = new_layer(id, name, kind, length, transform);
-        layer.in_point = self.in_point;
-        layer.out_point = self.in_point + length;
-        insert_layer(doc, self.comp, self.index, layer)?;
+        let length = source_layer_length(
+            source_duration(doc, self.source),
+            matches!(self.source, SourceRef::Asset(_)),
+            doc.meta.settings.default_still_duration,
+            c.duration - self.in_point,
+            c.frame_rate.frame_to_time(1),
+        );
+        let id = insert_source_layer(
+            doc,
+            self.comp,
+            self.source,
+            self.index,
+            self.in_point,
+            length,
+            None,
+        )?;
         report.created_layers.push(id);
         Ok(())
     }
+}
+
+/// How long a new layer for a source lasts. A time-based source uses its own
+/// duration (not trimmed at the composition end); a still uses the project's
+/// default still duration, or lasts until the composition ends; an unknown
+/// length lasts until the end. Never shorter than one frame.
+///
+/// `until_end` is the time left in the composition from the layer's in-point.
+/// This one function serves the command and the drop preview, so they agree.
+#[must_use]
+pub fn source_layer_length(
+    source_duration: Option<Time>,
+    is_asset: bool,
+    default_still: Option<Time>,
+    until_end: Time,
+    frame: Time,
+) -> Time {
+    match (source_duration, is_asset) {
+        (Some(d), _) => d,
+        (None, true) => default_still.unwrap_or(until_end),
+        (None, false) => until_end,
+    }
+    .max(frame)
+}
+
+/// Adds a layer for `source`, centered (or with its center at `position`),
+/// from `in_point` for `length`. Does not check nesting; callers do.
+pub(crate) fn insert_source_layer(
+    doc: &mut Document,
+    comp: CompId,
+    source: SourceRef,
+    index: usize,
+    in_point: Time,
+    length: Time,
+    position: Option<DVec2>,
+) -> Result<LayerId, CommandError> {
+    let c = doc.comp(comp).ok_or_else(|| not_found(comp))?;
+    let center =
+        position.unwrap_or_else(|| DVec2::new(f64::from(c.width), f64::from(c.height)) / 2.0);
+    let [w, h] = source_size(doc, source).unwrap_or([0, 0]);
+    let name = doc.source_name(source).unwrap_or_default().to_owned();
+    let kind = kind_for_source(doc, source, None);
+    let id: LayerId = doc.alloc_id();
+    let local_center = DVec2::new(f64::from(w), f64::from(h)) / 2.0;
+    let transform = Transform::new(&mut || doc.alloc_id(), local_center, center);
+    let mut layer = new_layer(id, name, kind, length, transform);
+    layer.in_point = in_point;
+    layer.out_point = in_point + length;
+    insert_layer(doc, comp, index, layer)?;
+    Ok(id)
 }
 
 /// A precomp layer's time options. Turning `time_remap` on adds keys at the

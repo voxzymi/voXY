@@ -1,9 +1,11 @@
 //! Commands: every edit to a document is one.
 
+mod dropping;
 mod pool;
 mod precomp;
 mod settings;
 
+pub use dropping::*;
 pub use pool::*;
 pub use precomp::*;
 pub use settings::*;

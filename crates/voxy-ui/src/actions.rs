@@ -66,14 +66,17 @@ pub struct ActionContext {
 pub enum Action {
     FileNewProject,
     FileNewComposition,
+    FileNewCompositionFromFootage,
     FileOpen,
     FileSave,
     FileSaveAs,
     FileImport,
     FileQuit,
     CompositionSettings,
+    CompositionGoToParent,
     EditUndo,
     EditRedo,
+    EditKeyboardShortcuts,
     SelectionClear,
     LayerNewSolid,
     LayerImportImage,
@@ -165,14 +168,17 @@ impl Action {
     pub const ALL: &'static [Action] = &[
         Action::FileNewProject,
         Action::FileNewComposition,
+        Action::FileNewCompositionFromFootage,
         Action::FileOpen,
         Action::FileSave,
         Action::FileSaveAs,
         Action::FileImport,
         Action::FileQuit,
         Action::CompositionSettings,
+        Action::CompositionGoToParent,
         Action::EditUndo,
         Action::EditRedo,
+        Action::EditKeyboardShortcuts,
         Action::SelectionClear,
         Action::LayerNewSolid,
         Action::LayerImportImage,
@@ -229,6 +235,13 @@ impl Action {
                     const { &[cmd(Key::N)] },
                 )
             },
+            Action::FileNewCompositionFromFootage => def(
+                "file.new_composition_from_footage",
+                "Composition From Footage…",
+                Nothing,
+                Global,
+                &[],
+            ),
             Action::FileOpen => ActionDef {
                 fires_while_typing: true,
                 ..def(
@@ -280,6 +293,14 @@ impl Action {
                     const { &[cmd(Key::Q)] },
                 )
             },
+            // Alt+Up conflicts with the window manager on some Linux desktops.
+            Action::CompositionGoToParent => def(
+                "composition.go_to_parent",
+                "Go to Parent Composition",
+                Composition,
+                Global,
+                const { &[cmd_shift(Key::ArrowUp)] },
+            ),
             Action::CompositionSettings => ActionDef {
                 fires_while_typing: true,
                 ..def(
@@ -303,6 +324,13 @@ impl Action {
                 Nothing,
                 Global,
                 const { &[cmd_shift(Key::Z), cmd(Key::Y)] },
+            ),
+            Action::EditKeyboardShortcuts => def(
+                "edit.keyboard_shortcuts",
+                "Keyboard Shortcuts…",
+                Nothing,
+                Global,
+                &[],
             ),
             Action::SelectionClear => def(
                 "selection.clear",
@@ -512,6 +540,45 @@ impl Action {
     }
 }
 
+/// The shortcut as saved in the preferences file: modifiers then the key,
+/// joined by `+` (`Ctrl+Shift+Z`, `Delete`). `Ctrl` is the platform's command
+/// key: Ctrl on Windows and Linux, Cmd on macOS.
+pub fn shortcut_to_text(s: KeyboardShortcut) -> String {
+    let m = s.modifiers;
+    let mut out = String::new();
+    for (on, name) in [(m.command, "Ctrl"), (m.alt, "Alt"), (m.shift, "Shift")] {
+        if on {
+            out.push_str(name);
+            out.push('+');
+        }
+    }
+    out.push_str(s.logical_key.name());
+    out
+}
+
+/// Reads [`shortcut_to_text`] back. Modifier names are case-insensitive and
+/// `Cmd`, `Command`, `Control` also mean the command key. Anything else
+/// (an unknown key or modifier, no key) is `None`.
+pub fn shortcut_from_text(text: &str) -> Option<KeyboardShortcut> {
+    let mut mods = Modifiers::NONE;
+    let mut parts: Vec<&str> = text.split('+').map(str::trim).collect();
+    // A saved "+" key is spelled "Plus", but accept "Ctrl++" too.
+    if text.trim_end().ends_with("++") || text.trim() == "+" {
+        parts.retain(|p| !p.is_empty());
+        parts.push("Plus");
+    }
+    let key_name = parts.pop()?;
+    for part in parts {
+        match part.to_ascii_lowercase().as_str() {
+            "ctrl" | "cmd" | "command" | "control" => mods = mods.plus(Modifiers::COMMAND),
+            "alt" | "option" => mods = mods.plus(Modifiers::ALT),
+            "shift" => mods = mods.plus(Modifiers::SHIFT),
+            _ => return None,
+        }
+    }
+    Some(KeyboardShortcut::new(mods, Key::from_name(key_name)?))
+}
+
 /// Two actions bound to the same shortcut in scopes that can be active at
 /// once.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -536,20 +603,55 @@ impl Keymap {
     }
 
     /// Rebinds an action (an empty list unbinds it).
-    #[allow(
-        dead_code,
-        reason = "read by saved shortcuts and the shortcut editor (Preferences, P-D); covered by tests"
-    )]
     pub fn set(&mut self, action: Action, shortcuts: Vec<KeyboardShortcut>) {
         self.overrides.insert(action, shortcuts);
     }
 
-    #[allow(
-        dead_code,
-        reason = "read by saved shortcuts and the shortcut editor (Preferences, P-D); covered by tests"
-    )]
     pub fn reset(&mut self, action: Action) {
         self.overrides.remove(&action);
+    }
+
+    pub fn reset_all(&mut self) {
+        self.overrides.clear();
+    }
+
+    pub fn is_default(&self, action: Action) -> bool {
+        !self.overrides.contains_key(&action)
+    }
+
+    /// Adds `shortcut` to `action`. Another action that uses it in a scope
+    /// that can be active at the same time loses it (so there are never two
+    /// meanings for one key); those actions are returned so the editor can
+    /// say so. Adding a shortcut the action already has changes nothing.
+    pub fn assign(&mut self, action: Action, shortcut: KeyboardShortcut) -> Vec<Action> {
+        let mut taken_from = Vec::new();
+        for &other in Action::ALL {
+            if other == action || !other.def().scope.overlaps(action.def().scope) {
+                continue;
+            }
+            let mut list = self.bindings(other);
+            if let Some(i) = list.iter().position(|s| *s == shortcut) {
+                list.remove(i);
+                self.set(other, list);
+                taken_from.push(other);
+            }
+        }
+        let mut mine = self.bindings(action);
+        if !mine.contains(&shortcut) {
+            mine.push(shortcut);
+            self.set(action, mine);
+        }
+        taken_from
+    }
+
+    /// Removes the shortcut at `index` of `action`'s list (an empty list
+    /// unbinds the action).
+    pub fn remove_binding(&mut self, action: Action, index: usize) {
+        let mut list = self.bindings(action);
+        if index < list.len() {
+            list.remove(index);
+            self.set(action, list);
+        }
     }
 
     /// Applies saved bindings keyed by action id. Ids are resolved through
@@ -571,6 +673,46 @@ impl Keymap {
             }
         }
         applied
+    }
+
+    /// What differs from the defaults, by action id, ready to save. An
+    /// action the user unbound saves an empty list.
+    pub fn to_saved(&self) -> BTreeMap<String, Vec<String>> {
+        self.overrides
+            .iter()
+            .filter(|(a, shortcuts)| shortcuts.as_slice() != a.def().defaults)
+            .map(|(a, shortcuts)| {
+                (
+                    a.id().to_owned(),
+                    shortcuts.iter().copied().map(shortcut_to_text).collect(),
+                )
+            })
+            .collect()
+    }
+
+    /// Loads saved overrides ([`Keymap::to_saved`]): ids resolve through
+    /// aliases, unknown ids are dropped, and a shortcut that cannot be read
+    /// is dropped alone (the rest of that action's list is kept). Returns
+    /// how many actions were rebound.
+    pub fn load_saved(&mut self, saved: &BTreeMap<String, Vec<String>>) -> usize {
+        let parsed: Vec<(&str, Vec<KeyboardShortcut>)> = saved
+            .iter()
+            .map(|(id, list)| {
+                (
+                    id.as_str(),
+                    list.iter()
+                        .filter_map(|t| {
+                            let s = shortcut_from_text(t);
+                            if s.is_none() {
+                                tracing::warn!("ignoring unreadable shortcut {t:?} for {id}");
+                            }
+                            s
+                        })
+                        .collect(),
+                )
+            })
+            .collect();
+        self.apply_saved(parsed)
     }
 
     /// Shortcuts bound twice in scopes that overlap.

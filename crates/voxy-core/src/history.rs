@@ -242,6 +242,14 @@ impl History {
         self.saved_revision = Some(self.current.revision);
     }
 
+    /// [`History::reset`] to a document that has *not* been saved: it counts as
+    /// modified, so closing it asks about unsaved changes. Used for a document
+    /// recovered after a crash, whose last saved state is not what is shown.
+    pub fn reset_unsaved(&mut self, doc: Document) {
+        self.reset(doc);
+        self.saved_revision = None;
+    }
+
     /// Whether the document differs from the last saved state.
     pub fn is_dirty(&self) -> bool {
         self.saved_revision != Some(self.current.revision)
@@ -443,6 +451,21 @@ mod tests {
         h.undo();
         assert!(h.is_dirty());
         h.redo();
+        assert!(!h.is_dirty());
+    }
+
+    #[test]
+    fn reset_unsaved_starts_modified_and_saving_cleans_it() {
+        let mut h = history();
+        let doc = Document::clone(h.current());
+        h.reset_unsaved(doc);
+        assert!(h.is_dirty(), "a recovered document is unsaved");
+        assert!(!h.can_undo(), "and has no undo history");
+        h.mark_saved();
+        assert!(!h.is_dirty());
+        // A plain reset is clean, as before.
+        let doc = Document::clone(h.current());
+        h.reset(doc);
         assert!(!h.is_dirty());
     }
 

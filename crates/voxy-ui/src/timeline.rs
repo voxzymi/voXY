@@ -19,7 +19,7 @@ use egui::{
     vec2,
 };
 use voxy_core::command::{MoveKeyframes, RemoveKeyframes, SetLayerTiming, SetLayerVisible};
-use voxy_core::{FrameRate, Layer, LayerId, LayerKind, PropId, Property, Time, Value};
+use voxy_core::{Composition, FrameRate, Layer, LayerId, LayerKind, PropId, Property, Time, Value};
 
 use crate::panels::timecode_at;
 use crate::state::EditorState;
@@ -44,6 +44,12 @@ pub struct TimelineView {
     /// Scroll this layer into view on the next frame (set by Reveal).
     pub reveal: Option<LayerId>,
     drag: Option<Drag>,
+    /// Where each layer's row was drawn this frame, top to bottom, for
+    /// dropping items between them.
+    pub(crate) rows: Vec<(LayerId, Rect)>,
+    /// Top of the first row and bottom of the last (including expanded
+    /// property rows) this frame.
+    rows_span: Option<(f32, f32)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,7 +113,7 @@ struct Cx {
 
 pub fn show(ui: &mut Ui, state: &mut EditorState) {
     let Some(comp) = state.comp() else {
-        ui.label("No composition is open.");
+        crate::empty_state::show(ui, state);
         return;
     };
     let comp = &*comp;
@@ -179,12 +185,16 @@ pub fn show(ui: &mut Ui, state: &mut EditorState) {
 
     ruler(ui, state, comp.duration, cx);
 
+    state.timeline.rows.clear();
+    state.timeline.rows_span = None;
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
+            let top = ui.cursor().top();
             for layer in &comp.layers {
                 layer_rows(ui, state, layer, cx);
             }
+            state.timeline.rows_span = Some((top, ui.cursor().top()));
             if comp.layers.is_empty() {
                 ui.add_space(8.0);
                 ui.weak("No layers. Use Layer ▸ New Solid or Layer ▸ Import Image…");
@@ -192,6 +202,114 @@ pub fn show(ui: &mut Ui, state: &mut EditorState) {
         });
 
     drive_drag(ui, state, cx);
+    drop_on_timeline(ui, state, comp, cx, area);
+}
+
+/// Items dragged from the Project panel, or files from the operating system,
+/// over the timeline: shows what dropping would do and does it on release.
+fn drop_on_timeline(ui: &Ui, state: &mut EditorState, comp: &Composition, cx: Cx, area: Rect) {
+    use voxy_core::command::DropTarget;
+
+    use crate::drops::{
+        Mods, SNAP_PX, cancel_on_escape, dragged_items, dropped_files, ghost_bar, insert_index,
+        insert_line, pointer_label, released, row_at, snap_time,
+    };
+
+    let ctx = ui.ctx().clone();
+    if cancel_on_escape(&ctx) {
+        return;
+    }
+    let Some(p) = ctx
+        .input(|i| i.pointer.hover_pos())
+        .filter(|p| area.contains(*p))
+    else {
+        return;
+    };
+    let files = dropped_files(&ctx);
+    let dragged = dragged_items(&ctx, state.history.current());
+    if dragged.is_none() && files.is_empty() {
+        if ctx.input(|i| !i.raw.hovered_files.is_empty()) {
+            ui.painter().rect_stroke(
+                area.shrink(2.0),
+                4.0,
+                Stroke::new(2.0, ACCENT),
+                egui::StrokeKind::Inside,
+            );
+        }
+        return;
+    }
+    let mods = Mods::from(ctx.input(|i| i.modifiers));
+    let rows: Vec<Rect> = state.timeline.rows.iter().map(|(_, r)| *r).collect();
+    let centers: Vec<f32> = rows.iter().map(|r| r.center().y).collect();
+    let mut time = Time::from_secs_f64(cx.axis.secs(p.x.max(cx.axis.left)).max(0.0));
+    if mods.snap {
+        let mut edges = vec![Time::ZERO, comp.duration, cx.time];
+        edges.extend(comp.layers.iter().flat_map(|l| [l.in_point, l.out_point]));
+        time = snap_time(time, &edges, cx.axis.pps, SNAP_PX);
+    }
+    let replace_row = mods.replace.then(|| row_at(&rows, p.y)).flatten();
+    let target = match replace_row {
+        Some(i) => DropTarget::ReplaceLayer {
+            layer: state.timeline.rows[i].0,
+        },
+        None => DropTarget::Timeline {
+            comp: comp.id,
+            time,
+            index: insert_index(&centers, p.y),
+        },
+    };
+    // Files arrive already dropped: probe and place them now.
+    if !files.is_empty() {
+        let items = state.drop_items_from_files(&files);
+        state.perform_drop(target, items, mods.placement());
+        return;
+    }
+    let Some(items) = dragged else { return };
+    let plan = voxy_core::command::resolve_drop(
+        state.history.current(),
+        &target,
+        &items,
+        mods.placement(),
+    );
+    if released(&ctx) {
+        egui::DragAndDrop::clear_payload(&ctx);
+        state.perform_drop(target, items, mods.placement());
+        return;
+    }
+    // Preview.
+    let painter = ui.painter();
+    match &plan {
+        voxy_core::command::Plan::Layers { layers, .. } => {
+            let (top, bottom) = state
+                .timeline
+                .rows_span
+                .unwrap_or((area.top() + RULER_H, area.top() + RULER_H));
+            let base = layers.first().map_or(0, |l| l.index);
+            let y = rows.get(base).map_or(bottom, Rect::top).max(top);
+            insert_line(painter, y, area.left(), area.right());
+            for (k, l) in layers.iter().enumerate() {
+                let x0 = cx.axis.x(l.in_point);
+                let x1 = cx.axis.x(l.in_point + l.length).max(x0 + 2.0);
+                let top = y + k as f32 * ROW_H + 3.0;
+                ghost_bar(
+                    painter,
+                    Rect::from_min_max(pos2(x0, top), pos2(x1, top + ROW_H - 6.0)),
+                );
+            }
+        }
+        voxy_core::command::Plan::Replace { .. } => {
+            if let Some(i) = replace_row {
+                painter.rect_stroke(
+                    rows[i],
+                    0.0,
+                    Stroke::new(2.0, ACCENT),
+                    egui::StrokeKind::Inside,
+                );
+            }
+        }
+        _ => {}
+    }
+    pointer_label(&ctx, painter, p, &plan);
 }
 
 fn ruler(ui: &mut Ui, state: &mut EditorState, duration: Time, cx: Cx) {
@@ -211,6 +329,35 @@ fn ruler(ui: &mut Ui, state: &mut EditorState, duration: Time, cx: Cx) {
             0.0,
             Color32::from_black_alpha(90),
         );
+    }
+
+    // Entered through a precomp layer: shade the child times that layer
+    // never shows, with a tick where its range starts and ends (§7.3).
+    if let Some(crate::nav_time::ChildRange::Bounded { first, last }) = state.active_child_range() {
+        let shade = Color32::from_black_alpha(90);
+        let (x0, x1) = (cx.axis.x(first), cx.axis.x(last));
+        if x0 > lane.left() {
+            lane_painter.rect_filled(
+                Rect::from_min_max(lane.min, pos2(x0.min(lane.right()), lane.bottom())),
+                0.0,
+                shade,
+            );
+        }
+        if x1 < lane.right() {
+            lane_painter.rect_filled(
+                Rect::from_min_max(pos2(x1.max(lane.left()), lane.top()), lane.max),
+                0.0,
+                shade,
+            );
+        }
+        for x in [x0, x1] {
+            if x >= lane.left() && x <= lane.right() {
+                lane_painter.line_segment(
+                    [pos2(x, rect.top()), pos2(x, rect.bottom())],
+                    Stroke::new(1.0, ACCENT),
+                );
+            }
+        }
     }
 
     // Tick spacing: the smallest "nice" step at least 70 px wide.
@@ -326,6 +473,7 @@ fn layer_rows(ui: &mut Ui, state: &mut EditorState, layer: &Layer, cx: Cx) {
     let selected = state.selection == Some(layer.id);
     let expanded = state.timeline.expanded.contains(&layer.id);
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::hover());
+    state.timeline.rows.push((layer.id, rect));
     if state.timeline.reveal == Some(layer.id) {
         ui.scroll_to_rect(rect, Some(egui::Align::Center));
         state.timeline.reveal = None;
@@ -351,7 +499,23 @@ fn layer_rows(ui: &mut Ui, state: &mut EditorState, layer: &Layer, cx: Cx) {
     if name_resp.clicked() || name_resp.secondary_clicked() {
         state.selection = Some(layer.id);
     }
+    // Double-click on a precomp layer goes into it (Shift: the other way).
+    let shift = ui.input(|i| i.modifiers.shift);
+    if name_resp.double_clicked() && matches!(layer.kind, LayerKind::Precomp { .. }) {
+        state.open_precomp_layer(layer.id, shift);
+    }
     name_resp.context_menu(|ui| {
+        if matches!(layer.kind, LayerKind::Precomp { .. }) {
+            if ui.button("Open Composition").clicked() {
+                state.navigate_into_layer(layer.id);
+                ui.close();
+            }
+            if ui.button("Open in New Tab").clicked() {
+                state.open_precomp_in_own_tab(layer.id);
+                ui.close();
+            }
+            ui.separator();
+        }
         for a in [
             crate::actions::Action::RevealSourceInProject,
             crate::actions::Action::RevealInFileManager,
@@ -465,6 +629,9 @@ fn layer_rows(ui: &mut Ui, state: &mut EditorState, layer: &Layer, cx: Cx) {
             .on_hover_cursor(CursorIcon::Grab);
         if body.clicked() {
             state.selection = Some(layer.id);
+        }
+        if body.double_clicked() && matches!(layer.kind, LayerKind::Precomp { .. }) {
+            state.open_precomp_layer(layer.id, shift);
         }
         if body.drag_started() {
             start_layer_drag(ui, state, layer, DragKind::MoveLayer, cx);

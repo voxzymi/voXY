@@ -5,6 +5,7 @@
 //! produce the same [`EvaluatedComp`].
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use glam::{DAffine2, DVec2};
 
@@ -61,19 +62,68 @@ pub enum EvaluatedContent {
         size: Option<DVec2>,
     },
     /// A nested composition at `child_time` (see [`Layer::child_time`]),
-    /// drawn at its own size from the layer-local origin. Rendering it
-    /// arrives with precomp rendering (Milestone E).
+    /// drawn at its own size from the layer-local origin.
     Precomp {
         comp: CompId,
         child_time: Time,
         size: DVec2,
+        /// "Collapse transformations": the child's layers are drawn as if
+        /// they were part of the parent, instead of through an offscreen
+        /// picture of the child.
+        collapse: bool,
+        /// The child, evaluated at `child_time`.
+        nested: Nested,
     },
     /// A placeholder for a removed source, at its remembered size.
     Placeholder { size: Option<DVec2> },
 }
 
+/// The deepest chain of nested compositions that is evaluated: the root and
+/// 15 levels of precomps. A longer chain (or a cycle that slipped past
+/// validation) draws nothing for the layer that would go deeper.
+pub const MAX_NESTING: usize = 16;
+
+/// What a precomp layer's child evaluated to.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Nested {
+    /// The child at the layer's child time. Shared: a composition used by
+    /// several layers at the same child time is evaluated once.
+    Shown(Arc<EvaluatedComp>),
+    /// The child time is outside the child's duration: nothing to show.
+    OutsideChild,
+    /// Too deep, or the composition contains itself: nothing is drawn.
+    TooDeep,
+    /// The composition no longer exists.
+    Missing,
+}
+
 /// Evaluates `comp` at `time`. Returns `None` if the composition is missing.
 pub fn evaluate(doc: &Document, comp: CompId, time: Time) -> Option<EvaluatedComp> {
+    let mut scope = Scope {
+        chain: vec![comp],
+        done: HashMap::new(),
+    };
+    evaluate_in(doc, comp, time, &mut scope)
+}
+
+/// What one `evaluate` call is in the middle of.
+struct Scope {
+    /// The compositions being evaluated, outermost first.
+    chain: Vec<CompId>,
+    /// Compositions already evaluated in this call, by composition, child
+    /// time and depth. Without this, a composition used by several layers
+    /// (or a diamond of them) would be evaluated once per use, which grows
+    /// exponentially with the nesting. The depth is part of the key because
+    /// it decides where [`MAX_NESTING`] cuts.
+    done: HashMap<(CompId, Time, usize), Arc<EvaluatedComp>>,
+}
+
+fn evaluate_in(
+    doc: &Document,
+    comp: CompId,
+    time: Time,
+    scope: &mut Scope,
+) -> Option<EvaluatedComp> {
     let c = doc.comp(comp)?;
     let background = c
         .background
@@ -88,7 +138,7 @@ pub fn evaluate(doc: &Document, comp: CompId, time: Time) -> Option<EvaluatedCom
         .filter(|l| l.is_active_at(time))
         .map(|l| EvaluatedLayer {
             id: l.id,
-            content: content(doc, l, time),
+            content: content(doc, l, time, scope),
             world: worlds.world(l.id),
             opacity: scalar(&l.transform.opacity, time, 1.0).clamp(0.0, 1.0),
             blend: l.blend_mode,
@@ -105,7 +155,7 @@ pub fn evaluate(doc: &Document, comp: CompId, time: Time) -> Option<EvaluatedCom
     })
 }
 
-fn content(doc: &Document, layer: &Layer, time: Time) -> EvaluatedContent {
+fn content(doc: &Document, layer: &Layer, time: Time, scope: &mut Scope) -> EvaluatedContent {
     let assets = &doc.assets;
     match &layer.kind {
         LayerKind::Solid { color, size } => EvaluatedContent::Solid {
@@ -121,15 +171,45 @@ fn content(doc: &Document, layer: &Layer, time: Time) -> EvaluatedContent {
             source_time: layer.source_time(time),
             size: asset_size(assets, *asset),
         },
-        LayerKind::Precomp { comp, .. } => {
+        LayerKind::Precomp { comp, collapse, .. } => {
             let child = doc.comp(*comp);
             let duration = child.map_or(Time::ZERO, |c| c.duration);
+            let child_time = layer.child_time(time, duration).unwrap_or(Time::ZERO);
+            let nested = match child {
+                None => Nested::Missing,
+                Some(_) if scope.chain.contains(comp) || scope.chain.len() >= MAX_NESTING => {
+                    Nested::TooDeep
+                }
+                Some(_) if child_time < Time::ZERO || child_time >= duration => {
+                    Nested::OutsideChild
+                }
+                Some(_) => {
+                    let key = (*comp, child_time, scope.chain.len());
+                    if let Some(done) = scope.done.get(&key) {
+                        Nested::Shown(Arc::clone(done))
+                    } else {
+                        scope.chain.push(*comp);
+                        let eval = evaluate_in(doc, *comp, child_time, scope);
+                        scope.chain.pop();
+                        match eval {
+                            Some(e) => {
+                                let shared = Arc::new(e);
+                                scope.done.insert(key, Arc::clone(&shared));
+                                Nested::Shown(shared)
+                            }
+                            None => Nested::Missing,
+                        }
+                    }
+                }
+            };
             EvaluatedContent::Precomp {
                 comp: *comp,
-                child_time: layer.child_time(time, duration).unwrap_or(Time::ZERO),
+                child_time,
                 size: child.map_or(DVec2::ZERO, |c| {
                     DVec2::new(f64::from(c.width), f64::from(c.height))
                 }),
+                collapse: *collapse,
+                nested,
             }
         }
         LayerKind::Placeholder { was } => EvaluatedContent::Placeholder {

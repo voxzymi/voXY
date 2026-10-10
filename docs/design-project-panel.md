@@ -436,3 +436,104 @@ What landed, and where it refines the design above.
     other than the open one. (Tracked in [`deferred.md`](deferred.md).)
   - Saving the dock layout and shortcut overrides (Preferences, P-D).
   - Dragging items onto the timeline or viewport (Milestone D).
+
+## Implementation notes (P-B audit and P-C)
+
+- **P-B audit** (`crates/voxy-ui/src/audit.rs`, tests only). Every registered
+  action is run against an empty project, an empty composition and an animated
+  project with every kind of easing and all keys selected, with the file
+  pickers answering "cancel". Asserted: no panic; an empty project is not
+  changed by any action except New Folder; no action creates a composition;
+  an action that cannot run says why in the status bar; the document still
+  validates afterwards. Every panel is also drawn headlessly for several
+  frames in each situation (and with media in the pool but no composition).
+  The audit found no panics; it exists to keep it that way as actions and
+  panels are added.
+- **Empty-state screen** (`empty_state.rs`). Shows in the timeline area while
+  no composition is open. `empty_state_layout(width, height)` is the pure
+  layout of §4.4 (side by side from 560 points, stacked below, tiles shrink to
+  120 × 84, the tip hides when it cannot fit with the smallest tiles, which is 200 points side by side and 276 stacked (the design said under 340, but the default layout's timeline pane is only about 220 points tall), compact buttons under 200) and is
+  tested for overlap and fit over a grid of sizes. The viewport shows only
+  "No composition open" and the hint (Q3); the graph editor a weak notice.
+  Tiles are painter-drawn line art, focusable, activated by click, Enter or
+  Space, and files can be dropped on the second tile.
+- **New Composition From Footage** (`footage.rs`, action
+  `file.new_composition_from_footage`, no default shortcut; File > New and the
+  Project panel's context menu). Selected footage (folders expanded,
+  compositions ignored) is used without a picker; otherwise a multi-select
+  picker (cancel does nothing, not even a status line). One item, or several
+  that agree on size, rate and duration, make one composition with that item's
+  settings; stills keep the project's rate and duration. Items that differ ask
+  "Use settings from" and single versus one-per-item (default single). The
+  composition takes the first item's name, numbered if taken. Unreadable
+  files are skipped and named in the status line; nothing happens if none can
+  be read.
+  - **Built on `DropItems` (Milestone D).** The flow is one
+    `DropItems { target: NewComp { per_item, source } }` command: it imports
+    the files, creates the composition(s) and places the layers in a single
+    `apply`, so one undo reverts all of it (tested). Blocked drops show their
+    reason and change nothing.
+  - Items are placed in the project's own asset order (the Project panel's
+    display order is not available to the command layer yet).
+- **Not in P-C:** the Tip of the Day (P-D). The layout already reserves its
+  space and hides it when short.
+
+## Implementation notes (P-D, part 1: Tip of the Day)
+
+- `crates/voxy-ui/assets/tips.toml` holds 36 original tips, embedded with
+  `include_str!` and parsed once (`tips.rs`). The `toml` crate was already a
+  dependency (preferences). `{action:<id>}` becomes the action's menu label
+  plus its current shortcut; `{key:<id>}` (added) is the shortcut alone, for
+  actions whose menu label reads badly in a sentence ("Composition", "Folder").
+- **Selection.** `pick_tip(tips, last, seed)` is pure: it draws from every tip
+  except the last one shown. The seed is the clock at launch and is used for
+  nothing else, so projects and renders are unaffected. "Next tip" moves to
+  the next tip in file order. Both write `last_tip` to the preferences.
+- **Preferences.** `show_tips` (default on) and `last_tip`, in
+  `preferences.toml`, never in a project. Window > Show Tips toggles the
+  first. Older preference files load with the defaults.
+- **Validator** (tests in `tips.rs`): at least 30 tips; unique, non-empty ids
+  and text; every placeholder resolves to a real action; no raw braces left;
+  every `{key:…}` action has a default shortcut; at most 160 characters after
+  substitution; at most two lines when laid out at 320 points in a headless
+  egui context. A tip must describe something that exists in this build.
+- **Placement.** Under the tiles on the empty-state screen, with a lightbulb,
+  "Tip of the Day" and a Next tip button; it hides when it cannot fit with the
+  smallest tiles. Tab order is New Composition, From Footage, Next tip.
+- **Still to do in P-D:** saving the dock layout, saved shortcut overrides and
+  the shortcut editor (see [`deferred.md`](deferred.md)).
+
+## Implementation notes (P-D, part 2: shortcuts and dock layout)
+
+All of this lives in `preferences.toml` (per user), never in a project file,
+and none of it changes the project format.
+
+- **Saved shortcuts.** `[shortcuts]` maps an action id to a list of shortcuts
+  as text: `"file.save" = ["Ctrl+Alt+S"]`, an empty list unbinds. `Ctrl` is
+  the platform's command key (Cmd on macOS); `Cmd`, `Command` and `Control`
+  are accepted when reading. Only what differs from the defaults is written.
+  Ids resolve through the aliases (so `media_panel.*` still loads). Unknown
+  ids, unreadable shortcuts and wrongly typed entries are dropped one at a
+  time and never cost the rest of the file.
+- **Keyboard Shortcuts dialog** (Edit > Keyboard Shortcuts…, an action with no
+  default shortcut). Every action in the table, filterable. "+ Add" captures
+  the next key press (Esc cancels the capture only; Esc itself can't be bound
+  this way), × removes one shortcut, Reset and Reset All restore defaults.
+  Changes save immediately. **Decision taken (conventional default, say if you
+  want it otherwise):** assigning a shortcut that another action already uses
+  *in a scope that can be active at the same time* moves it to the new action
+  and the dialog says so, so there is never an ambiguous key. Delete is
+  legitimately shared between Delete Layer (editor scope) and Remove from
+  Project (Project panel scope) and stays that way. While the dialog is open
+  the normal shortcut dispatch is off.
+- **Dock layout.** `dock_layout` holds the arrangement as one JSON string
+  (egui_dock's own serialization, with the per-frame rectangles stripped so
+  resizing the window does not rewrite the file). It is written when a drag
+  ends and the arrangement changed, and read at launch. A saved layout is used
+  only if it is sound: one surface, a well-formed tree, every panel exactly
+  once; otherwise the default layout is used and a warning is logged. Old
+  panel names ("Media") load as "Project". Window > Reset Layout restores the
+  default and saves it.
+- **New dependency feature.** egui_dock's `serde` feature, which adds one
+  small crate to the lockfile: `enumn` (MIT OR Apache-2.0, a derive macro by
+  the author of serde), allowed by `deny.toml`.

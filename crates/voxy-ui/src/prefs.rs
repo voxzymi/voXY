@@ -4,6 +4,7 @@
 //! The file is TOML. A missing, unreadable or corrupt file gives the
 //! defaults, and saving problems are logged, never fatal.
 
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
@@ -11,6 +12,18 @@ use serde::{Deserialize, Serialize};
 use voxy_core::{FrameRate, PixelAspect, SegmentEase, Time};
 
 use crate::reveal::Os;
+
+/// What double-clicking a precomp layer does (design §13 Q6). Shift does the
+/// other one.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PrecompOpen {
+    /// Navigate into it in the current tab (the breadcrumb grows).
+    #[default]
+    CurrentTab,
+    /// Open (or switch to) the composition's own tab.
+    OwnTab,
+}
 
 /// A composition preset the user saved. Built-in presets live in code.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -79,7 +92,10 @@ impl Default for DialogMemory {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+/// Seconds of unsaved editing after which the project is autosaved.
+pub const DEFAULT_AUTOSAVE_SECONDS: u32 = 60;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Preferences {
     pub user_presets: Vec<UserPreset>,
@@ -87,6 +103,64 @@ pub struct Preferences {
     #[serde(deserialize_with = "lenient_list")]
     pub easing_presets: Vec<EasingPreset>,
     pub comp_dialog: DialogMemory,
+    /// How long after the first unsaved edit the project is autosaved, in
+    /// seconds; `0` turns autosave off. There is no settings dialog yet:
+    /// edit `preferences.toml`.
+    pub autosave_seconds: u32,
+    /// Show the Tip of the Day on the empty-state screen (Window > Show
+    /// Tips).
+    pub show_tips: bool,
+    /// The `id` of the tip shown last, so the next launch picks another.
+    pub last_tip: Option<String>,
+    /// Shortcut overrides by action id (`file.save = ["Ctrl+Alt+S"]`); an
+    /// empty list unbinds the action. Only what differs from the defaults is
+    /// saved. One unreadable entry is dropped alone.
+    #[serde(deserialize_with = "lenient_shortcuts")]
+    pub shortcuts: BTreeMap<String, Vec<String>>,
+    /// Where the panels sit, as text (see `layout.rs`). `None` is the default
+    /// layout. A layout that is not sound is ignored when it is loaded.
+    pub dock_layout: Option<String>,
+    /// What double-clicking a precomp layer does.
+    pub precomp_double_click: PrecompOpen,
+}
+
+/// Reads the shortcut table entry by entry (like [`lenient_list`]).
+fn lenient_shortcuts<'de, D>(d: D) -> Result<BTreeMap<String, Vec<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = BTreeMap::<String, toml::Value>::deserialize(d)?;
+    Ok(raw
+        .into_iter()
+        .filter_map(|(id, v)| match v.try_into::<Vec<String>>() {
+            Ok(list) => Some((id, list)),
+            Err(e) => {
+                tracing::warn!("ignoring unreadable shortcuts for {id}: {e}");
+                None
+            }
+        })
+        .collect())
+}
+
+impl Default for Preferences {
+    fn default() -> Self {
+        Preferences {
+            user_presets: Vec::new(),
+            easing_presets: Vec::new(),
+            comp_dialog: DialogMemory::default(),
+            autosave_seconds: DEFAULT_AUTOSAVE_SECONDS,
+            show_tips: true,
+            last_tip: None,
+            shortcuts: BTreeMap::new(),
+            dock_layout: None,
+            precomp_double_click: PrecompOpen::CurrentTab,
+        }
+    }
+}
+
+/// The per-user folder for recovery files: `<config dir>/recovery`.
+pub fn recovery_dir() -> Option<PathBuf> {
+    config_dir_with(Os::current(), &|k| std::env::var_os(k)).map(|d| d.join("recovery"))
 }
 
 /// The per-user config directory for voXY on `os`, from environment
@@ -331,6 +405,32 @@ mod tests {
     }
 
     #[test]
+    fn autosave_defaults_on_and_can_be_turned_off() {
+        assert_eq!(
+            Preferences::default().autosave_seconds,
+            DEFAULT_AUTOSAVE_SECONDS
+        );
+        // A file without the key keeps the default; the key can disable it.
+        assert_eq!(
+            Preferences::parse("user_presets = []").autosave_seconds,
+            DEFAULT_AUTOSAVE_SECONDS
+        );
+        assert_eq!(
+            Preferences::parse("autosave_seconds = 0").autosave_seconds,
+            0
+        );
+        assert_eq!(
+            Preferences::parse("autosave_seconds = 15").autosave_seconds,
+            15
+        );
+        // A wrong type is a corrupt file: everything defaults, as before.
+        assert_eq!(
+            Preferences::parse("autosave_seconds = \"often\""),
+            Preferences::default()
+        );
+    }
+
+    #[test]
     fn missing_and_corrupt_files_give_defaults() {
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(
@@ -383,5 +483,46 @@ mod tests {
         assert!(p.comp_dialog.lock_aspect);
         assert!(p.comp_dialog.keep_layers && p.comp_dialog.live_preview);
         assert_eq!(p.user_presets.len(), 0);
+    }
+
+    #[test]
+    fn tips_are_on_by_default_and_remembered() {
+        let p = Preferences::default();
+        assert!(p.show_tips && p.last_tip.is_none());
+        let old = Preferences::parse("autosave_seconds = 15");
+        assert!(
+            old.show_tips && old.last_tip.is_none(),
+            "older files get defaults"
+        );
+        let off = Preferences::parse("show_tips = false\nlast_tip = \"reset-layout\"");
+        assert!(!off.show_tips);
+        assert_eq!(off.last_tip.as_deref(), Some("reset-layout"));
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("p.toml");
+        off.save_to(&path).unwrap();
+        assert_eq!(Preferences::load_from(&path), off);
+    }
+
+    #[test]
+    fn shortcuts_and_layout_are_saved_and_one_bad_entry_costs_only_itself() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("p.toml");
+        let mut p = Preferences::default();
+        assert!(p.shortcuts.is_empty() && p.dock_layout.is_none());
+        p.shortcuts
+            .insert("file.save".into(), vec!["Ctrl+Alt+S".into()]);
+        p.shortcuts.insert("file.quit".into(), vec![]);
+        p.dock_layout = Some(crate::layout::to_text(&crate::panels::default_layout()).unwrap());
+        p.save_to(&path).unwrap();
+        assert_eq!(Preferences::load_from(&path), p);
+        // A wrongly typed entry is dropped; the rest of the file survives.
+        let text = "show_tips = false\n[shortcuts]\n\"file.save\" = \"oops\"\n\"file.open\" = [\"Ctrl+O\"]\n";
+        let loaded = Preferences::parse(text);
+        assert!(!loaded.show_tips);
+        assert_eq!(loaded.shortcuts.len(), 1);
+        assert_eq!(loaded.shortcuts["file.open"], ["Ctrl+O"]);
+        // Older files have neither.
+        let old = Preferences::parse("autosave_seconds = 30");
+        assert!(old.shortcuts.is_empty() && old.dock_layout.is_none());
     }
 }

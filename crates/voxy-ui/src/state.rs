@@ -6,7 +6,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use voxy_core::command::{
     AddImageLayer, AddSolidLayer, AddVideoLayer, CreateComposition, CreateFolder,
@@ -25,6 +25,7 @@ use crate::comp_draft::{Context as DraftContext, Draft, Mode, Stage, Tab as Dial
 use crate::dialogs::{Dialogs, IMAGE_EXTENSIONS, NativeDialogs, VIDEO_EXTENSIONS};
 use crate::prefs::Preferences;
 use crate::project_view::{PendingRemove, ProjectState};
+use crate::recovery::{self, Offer, Session};
 use crate::reveal::{self, CompTarget};
 
 /// A message for the status bar.
@@ -47,6 +48,7 @@ pub enum AppRequest {
 struct CreatedComp {
     comp: CompId,
     selection: std::collections::BTreeSet<PoolItem>,
+    /// The composition that was open before.
     active: Option<CompId>,
 }
 
@@ -78,10 +80,22 @@ pub struct EditorState {
     pub comp_dialog: Option<Draft>,
     /// The last tab the dialog showed (saved in `ui_state`).
     pub dialog_tab: DialogTab,
+    /// The "items differ" question of New Composition From Footage.
+    pub footage_prompt: Option<crate::footage::Prompt>,
+    /// Index into [`crate::tips::all`] of the tip on the empty-state screen.
+    pub tip: Option<usize>,
+    /// The Keyboard Shortcuts dialog, while it is open.
+    pub shortcut_editor: Option<crate::shortcut_editor::Editor>,
     pub prefs: Preferences,
     /// The easing last copied with "Copy Easing" (or the graph editor's Copy
     /// button). Lives for the session.
     pub ease_clipboard: Option<SegmentEase>,
+    /// Autosave bookkeeping; `None` until [`EditorState::enable_recovery`]
+    /// (tests and tools that never autosave leave it off).
+    recovery: Option<Autosaver>,
+    /// An autosave found for the project that was just opened (or left by a
+    /// crashed session), waiting for the user to recover or discard it.
+    pub pending_recovery: Option<Offer>,
     /// Text for the shell to put on the system clipboard (the copied
     /// easing as JSON), so it can be pasted elsewhere, e.g. into a bug
     /// report. Taken by the app each frame.
@@ -94,15 +108,16 @@ pub struct EditorState {
     preview_counter: u64,
     /// What a just-created composition replaced, so undo can put it back.
     last_create: Option<CreatedComp>,
-    /// The composition being edited. View state until composition tabs land
-    /// (Milestone E); falls back to the main composition when it is `None`
-    /// or no longer exists.
-    active: Option<CompId>,
+    /// The open composition tabs. View state only: nothing here is ever a
+    /// command. The active tab's playhead, selection, timeline and graph
+    /// are the live fields above; the other tabs keep theirs in the
+    /// workspace (see `workspace.rs`).
+    pub workspace: crate::workspace::Workspace,
 }
 
 impl EditorState {
     pub fn new(doc: Document) -> Self {
-        EditorState {
+        let mut state = EditorState {
             history: History::new(doc),
             project_path: None,
             selection: None,
@@ -116,16 +131,23 @@ impl EditorState {
             dialogs: Box::new(NativeDialogs),
             comp_dialog: None,
             dialog_tab: DialogTab::Basic,
+            footage_prompt: None,
+            tip: None,
+            shortcut_editor: None,
             prefs: Preferences::default(),
             ease_clipboard: None,
+            recovery: None,
+            pending_recovery: None,
             outgoing_clipboard: None,
             prefs_path: None,
             gpu_max_texture: None,
             preview: None,
             preview_counter: 0,
             last_create: None,
-            active: None,
-        }
+            workspace: crate::workspace::Workspace::default(),
+        };
+        state.open_default_tab();
+        state
     }
 
     /// A new project: no compositions, no media. Nothing creates one for
@@ -193,14 +215,12 @@ impl EditorState {
             )
     }
 
-    /// The composition the editor shows: the one opened from the Project
-    /// panel or by a Reveal, else the main one, else none. `None` is a
-    /// normal state: every caller must handle it.
+    /// The composition the editor shows: the active tab's. `None` (no tabs,
+    /// the empty-state screen) is a normal state: every caller must handle it.
     pub fn comp_id(&self) -> Option<CompId> {
         let doc = self.history.current();
-        self.active
-            .filter(|id| doc.comps.contains_key(id))
-            .or(doc.main_comp)
+        self.workspace
+            .active_comp()
             .filter(|id| doc.comps.contains_key(id))
     }
 
@@ -209,15 +229,320 @@ impl EditorState {
         self.history.current().comps.get(&id).cloned()
     }
 
-    /// Shows `id` in the timeline and viewport. View state only.
+    /// A new project or a freshly loaded one shows its main composition, if
+    /// it has one. Nothing else opens a tab on its own.
+    pub(crate) fn open_default_tab(&mut self) {
+        self.workspace = crate::workspace::Workspace::default();
+        if let Some(main) = self.history.current().main_comp
+            && self.history.current().comps.contains_key(&main)
+        {
+            self.workspace.open(main);
+        }
+    }
+
+    /// The active tab's view, taken out of the live fields.
+    fn take_live(&mut self) -> crate::workspace::TabView {
+        crate::workspace::TabView {
+            time: std::mem::take(&mut self.time),
+            selection: self.selection.take(),
+            timeline: std::mem::take(&mut self.timeline),
+            graph: std::mem::take(&mut self.graph),
+        }
+    }
+
+    /// Makes `view` the live view.
+    fn load_live(&mut self, view: crate::workspace::TabView) {
+        self.time = view.time;
+        self.selection = view.selection;
+        self.timeline = view.timeline;
+        self.graph = view.graph;
+    }
+
+    /// Runs `change` on the workspace and keeps the live view in step: the
+    /// view of the active tab is saved before, and the (possibly different)
+    /// active tab's is loaded after. Pauses playback when the tab changes.
+    pub(crate) fn change_workspace<R>(
+        &mut self,
+        change: impl FnOnce(&mut crate::workspace::Workspace) -> R,
+    ) -> R {
+        let rate = self.frame_rate();
+        let before = self.workspace.active;
+        let before_comp = self.workspace.active_comp();
+        if let Some(i) = before.filter(|i| *i < self.workspace.tabs.len()) {
+            let live = self.take_live();
+            self.workspace.tabs[i].saved = live;
+        }
+        let result = change(&mut self.workspace);
+        // A different tab is active when its index or its composition
+        // differs: closing a tab can leave a different one at the same index.
+        if self.workspace.active != before || self.workspace.active_comp() != before_comp {
+            self.transport.pause(rate);
+        }
+        let view = match self.workspace.active {
+            Some(i) => std::mem::take(&mut self.workspace.tabs[i].saved),
+            None => crate::workspace::TabView::default(),
+        };
+        self.load_live(view);
+        result
+    }
+
+    /// Shows `id` in its own tab (switching to the tab that already shows it
+    /// or opening one, with a fresh breadcrumb). View state only.
     pub fn open_comp(&mut self, id: CompId) {
         if self.history.current().comps.contains_key(&id) && self.comp_id() != Some(id) {
-            let rate = self.frame_rate();
-            self.transport.pause(rate);
-            self.active = Some(id);
-            self.selection = None;
-            self.time = Time::ZERO;
+            self.change_workspace(|w| w.open(id));
         }
+    }
+
+    /// Switches to tab `i`.
+    pub fn switch_tab(&mut self, i: usize) {
+        if self.workspace.active != Some(i) && i < self.workspace.tabs.len() {
+            self.change_workspace(|w| w.activate(i));
+        }
+    }
+
+    /// Closes tab `i`. Never touches the document.
+    pub fn close_tab(&mut self, i: usize) {
+        self.change_workspace(|w| w.close(i));
+    }
+
+    /// Enters the precomp layer `layer` in the active tab: the breadcrumb
+    /// grows and the playhead goes to the child time the parent's playhead
+    /// shows (design §7.2). If the child already has its own tab, switches to
+    /// it instead.
+    pub fn navigate_into_layer(&mut self, layer: LayerId) {
+        let doc = self.history.current().clone();
+        let Some((_, l)) = doc.find_layer(layer) else {
+            return;
+        };
+        let voxy_core::LayerKind::Precomp { comp: child, .. } = l.kind else {
+            return;
+        };
+        let Some(child_comp) = doc.comp(child) else {
+            return;
+        };
+        if let Some(i) = self.workspace.tab_of(child) {
+            self.switch_tab(i);
+            return;
+        }
+        if self.workspace.active.is_none() {
+            return;
+        }
+        // Entering sets the child's playhead to the mapped time, clamped into
+        // the child and snapped down to its frame grid.
+        let mapped = l
+            .child_time(
+                self.time
+                    .clamp(l.in_point, (l.out_point - Time(1)).max(l.in_point)),
+                child_comp.duration,
+            )
+            .unwrap_or(Time::ZERO);
+        let rate = child_comp.frame_rate;
+        let last = (rate.time_to_frame(child_comp.duration) - 1).max(0);
+        let frame = rate.time_to_frame(mapped.max(Time::ZERO)).clamp(0, last);
+        let time = rate.frame_to_time(frame);
+        let own_rate = self.frame_rate();
+        self.transport.pause(own_rate);
+        let parent_view = self.take_live();
+        self.workspace.navigate_into(child, layer, parent_view);
+        self.load_live(crate::workspace::TabView {
+            time,
+            ..crate::workspace::TabView::default()
+        });
+    }
+
+    /// Whether "Go to Parent Composition" has somewhere to go: a step up in
+    /// the breadcrumb, or a composition that uses this one.
+    pub fn can_go_to_parent(&self) -> bool {
+        self.workspace.can_go_up() || self.parent_target().is_some()
+    }
+
+    fn parent_target(&self) -> Option<CompTarget> {
+        let comp = self.comp_id()?;
+        let targets = reveal::comp_targets(self.history.current(), &[PoolItem::Comp(comp)]);
+        reveal::primary_target(&targets).cloned()
+    }
+
+    /// Composition > Go to Parent Composition: one step up the breadcrumb;
+    /// with none (a composition opened from the Project panel), the
+    /// composition that uses this one most, ties going to the first by name
+    /// (the same rule as Reveal in Composition, design §6.2).
+    pub fn go_to_parent(&mut self) {
+        if let Some(tab) = self
+            .workspace
+            .active
+            .and_then(|i| self.workspace.tabs.get(i))
+            .filter(|t| t.path.len() > 1)
+        {
+            let index = tab.path.len() - 2;
+            self.go_to_crumb(index);
+        } else if let Some(target) = self.parent_target() {
+            self.reveal_in_composition(&target);
+        } else {
+            self.error("This composition is not used in another composition.");
+        }
+    }
+
+    /// The precomp layers the active tab came in through, innermost first,
+    /// each with the composition it sits in: `(layer, parent comp)`.
+    fn entry_layers(&self) -> Vec<(LayerId, CompId)> {
+        let Some(tab) = self
+            .workspace
+            .active
+            .and_then(|i| self.workspace.tabs.get(i))
+        else {
+            return Vec::new();
+        };
+        (1..tab.path.len())
+            .rev()
+            .filter_map(|i| Some((tab.path[i].via_layer?, tab.path[i - 1].comp)))
+            .collect()
+    }
+
+    /// The child times the active tab's entry layer shows, for shading the
+    /// ruler (§7.3). `None` when the tab was not entered through a layer.
+    pub fn active_child_range(&self) -> Option<crate::nav_time::ChildRange> {
+        let (layer, parent) = *self.entry_layers().first()?;
+        let doc = self.history.current();
+        let l = doc.comp(parent)?.layer(layer)?;
+        let child = doc.comp(self.comp_id()?)?;
+        crate::nav_time::child_range(l, child.duration, doc.comp(parent)?.frame_rate)
+    }
+
+    /// Turns "Link playhead" on or off for the active tab.
+    pub fn set_link_playhead(&mut self, on: bool) {
+        if let Some(tab) = self
+            .workspace
+            .active
+            .and_then(|i| self.workspace.tabs.get_mut(i))
+        {
+            tab.link_playhead = on;
+        }
+    }
+
+    pub fn link_playhead(&self) -> bool {
+        self.workspace
+            .active
+            .and_then(|i| self.workspace.tabs.get(i))
+            .is_some_and(|t| t.link_playhead)
+    }
+
+    /// Goes to entry `index` of the active tab's breadcrumb. With the tab's
+    /// playhead linked, the parent's playhead moves to the time that shows
+    /// what the child's shows now, step by step up the path, as far as every
+    /// mapping can be inverted.
+    pub fn go_to_crumb(&mut self, index: usize) {
+        let linked_time = self.link_playhead().then(|| {
+            let doc = self.history.current();
+            let steps = self.entry_layers();
+            let up = steps.len().saturating_sub(index.min(steps.len()));
+            // The innermost `up` steps are crossed.
+            steps
+                .iter()
+                .take(up)
+                .try_fold(self.time, |t, (layer, parent)| {
+                    let l = doc.comp(*parent)?.layer(*layer)?;
+                    crate::nav_time::parent_time_of(l, t)
+                })
+        });
+        if let Some(mut view) = self.change_workspace(|w| w.go_to_crumb(index)) {
+            if let Some(Some(t)) = linked_time {
+                view.time = t;
+            }
+            self.load_live(view);
+        }
+    }
+
+    /// Double-click on a precomp layer: navigate in this tab or open the
+    /// composition's own tab, by preference; Shift does the other one.
+    pub fn open_precomp_layer(&mut self, layer: LayerId, shift: bool) {
+        let in_own_tab =
+            (self.prefs.precomp_double_click == crate::prefs::PrecompOpen::OwnTab) != shift;
+        if in_own_tab {
+            self.open_precomp_in_own_tab(layer);
+        } else {
+            self.navigate_into_layer(layer);
+        }
+    }
+
+    /// Opens the composition a precomp layer shows in its own tab.
+    pub fn open_precomp_in_own_tab(&mut self, layer: LayerId) {
+        let child = self
+            .history
+            .current()
+            .find_layer(layer)
+            .and_then(|(_, l)| match l.kind {
+                voxy_core::LayerKind::Precomp { comp, .. } => Some(comp),
+                _ => None,
+            });
+        if let Some(child) = child {
+            self.open_comp(child);
+        }
+    }
+
+    /// Closes tabs whose composition is gone (a removed composition, or an
+    /// undo that took it away). Cheap when nothing is wrong.
+    pub fn sync_workspace(&mut self) {
+        let doc = self.history.current().clone();
+        let stale = self
+            .workspace
+            .tabs
+            .iter()
+            .any(|t| t.path.iter().any(|s| doc.comp(s.comp).is_none()));
+        if stale {
+            self.change_workspace(|w| {
+                w.reconcile(&doc);
+            });
+        }
+    }
+
+    /// After undo or redo (design §7.4): tabs are reconciled with the
+    /// document, and if the active composition did not change but another
+    /// did, the editor goes to the changed composition (the lowest ID if
+    /// several) and selects the layers that changed, so the user sees what
+    /// the undo did.
+    fn after_history_jump(&mut self, before: &Arc<Document>) {
+        let now = self.history.current().clone();
+        self.change_workspace(|w| {
+            w.reconcile(&now);
+        });
+        let changed: Vec<CompId> = now
+            .comps
+            .iter()
+            .filter(|(id, c)| before.comps.get(id).is_none_or(|b| !Arc::ptr_eq(b, c)))
+            .map(|(id, _)| *id)
+            .collect();
+        let active = self.comp_id();
+        if changed.is_empty() || active.is_some_and(|a| changed.contains(&a)) {
+            return;
+        }
+        let Some(&first) = changed.iter().min() else {
+            return;
+        };
+        self.open_comp(first);
+        let layers_changed: Vec<LayerId> = match (now.comp(first), before.comp(first)) {
+            (Some(n), Some(b)) => n
+                .layers
+                .iter()
+                .filter(|l| !b.layers.iter().any(|o| Arc::ptr_eq(o, l)))
+                .map(|l| l.id)
+                .collect(),
+            _ => Vec::new(),
+        };
+        if let Some(&l) = layers_changed.first() {
+            self.selection = Some(l);
+            self.timeline.reveal = Some(l);
+        }
+    }
+
+    /// Redo, with the same view follow-up as [`EditorState::undo`].
+    pub fn redo(&mut self) -> bool {
+        let before = self.history.current().clone();
+        let done = self.history.redo();
+        if done {
+            self.after_history_jump(&before);
+        }
+        done
     }
 
     fn frame_rate(&self) -> FrameRate {
@@ -259,11 +584,16 @@ impl EditorState {
         self.transport.pause(rate);
         self.project = ProjectState::default();
         self.selection = None;
-        self.active = None;
         self.time = Time::ZERO;
+        self.timeline = crate::timeline::TimelineView::default();
+        self.graph = crate::graph_editor::GraphView::default();
+        self.open_default_tab();
     }
 
     pub fn new_document(&mut self) {
+        // The caller has already asked about unsaved changes: whatever was
+        // autosaved for the old project is no longer wanted.
+        self.discard_autosave();
         self.history.reset(Self::untitled());
         self.project_path = None;
         self.reset_view();
@@ -273,12 +603,15 @@ impl EditorState {
     pub fn open_path(&mut self, path: &Path) {
         match persist::load_with_ui(path) {
             Ok((doc, ui_state)) => {
+                self.discard_autosave();
                 self.history.reset(doc);
                 self.project_path = Some(path.to_path_buf());
                 self.reset_view();
+                // A newer autosave next to it means the last session ended
+                // without saving; the user decides (see `recover`).
+                self.pending_recovery = recovery::offer_for_project(path);
                 if let Some(state) = ui_state {
-                    self.project.view = crate::compat::from_ui_state(&state);
-                    self.dialog_tab = crate::compat::dialog_tab_from(&state);
+                    self.restore_ui_state(&state);
                 }
                 self.project.forget_missing(self.history.current());
                 self.info(format!("Opened {}", path.display()));
@@ -318,12 +651,39 @@ impl EditorState {
         self.save_to(&path)
     }
 
+    /// The view state saved with the project (and with an autosave).
+    fn ui_state(&self) -> serde_json::Value {
+        let (tabs, active) = self.workspace.to_saved(self.time);
+        crate::compat::to_ui_state(&self.project.view, self.dialog_tab, &tabs, active)
+    }
+
+    /// Restores the view state saved with a project: the Project panel, the
+    /// dialog tab and the open tabs. A file without a `tabs` entry (from
+    /// before tabs) keeps the default: the main composition.
+    fn restore_ui_state(&mut self, state: &serde_json::Value) {
+        self.project.view = crate::compat::from_ui_state(state);
+        self.dialog_tab = crate::compat::dialog_tab_from(state);
+        if let Some((tabs, active)) = crate::compat::tabs_from_ui_state(state) {
+            let doc = self.history.current().clone();
+            self.workspace = crate::workspace::Workspace::from_saved(tabs, active, &doc);
+            let view = match self.workspace.active {
+                Some(i) => std::mem::take(&mut self.workspace.tabs[i].saved),
+                None => crate::workspace::TabView::default(),
+            };
+            self.load_live(view);
+        }
+    }
+
     fn save_to(&mut self, path: &Path) -> bool {
-        let ui_state = crate::compat::to_ui_state(&self.project.view, self.dialog_tab);
+        let ui_state = self.ui_state();
         match persist::save_with_ui(self.history.current(), Some(&ui_state), path) {
             Ok(()) => {
+                // What was autosaved (under the old or the new name) is now
+                // in the saved file.
+                self.discard_autosave();
                 self.history.mark_saved();
                 self.project_path = Some(path.to_path_buf());
+                self.discard_autosave();
                 self.project.missing.invalidate();
                 self.info(format!("Saved {}", path.display()));
                 true
@@ -448,6 +808,7 @@ impl EditorState {
 
     /// Drops selections whose targets no longer exist (after undo etc.).
     pub fn fix_selection(&mut self) {
+        self.sync_workspace();
         if let Some(id) = self.selection
             && self.history.current().find_layer(id).is_none()
         {
@@ -471,7 +832,7 @@ impl EditorState {
     }
 
     /// Selects what a command just created in the Project panel.
-    fn show_created(&mut self, report: &CommandReport) {
+    pub(crate) fn show_created(&mut self, report: &CommandReport) {
         let items: Vec<PoolItem> = report
             .created_folders
             .iter()
@@ -559,14 +920,20 @@ impl EditorState {
     /// Undo. When it removes the composition the last create made, the
     /// Project panel selection and the open composition come back too.
     pub fn undo(&mut self) -> bool {
+        let before = self.history.current().clone();
         let done = self.history.undo();
+        if done {
+            self.after_history_jump(&before);
+        }
         if let Some(c) = self
             .last_create
             .take_if(|c| !self.history.current().comps.contains_key(&c.comp))
         {
             self.project.selection.items = c.selection;
             self.project.selection.anchor = self.project.selection.items.iter().next().copied();
-            self.active = c.active;
+            if let Some(prev) = c.active {
+                self.open_comp(prev);
+            }
         }
         done
     }
@@ -630,6 +997,59 @@ impl EditorState {
             self.prefs.comp_dialog = memory;
             self.save_prefs();
         }
+    }
+
+    /// Picks this launch's tip: random, and never the one shown last time.
+    /// `seed` comes from the clock; it is used for nothing else.
+    pub fn choose_startup_tip(&mut self, seed: u64) {
+        self.tip = crate::tips::pick_tip(crate::tips::all(), self.prefs.last_tip.as_deref(), seed);
+        self.remember_tip();
+    }
+
+    /// "Next tip": the following tip in file order.
+    pub fn next_tip(&mut self) {
+        let current = self.tip.unwrap_or(0);
+        self.tip = crate::tips::next_tip(crate::tips::all(), current);
+        self.remember_tip();
+    }
+
+    fn remember_tip(&mut self) {
+        let Some(tip) = self.tip.and_then(|i| crate::tips::all().get(i)) else {
+            return;
+        };
+        if self.prefs.last_tip.as_deref() != Some(tip.id.as_str()) {
+            self.prefs.last_tip = Some(tip.id.clone());
+            self.save_prefs();
+        }
+    }
+
+    /// The tip's text with labels and the current shortcuts filled in, or
+    /// `None` when there is no tip or it cannot be written (a bad tip is
+    /// logged and skipped rather than shown broken).
+    pub fn tip_text(&self, ctx: &egui::Context) -> Option<String> {
+        let tip = crate::tips::all().get(self.tip?)?;
+        let resolve = |id: &str| {
+            let action = Action::from_id(id)?;
+            let key = self
+                .keymap
+                .bindings(action)
+                .first()
+                .map(|s| ctx.format_shortcut(s));
+            Some((action.label().to_owned(), key))
+        };
+        match crate::tips::render(&tip.text, &resolve) {
+            Ok(text) => Some(text),
+            Err(e) => {
+                tracing::warn!("tip {:?} skipped: {e}", tip.id);
+                None
+            }
+        }
+    }
+
+    /// Keeps the saved shortcut overrides in step with the keymap.
+    pub fn save_shortcuts(&mut self) {
+        self.prefs.shortcuts = self.keymap.to_saved();
+        self.save_prefs();
     }
 
     pub fn save_prefs(&mut self) {
@@ -1081,6 +1501,9 @@ impl EditorState {
                 Err(reveal::NOT_USED.to_owned())
             }
             Action::RevealInFileManager => self.file_manager_target().map(|_| ()),
+            Action::CompositionGoToParent if !self.can_go_to_parent() => {
+                Err("This composition is not used in another composition.".to_owned())
+            }
             Action::EasePaste if self.ease_clipboard.is_none() => {
                 Err("Copy an easing first.".to_owned())
             }
@@ -1115,6 +1538,8 @@ impl EditorState {
             Action::FileOpen => return Some(AppRequest::Open),
             Action::FileQuit => return Some(AppRequest::Quit),
             Action::FileNewComposition => self.open_new_comp_dialog(),
+            Action::FileNewCompositionFromFootage => self.new_comp_from_footage(),
+            Action::CompositionGoToParent => self.go_to_parent(),
             Action::CompositionSettings => {
                 if let Some(id) = self.comp_id() {
                     self.open_comp_settings(id);
@@ -1131,7 +1556,10 @@ impl EditorState {
                 self.undo();
             }
             Action::EditRedo => {
-                self.history.redo();
+                self.redo();
+            }
+            Action::EditKeyboardShortcuts => {
+                self.shortcut_editor = Some(crate::shortcut_editor::Editor::default());
             }
             Action::SelectionClear => {
                 if self.project.focused {
@@ -1189,7 +1617,186 @@ impl EditorState {
     }
 }
 
+/// What autosave remembers between frames.
+#[derive(Debug)]
+struct Autosaver {
+    session: Session,
+    /// The revision last written to an autosave file.
+    saved_revision: Option<u64>,
+    /// When the current stretch of unsaved edits was first noticed.
+    dirty_since: Option<Instant>,
+    /// A dead session's autosave that this one has recovered and may delete
+    /// once its own autosave holds the same edits.
+    superseded: Option<Offer>,
+}
+
 impl EditorState {
+    /// Turns autosave and recovery on, keeping untitled projects' recovery
+    /// files in `dir`.
+    pub fn enable_recovery(&mut self, dir: PathBuf) {
+        self.recovery = Some(Autosaver {
+            session: Session::new(dir),
+            saved_revision: None,
+            dirty_since: None,
+            superseded: None,
+        });
+    }
+
+    /// At launch with no project to open: offers the newest unsaved project
+    /// a crashed session left behind.
+    pub fn offer_orphaned_recovery(&mut self) {
+        if let Some(rec) = &self.recovery
+            && self.pending_recovery.is_none()
+        {
+            self.pending_recovery = recovery::orphans(rec.session.dir()).into_iter().next();
+        }
+    }
+
+    /// Writes an autosave if the project has been modified for the autosave
+    /// interval and nothing is mid-edit. Call once per frame; `busy` is true
+    /// while a drag or text entry is in progress or a dialog is open.
+    pub fn autosave_tick(&mut self, now: Instant, busy: bool) {
+        let secs = self.prefs.autosave_seconds;
+        let rev = self.history.revision();
+        let dirty = self.history.is_dirty();
+        let waiting = self.pending_recovery.is_some();
+        let Some(rec) = self.recovery.as_mut() else {
+            return;
+        };
+        if !dirty {
+            // Back at the saved state (saved, or everything undone): an
+            // autosave of the edits in between must not be offered later.
+            rec.dirty_since = None;
+            if rec.saved_revision.take().is_some() {
+                self.discard_autosave();
+            }
+            return;
+        }
+        // While an offer is waiting its file may be the only copy of the
+        // user's work, and a titled project's autosave is the same file:
+        // never write over it before they decide.
+        if secs == 0 || waiting || rec.saved_revision == Some(rev) {
+            return;
+        }
+        let since = *rec.dirty_since.get_or_insert(now);
+        if busy || now.duration_since(since) < Duration::from_secs(u64::from(secs)) {
+            return;
+        }
+        let target = match &self.project_path {
+            Some(project) => Ok(recovery::autosave_path(project)),
+            None => rec.session.untitled_path(),
+        };
+        // Field by field: `rec` borrows `self.recovery`.
+        let (tabs, active) = self.workspace.to_saved(self.time);
+        let ui_state =
+            crate::compat::to_ui_state(&self.project.view, self.dialog_tab, &tabs, active);
+        let written = target.map_err(|e| e.to_string()).and_then(|path| {
+            persist::save_with_ui(self.history.current(), Some(&ui_state), &path)
+                .map(|()| path)
+                .map_err(|e| e.to_string())
+        });
+        match written {
+            Ok(_) => {
+                rec.saved_revision = Some(rev);
+                rec.dirty_since = None;
+                if let Some(old) = rec.superseded.take() {
+                    recovery::discard(&old);
+                }
+            }
+            Err(e) => {
+                tracing::warn!("autosave failed: {e}");
+                rec.dirty_since = Some(now); // try again after another interval
+            }
+        }
+    }
+
+    /// Deletes the autosave of the current project (saved: next to it;
+    /// untitled: this session's), and the dead session's file this session
+    /// recovered from, if it is still around. Used when the project is saved,
+    /// replaced or deliberately discarded.
+    ///
+    /// **Never deletes a file an unanswered recovery offer points at**: it
+    /// may be the only copy of the user's work, and only answering the offer
+    /// (recover or discard) decides its fate.
+    pub fn discard_autosave(&mut self) {
+        if let Some(project) = &self.project_path {
+            let file = recovery::autosave_path(project);
+            let offered = self
+                .pending_recovery
+                .as_ref()
+                .is_some_and(|o| o.autosave == file);
+            if !offered {
+                let _ = std::fs::remove_file(file);
+            }
+        }
+        if let Some(rec) = self.recovery.as_mut() {
+            rec.session.forget_untitled();
+            rec.saved_revision = None;
+            rec.dirty_since = None;
+            // The orphan this session recovered from is now either saved or
+            // given up: it must not be offered again at the next launch.
+            if let Some(old) = rec.superseded.take() {
+                recovery::discard(&old);
+            }
+        }
+    }
+
+    /// Loads the offered autosave in place of what is open. The recovered
+    /// project counts as unsaved; the file stays until it is saved or
+    /// discarded, being the only copy of those edits.
+    pub fn recover(&mut self) {
+        let Some(offer) = self.pending_recovery.take() else {
+            return;
+        };
+        match persist::load_with_ui(&offer.autosave) {
+            Ok((doc, ui_state)) => {
+                self.history.reset_unsaved(doc);
+                self.project_path.clone_from(&offer.project);
+                self.reset_view();
+                if let Some(state) = ui_state {
+                    self.restore_ui_state(&state);
+                }
+                self.project.forget_missing(self.history.current());
+                if offer.project.is_none()
+                    && let Some(rec) = self.recovery.as_mut()
+                {
+                    // Untitled: this session autosaves under its own name; the
+                    // dead session's file goes once ours has the same edits.
+                    rec.superseded = Some(offer.clone());
+                }
+                self.info("Recovered unsaved changes. Save the project to keep them.");
+            }
+            Err(e) => {
+                // Keep the file: a loader bug must not cost the user their work.
+                self.error(format!(
+                    "Could not recover {}: {e}. The file was left in place.",
+                    offer.autosave.display()
+                ));
+            }
+        }
+    }
+
+    /// Throws the offered autosave away.
+    pub fn discard_recovery(&mut self) {
+        if let Some(offer) = self.pending_recovery.take() {
+            recovery::discard(&offer);
+        }
+    }
+
+    /// A clean exit: nothing of this session should be offered next time. Does
+    /// nothing while the project has unsaved changes the user has not
+    /// explicitly given up (`confirmed`), so a close that was not confirmed
+    /// is treated like a crash and recoverable.
+    pub fn finish_session(&mut self, confirmed: bool) {
+        if self.history.is_dirty() && !confirmed {
+            return;
+        }
+        self.discard_autosave();
+        if let Some(rec) = self.recovery.as_mut() {
+            rec.session.finish();
+        }
+    }
+
     /// Applies `kind` with default parameters to every selected segment.
     fn apply_kind(&mut self, kind: InterpKind) {
         let targets = self.selected_segments();
@@ -1224,7 +1831,7 @@ pub(crate) fn segments_of(
 }
 
 /// `"<base> 1"`, or the smallest number that is not `taken`.
-fn next_name(base: &str, taken: impl Fn(&str) -> bool) -> String {
+pub(crate) fn next_name(base: &str, taken: impl Fn(&str) -> bool) -> String {
     let mut n = 1u64;
     loop {
         let candidate = format!("{base} {n}");
@@ -1249,7 +1856,7 @@ fn media_kind(path: &Path) -> Option<AssetKind> {
 
 /// Reads a media file's facts into an [`Asset`] (path stored relative to
 /// `root` when inside it). Fails with a short reason.
-fn probe_asset(path: &Path, root: Option<&Path>) -> Result<Asset, String> {
+pub(crate) fn probe_asset(path: &Path, root: Option<&Path>) -> Result<Asset, String> {
     let stored = portable_path(path, root);
     let name = path
         .file_name()
@@ -1467,6 +2074,240 @@ mod tests {
         }
     }
 
+    // ───────────────────────── autosave and recovery ─────────────────────────
+
+    /// A state with recovery on (folder under `dir`), a 10 s interval and one
+    /// composition. `saved` also gives it a project file `P.voxy` in `dir`.
+    fn recovering(dir: &Path, saved: bool) -> EditorState {
+        let mut s = state();
+        s.enable_recovery(dir.join("recovery"));
+        s.prefs.autosave_seconds = 10;
+        s.new_composition(false).unwrap();
+        if saved {
+            let path = dir.join("P.voxy");
+            persist::save(s.history.current(), &path).unwrap();
+            s.open_path(&path);
+        }
+        s
+    }
+
+    fn edit_something(s: &mut EditorState) {
+        let comp = s.comp_id().unwrap();
+        s.execute(voxy_core::command::AddSolidLayer {
+            comp,
+            name: None,
+            color: LinearRgba::WHITE,
+            index: 0,
+        });
+    }
+
+    #[test]
+    fn autosave_waits_for_the_interval_then_writes_beside_the_project() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = recovering(dir.path(), true);
+        let auto = recovery::autosave_path(&dir.path().join("P.voxy"));
+        let t0 = Instant::now();
+        let secs = Duration::from_secs;
+
+        // Clean project: nothing to autosave, however long we wait.
+        s.autosave_tick(t0 + secs(100), false);
+        assert!(!auto.exists());
+
+        edit_something(&mut s);
+        s.autosave_tick(t0, false); // first noticed
+        s.autosave_tick(t0 + secs(9), false);
+        assert!(!auto.exists(), "not before the interval");
+        s.autosave_tick(t0 + secs(10), true);
+        assert!(
+            !auto.exists(),
+            "not while something is being dragged or typed"
+        );
+        s.autosave_tick(t0 + secs(11), false);
+        assert!(auto.exists());
+        let (saved, _) = persist::load_with_ui(&auto).unwrap();
+        assert_eq!(&saved, &**s.history.current(), "it is the open document");
+
+        // The project file itself is untouched; the same state is not rewritten.
+        let project = std::fs::read_to_string(dir.path().join("P.voxy")).unwrap();
+        assert!(!project.contains("Solid"), "{project}");
+        let first = std::fs::metadata(&auto).unwrap().modified().unwrap();
+        s.autosave_tick(t0 + secs(200), false);
+        assert_eq!(std::fs::metadata(&auto).unwrap().modified().unwrap(), first);
+
+        // A later edit starts a new interval.
+        edit_something(&mut s);
+        s.autosave_tick(t0 + secs(300), false);
+        s.autosave_tick(t0 + secs(309), false);
+        assert_eq!(std::fs::metadata(&auto).unwrap().modified().unwrap(), first);
+        s.autosave_tick(t0 + secs(310), false);
+        let (saved, _) = persist::load_with_ui(&auto).unwrap();
+        assert_eq!(&saved, &**s.history.current());
+    }
+
+    #[test]
+    fn autosave_off_means_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = recovering(dir.path(), true);
+        s.prefs.autosave_seconds = 0;
+        edit_something(&mut s);
+        let t0 = Instant::now();
+        s.autosave_tick(t0, false);
+        s.autosave_tick(t0 + Duration::from_secs(10_000), false);
+        assert!(!recovery::autosave_path(&dir.path().join("P.voxy")).exists());
+    }
+
+    #[test]
+    fn saving_or_undoing_back_to_clean_deletes_the_autosave() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = recovering(dir.path(), true);
+        let auto = recovery::autosave_path(&dir.path().join("P.voxy"));
+        let t0 = Instant::now();
+        let make = |s: &mut EditorState, at: u64| {
+            edit_something(s);
+            s.autosave_tick(t0 + Duration::from_secs(at), false);
+            s.autosave_tick(t0 + Duration::from_secs(at + 10), false);
+        };
+        make(&mut s, 0);
+        assert!(auto.exists());
+        // Everything undone: the document equals the saved file again, so an
+        // autosave of the edits in between must not be offered after a crash.
+        assert!(s.history.undo());
+        s.autosave_tick(t0 + Duration::from_secs(50), false);
+        assert!(!auto.exists());
+        // Saving removes it too.
+        s.history.redo();
+        make(&mut s, 100);
+        assert!(auto.exists());
+        assert!(s.save());
+        assert!(!auto.exists());
+    }
+
+    #[test]
+    fn untitled_projects_autosave_in_the_recovery_folder_and_clean_up_on_exit() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = recovering(dir.path(), false);
+        let rec = dir.path().join("recovery");
+        edit_something(&mut s);
+        let t0 = Instant::now();
+        s.autosave_tick(t0, false);
+        s.autosave_tick(t0 + Duration::from_secs(10), false);
+        let files: Vec<_> = std::fs::read_dir(&rec).unwrap().flatten().collect();
+        assert_eq!(files.len(), 2, "autosave and its session lock: {files:?}");
+        // This window is alive, so it is not a crash to recover.
+        assert_eq!(recovery::orphans(&rec).len(), 0);
+        // An unconfirmed close with unsaved changes keeps the file.
+        s.finish_session(false);
+        assert_eq!(std::fs::read_dir(&rec).unwrap().count(), 2);
+        // A confirmed one (saved or "Don't Save") removes everything.
+        s.finish_session(true);
+        assert_eq!(std::fs::read_dir(&rec).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn a_newer_autosave_is_offered_on_open_and_never_overwritten_meanwhile() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = recovering(dir.path(), true);
+        let project = dir.path().join("P.voxy");
+        let auto = recovery::autosave_path(&project);
+        // The autosave must be strictly newer than the project file, which
+        // `recovering` just saved: leave a gap larger than the file system's
+        // timestamp granularity.
+        std::thread::sleep(Duration::from_millis(50));
+        edit_something(&mut s);
+        let t0 = Instant::now();
+        s.autosave_tick(t0, false);
+        s.autosave_tick(t0 + Duration::from_secs(10), false);
+        let crashed_doc = Document::clone(s.history.current());
+        // The window dies; a new one opens the project.
+        std::thread::sleep(Duration::from_millis(50));
+        let mut s2 = recovering(dir.path(), false);
+        s2.pending_recovery = None;
+        // (recovering() made a fresh composition; open_path replaces it.)
+        s2.open_path(&project);
+        assert!(s2.pending_recovery.is_some(), "newer than the project file");
+        // The user has not decided yet: edits must not overwrite the file.
+        let before = std::fs::read(&auto).unwrap();
+        edit_something(&mut s2);
+        s2.autosave_tick(t0, false);
+        s2.autosave_tick(t0 + Duration::from_secs(1000), false);
+        assert_eq!(std::fs::read(&auto).unwrap(), before);
+        // Undo that edit and recover: the autosaved document comes back, as
+        // an unsaved change to the same project.
+        s2.history.undo();
+        s2.recover();
+        assert!(s2.pending_recovery.is_none());
+        assert_eq!(&**s2.history.current(), &crashed_doc);
+        assert!(s2.history.is_dirty());
+        assert_eq!(s2.project_path.as_deref(), Some(project.as_path()));
+        assert!(auto.exists(), "kept until saved");
+        assert!(s2.save());
+        assert!(!auto.exists());
+    }
+
+    #[test]
+    fn discarding_an_offer_deletes_it_and_loading_a_bad_one_keeps_it() {
+        let dir = tempfile::tempdir().unwrap();
+        // The project exists on disk but is not open (as at launch).
+        let mut s = recovering(dir.path(), false);
+        let project = dir.path().join("P.voxy");
+        persist::save(s.history.current(), &project).unwrap();
+        let auto = recovery::autosave_path(&project);
+        std::thread::sleep(Duration::from_millis(50));
+        std::fs::write(&auto, "this is not a project").unwrap();
+        s.open_path(&project);
+        assert!(s.pending_recovery.is_some());
+        let before = Document::clone(s.history.current());
+        s.recover();
+        assert!(s.status.as_ref().is_some_and(|st| st.is_error));
+        assert_eq!(&**s.history.current(), &before, "nothing was replaced");
+        assert!(
+            auto.exists(),
+            "an unreadable autosave is left for inspection"
+        );
+        s.open_path(&project);
+        s.discard_recovery();
+        assert!(!auto.exists());
+        assert!(s.pending_recovery.is_none());
+    }
+
+    #[test]
+    fn a_crashed_untitled_project_is_recovered_and_the_old_file_cleaned_up() {
+        let dir = tempfile::tempdir().unwrap();
+        let rec = dir.path().join("recovery");
+        let crashed_doc;
+        {
+            let mut a = recovering(dir.path(), false);
+            edit_something(&mut a);
+            let t0 = Instant::now();
+            a.autosave_tick(t0, false);
+            a.autosave_tick(t0 + Duration::from_secs(10), false);
+            crashed_doc = Document::clone(a.history.current());
+            // `a` goes away without a clean exit: the process died.
+        }
+        let mut b = recovering(dir.path(), false);
+        b.offer_orphaned_recovery();
+        let offer = b
+            .pending_recovery
+            .clone()
+            .expect("the crashed session's copy");
+        b.recover();
+        assert_eq!(&**b.history.current(), &crashed_doc);
+        assert!(b.history.is_dirty() && b.project_path.is_none());
+        assert!(
+            offer.autosave.exists(),
+            "kept until this session has its own copy"
+        );
+        let t0 = Instant::now();
+        b.autosave_tick(t0, false);
+        b.autosave_tick(t0 + Duration::from_secs(10), false);
+        assert!(
+            !offer.autosave.exists(),
+            "superseded by this session's autosave"
+        );
+        assert_eq!(recovery::orphans(&rec).len(), 0);
+        b.finish_session(true);
+    }
+
     fn write_png(path: &Path) {
         image::RgbaImage::new(2, 3).save(path).unwrap();
     }
@@ -1552,12 +2393,13 @@ mod tests {
             Some(a),
             "the first stays main"
         );
-        s.history.undo();
+        s.undo();
         assert_eq!(
             s.comp_id(),
             Some(a),
-            "undo falls back to a composition that exists"
+            "undo closes the tab of the composition it removed"
         );
+        assert_eq!(s.workspace.tabs.len(), 1);
     }
 
     #[test]
@@ -2006,6 +2848,544 @@ mod tests {
         assert_eq!(
             s.availability(Action::RevealInFileManager),
             Err("Compositions and folders have no file.".to_owned())
+        );
+    }
+
+    // ---- composition tabs and navigation -------------------------------
+
+    /// A project with compositions `names`, none open yet except the first.
+    fn tabs_state(names: &[&str]) -> (EditorState, Vec<CompId>) {
+        let mut s = EditorState::new(Document::empty("tabs"));
+        let ids = names
+            .iter()
+            .map(|n| {
+                s.create_composition(
+                    CompSettings {
+                        name: (*n).to_owned(),
+                        width: 64,
+                        height: 36,
+                        duration: Time::from_secs(10),
+                        ..CompSettings::default()
+                    },
+                    None,
+                )
+                .expect("test setup")
+            })
+            .collect();
+        // Creating a composition opens its tab; tests open what they need.
+        s.change_workspace(|w| *w = crate::workspace::Workspace::default());
+        (s, ids)
+    }
+
+    /// Adds a solid layer to `comp`; returns its id.
+    fn solid(s: &mut EditorState, comp: CompId) -> LayerId {
+        s.history
+            .execute(voxy_core::command::AddSolidLayer {
+                comp,
+                name: None,
+                color: voxy_core::LinearRgba::WHITE,
+                index: 0,
+            })
+            .expect("test setup");
+        s.history.current().comp(comp).expect("comp").layers[0].id
+    }
+
+    /// Adds a precomp layer of `child` to `parent`; returns its id.
+    fn nest(s: &mut EditorState, parent: CompId, child: CompId) -> LayerId {
+        s.history
+            .execute_reported(voxy_core::command::AddSourceLayer {
+                comp: parent,
+                source: voxy_core::SourceRef::Comp(child),
+                index: 0,
+                in_point: Time::ZERO,
+            })
+            .expect("test setup")
+            .created_layers[0]
+    }
+
+    #[test]
+    fn a_new_project_opens_its_main_composition_and_closing_the_last_tab_empties_the_editor() {
+        let (mut s, c) = tabs_state(&["A"]);
+        s.open_comp(c[0]);
+        assert_eq!(s.comp_id(), Some(c[0]));
+        // A project opened from a file shows its main composition.
+        let doc = Document::clone(s.history.current());
+        assert_eq!(EditorState::new(doc).comp_id(), Some(c[0]));
+        s.close_tab(0);
+        assert!(s.comp_id().is_none(), "no tab: the empty-state screen");
+        assert_eq!(s.history.current().comps.len(), 1, "the composition stays");
+        // A project with no compositions has no tab either.
+        let empty = EditorState::new(Document::empty("e"));
+        assert!(empty.workspace.tabs.is_empty() && empty.comp_id().is_none());
+    }
+
+    #[test]
+    fn each_tab_keeps_its_own_playhead_and_selection() {
+        let (mut s, c) = tabs_state(&["A", "B"]);
+        let (la, lb) = (solid(&mut s, c[0]), solid(&mut s, c[1]));
+        s.open_comp(c[0]);
+        s.time = Time::from_secs(3);
+        s.selection = Some(la);
+        s.open_comp(c[1]);
+        assert_eq!((s.time, s.selection), (Time::ZERO, None), "a fresh tab");
+        s.time = Time::from_secs(5);
+        s.selection = Some(lb);
+        s.open_comp(c[0]);
+        assert_eq!((s.time, s.selection), (Time::from_secs(3), Some(la)));
+        s.switch_tab(1);
+        assert_eq!((s.time, s.selection), (Time::from_secs(5), Some(lb)));
+        assert_eq!(s.workspace.tabs.len(), 2, "never a duplicate tab");
+    }
+
+    #[test]
+    fn navigating_into_a_precomp_maps_the_playhead_and_going_back_restores_it() {
+        let (mut s, c) = tabs_state(&["Parent", "Child"]);
+        let l = nest(&mut s, c[0], c[1]);
+        s.history
+            .execute(voxy_core::command::SetPrecompTiming {
+                layer: l,
+                speed: 2.0,
+                looping: false,
+                time_remap: false,
+            })
+            .expect("test setup");
+        s.open_comp(c[0]);
+        s.time = Time::from_secs(1);
+        s.selection = Some(l);
+        let rev = s.history.revision();
+        s.navigate_into_layer(l);
+        assert_eq!(s.comp_id(), Some(c[1]));
+        assert_eq!(
+            s.time,
+            Time::from_secs(2),
+            "speed 2: 1 s in the parent is 2 s in the child"
+        );
+        assert_eq!(s.selection, None);
+        let tab = &s.workspace.tabs[s.workspace.active.expect("active")];
+        assert_eq!(tab.path.len(), 2);
+        assert_eq!(tab.path[1].via_layer, Some(l));
+        s.go_to_crumb(0);
+        assert_eq!(s.comp_id(), Some(c[0]));
+        assert_eq!(
+            (s.time, s.selection),
+            (Time::from_secs(1), Some(l)),
+            "as it was"
+        );
+        assert_eq!(s.history.revision(), rev, "navigation runs no command");
+    }
+
+    #[test]
+    fn the_entry_time_is_clamped_into_the_child_and_snapped_to_its_frames() {
+        let (mut s, c) = tabs_state(&["Parent", "Child"]);
+        let l = nest(&mut s, c[0], c[1]);
+        // The layer starts 0.5 s into the child.
+        s.history
+            .execute(voxy_core::command::SetLayerTiming {
+                layer: l,
+                in_point: Time::ZERO,
+                out_point: Time::from_secs(10),
+                start_offset: Time::from_millis(500),
+            })
+            .expect("test setup");
+        s.open_comp(c[0]);
+        s.time = Time::from_secs(9) + Time::from_millis(990);
+        s.navigate_into_layer(l);
+        let rate = FrameRate::FPS_30;
+        let last = rate.frame_to_time(rate.time_to_frame(Time::from_secs(10)) - 1);
+        assert_eq!(s.time, last, "past the end of the child: its last frame");
+    }
+
+    #[test]
+    fn double_click_follows_the_preference_and_shift_does_the_other_thing() {
+        let (mut s, c) = tabs_state(&["Parent", "Child"]);
+        let l = nest(&mut s, c[0], c[1]);
+        s.open_comp(c[0]);
+        // Default: navigate in the current tab.
+        s.open_precomp_layer(l, false);
+        assert_eq!(s.workspace.tabs.len(), 1);
+        assert_eq!(s.workspace.tabs[0].path.len(), 2);
+        s.go_to_crumb(0);
+        // Shift: the child's own tab.
+        s.open_precomp_layer(l, true);
+        assert_eq!(s.workspace.tabs.len(), 2);
+        assert_eq!(s.comp_id(), Some(c[1]));
+        assert_eq!(s.workspace.tabs[1].path.len(), 1, "a fresh breadcrumb");
+        s.switch_tab(0);
+        // The preference flipped: its own tab by default, Shift navigates.
+        s.prefs.precomp_double_click = crate::prefs::PrecompOpen::OwnTab;
+        s.open_precomp_layer(l, false);
+        assert_eq!(s.comp_id(), Some(c[1]));
+        assert_eq!(s.workspace.tabs.len(), 2, "switched to the existing tab");
+        s.close_tab(1);
+        s.open_precomp_layer(l, true);
+        assert_eq!(s.workspace.tabs[0].path.len(), 2, "Shift navigates");
+    }
+
+    #[test]
+    fn navigating_into_a_comp_that_has_its_own_tab_switches_to_it() {
+        let (mut s, c) = tabs_state(&["Parent", "Child"]);
+        let l = nest(&mut s, c[0], c[1]);
+        s.open_comp(c[0]);
+        s.open_comp(c[1]);
+        s.switch_tab(0);
+        s.navigate_into_layer(l);
+        assert_eq!(s.comp_id(), Some(c[1]));
+        assert_eq!(s.workspace.tabs.len(), 2);
+        assert_eq!(
+            s.workspace.tabs[0].path.len(),
+            1,
+            "the parent tab did not move"
+        );
+    }
+
+    #[test]
+    fn go_to_parent_steps_up_or_finds_the_user_of_the_composition() {
+        let (mut s, c) = tabs_state(&["Parent", "Child", "Loner"]);
+        let l = nest(&mut s, c[0], c[1]);
+        // From the Project panel: the child's own tab, no breadcrumb.
+        s.open_comp(c[1]);
+        assert!(s.availability(Action::CompositionGoToParent).is_ok());
+        s.perform(Action::CompositionGoToParent);
+        assert_eq!(s.comp_id(), Some(c[0]), "the composition that uses it");
+        assert_eq!(s.selection, Some(l), "with the layer selected");
+        // Inside a breadcrumb: one step up.
+        s.navigate_into_layer(l);
+        assert_eq!(s.comp_id(), Some(c[1]));
+        s.perform(Action::CompositionGoToParent);
+        assert_eq!(
+            s.workspace.tabs.iter().filter(|t| t.comp() == c[0]).count(),
+            1
+        );
+        assert_eq!(s.comp_id(), Some(c[0]));
+        // Unused: disabled with the reason.
+        s.open_comp(c[2]);
+        let why = s
+            .availability(Action::CompositionGoToParent)
+            .expect_err("unused");
+        assert!(why.contains("not used"), "{why}");
+        // Nothing open: the generic reason.
+        s.close_tab(s.workspace.active.expect("active"));
+    }
+
+    #[test]
+    fn removing_a_composition_closes_its_tab_and_breadcrumb() {
+        let (mut s, c) = tabs_state(&["Parent", "Child"]);
+        let l = nest(&mut s, c[0], c[1]);
+        s.open_comp(c[0]);
+        s.navigate_into_layer(l);
+        s.open_comp(c[0]);
+        s.remove_items(vec![PoolItem::Comp(c[1])], RemoveMode::PlaceholderLayers);
+        s.fix_selection();
+        assert_eq!(s.workspace.tabs.len(), 1);
+        assert_eq!(s.workspace.tabs[0].path.len(), 1, "the breadcrumb is cut");
+        assert_eq!(s.comp_id(), Some(c[0]));
+    }
+
+    #[test]
+    fn undo_goes_to_the_composition_it_changed_and_redo_selects_the_layer() {
+        let (mut s, c) = tabs_state(&["A", "B"]);
+        s.open_comp(c[1]);
+        let added = solid(&mut s, c[1]);
+        // The user is looking at A when they press Undo.
+        s.open_comp(c[0]);
+        assert!(s.undo());
+        assert_eq!(
+            s.comp_id(),
+            Some(c[1]),
+            "went to the composition the undo changed"
+        );
+        s.open_comp(c[0]);
+        assert!(s.redo());
+        assert_eq!(s.comp_id(), Some(c[1]));
+        assert_eq!(s.selection, Some(added), "the layer the redo brought back");
+        // An undo that changes the open composition stays where it is.
+        s.open_comp(c[1]);
+        assert!(s.undo());
+        assert_eq!(s.comp_id(), Some(c[1]));
+        assert_eq!(s.workspace.tabs.len(), 2);
+    }
+
+    #[test]
+    fn the_open_tabs_are_saved_with_the_project_and_restored() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("tabs.voxy");
+        let (mut s, c) = tabs_state(&["Parent", "Child", "Other"]);
+        let l = nest(&mut s, c[0], c[1]);
+        s.open_comp(c[2]);
+        s.time = Time::from_secs(4);
+        s.open_comp(c[0]);
+        s.time = Time::from_secs(1);
+        s.navigate_into_layer(l);
+        s.time = Time::from_secs(2);
+        assert!(s.save_to(&path));
+        let mut t = EditorState::new(Document::empty("x"));
+        t.open_path(&path);
+        assert_eq!(t.workspace.tabs.len(), 2);
+        assert_eq!(t.comp_id(), Some(c[1]), "the navigated-into composition");
+        assert_eq!(t.time, Time::from_secs(2), "its playhead");
+        assert_eq!(t.workspace.tabs[1].path.len(), 2, "the breadcrumb");
+        t.switch_tab(0);
+        assert_eq!((t.comp_id(), t.time), (Some(c[2]), Time::from_secs(4)));
+    }
+
+    #[test]
+    #[allow(clippy::many_single_char_names)] // s, c: the state and its compositions, as in the other tab tests.
+    fn closing_every_tab_is_remembered_and_old_files_show_the_main_composition() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("closed.voxy");
+        let (mut s, c) = tabs_state(&["A"]);
+        s.open_comp(c[0]);
+        s.close_tab(0);
+        assert!(s.save_to(&path));
+        let mut closed = EditorState::new(Document::empty("x"));
+        closed.open_path(&path);
+        assert!(
+            closed.comp_id().is_none(),
+            "the empty-state screen, as left"
+        );
+        assert_eq!(closed.history.current().comps.len(), 1);
+        // A project saved before tabs existed has no `tabs` entry.
+        let old = dir.path().join("old.voxy");
+        let ui = serde_json::json!({"version": 2, "project_panel": {}});
+        persist::save_with_ui(s.history.current(), Some(&ui), &old).expect("save");
+        let mut older = EditorState::new(Document::empty("x"));
+        older.open_path(&old);
+        assert_eq!(older.comp_id(), Some(c[0]), "the main composition");
+        // And a file with tabs for compositions that are gone opens cleanly.
+        let stale = dir.path().join("stale.voxy");
+        let ui = serde_json::json!({
+            "tabs": [{"path": [{"comp": 999}], "time": 0}],
+            "active_tab": 0
+        });
+        persist::save_with_ui(s.history.current(), Some(&ui), &stale).expect("save");
+        let mut gone = EditorState::new(Document::empty("x"));
+        gone.open_path(&stale);
+        assert!(gone.comp_id().is_none() && gone.workspace.tabs.is_empty());
+    }
+
+    #[test]
+    fn a_linked_playhead_takes_the_parent_to_the_matching_time_when_going_up() {
+        let (mut s, c) = tabs_state(&["Parent", "Child"]);
+        let l = nest(&mut s, c[0], c[1]);
+        s.history
+            .execute(voxy_core::command::SetLayerTiming {
+                layer: l,
+                in_point: Time::from_secs(2),
+                out_point: Time::from_secs(8),
+                start_offset: Time::from_millis(500),
+            })
+            .expect("test setup");
+        s.history
+            .execute(voxy_core::command::SetPrecompTiming {
+                layer: l,
+                speed: 2.0,
+                looping: false,
+                time_remap: false,
+            })
+            .expect("test setup");
+        s.open_comp(c[0]);
+        s.time = Time::from_secs(3);
+        s.navigate_into_layer(l);
+        // Not linked (the default): the parent comes back as it was.
+        s.time = Time::from_millis(4500);
+        s.go_to_crumb(0);
+        assert_eq!(s.time, Time::from_secs(3));
+        // Linked: child 4.5 s is parent 2 + (4.5 - 0.5) / 2 = 4 s.
+        s.navigate_into_layer(l);
+        s.set_link_playhead(true);
+        assert!(s.link_playhead());
+        s.time = Time::from_millis(4500);
+        s.go_to_crumb(0);
+        assert_eq!(s.time, Time::from_secs(4));
+        // A remap cannot be inverted: the parent keeps its own time.
+        s.history
+            .execute(voxy_core::command::SetPrecompTiming {
+                layer: l,
+                speed: 1.0,
+                looping: false,
+                time_remap: true,
+            })
+            .expect("test setup");
+        s.time = Time::from_secs(5);
+        s.navigate_into_layer(l);
+        s.set_link_playhead(true);
+        s.time = Time::from_secs(1);
+        s.go_to_crumb(0);
+        assert_eq!(s.time, Time::from_secs(5), "not invertible: unchanged");
+    }
+
+    #[test]
+    fn the_child_tab_knows_which_times_its_layer_shows() {
+        let (mut s, c) = tabs_state(&["Parent", "Child"]);
+        let l = nest(&mut s, c[0], c[1]);
+        s.history
+            .execute(voxy_core::command::SetLayerTiming {
+                layer: l,
+                in_point: Time::from_secs(1),
+                out_point: Time::from_secs(3),
+                start_offset: Time::from_secs(4),
+            })
+            .expect("test setup");
+        s.open_comp(c[0]);
+        assert!(
+            s.active_child_range().is_none(),
+            "the parent was not entered through a layer"
+        );
+        s.time = Time::from_secs(1);
+        s.navigate_into_layer(l);
+        let Some(crate::nav_time::ChildRange::Bounded { first, last }) = s.active_child_range()
+        else {
+            panic!("expected a bounded range")
+        };
+        assert_eq!(first, Time::from_secs(4));
+        assert!(
+            last > Time::from_secs(5) && last < Time::from_secs(6),
+            "{last:?}"
+        );
+        // Opened from the Project panel (a fresh tab, no layer): no shading.
+        s.go_to_crumb(0);
+        s.close_tab(0);
+        s.open_comp(c[1]);
+        assert!(s.active_child_range().is_none());
+    }
+
+    #[test]
+    fn an_undecided_offer_survives_closing_saving_and_opening_something_else() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("P.voxy");
+        let auto = recovery::autosave_path(&project);
+        // A crash left an autosave newer than the project file.
+        let mut crashed = recovering(dir.path(), true);
+        // The autosave must be strictly newer than the project file.
+        std::thread::sleep(Duration::from_millis(50));
+        edit_something(&mut crashed);
+        let t0 = Instant::now();
+        crashed.autosave_tick(t0, false);
+        crashed.autosave_tick(t0 + Duration::from_secs(10), false);
+        assert!(auto.exists());
+        drop(crashed);
+        std::thread::sleep(Duration::from_millis(50));
+        // The user opens the project: an offer is waiting, undecided.
+        let mut s = recovering(dir.path(), false);
+        s.open_path(&project);
+        assert!(s.pending_recovery.is_some());
+        // Closing the window without answering must not delete the only copy.
+        s.finish_session(false);
+        assert!(auto.exists(), "an unconfirmed close keeps it");
+        s.finish_session(true);
+        assert!(
+            auto.exists(),
+            "even a clean exit: the offer was never answered"
+        );
+        // Nor does opening another project.
+        let other = dir.path().join("Q.voxy");
+        persist::save(s.history.current(), &other).unwrap();
+        s.open_path(&other);
+        assert!(auto.exists(), "opening another project leaves P's autosave");
+        // P's offer comes back when P is opened again; answering deletes it.
+        s.open_path(&project);
+        assert!(s.pending_recovery.is_some());
+        // Saving the open document does not decide the offer either.
+        assert!(s.save());
+        assert!(
+            auto.exists(),
+            "saving does not delete an unanswered offer's file"
+        );
+        s.discard_recovery();
+        assert!(!auto.exists());
+    }
+
+    #[test]
+    fn a_recovered_orphan_is_cleaned_up_when_the_user_saves_or_gives_up() {
+        for save in [true, false] {
+            let dir = tempfile::tempdir().unwrap();
+            let rec = dir.path().join("recovery");
+            {
+                let mut a = recovering(dir.path(), false);
+                edit_something(&mut a);
+                let t0 = Instant::now();
+                a.autosave_tick(t0, false);
+                a.autosave_tick(t0 + Duration::from_secs(10), false);
+            }
+            let mut b = recovering(dir.path(), false);
+            b.offer_orphaned_recovery();
+            let offer = b.pending_recovery.clone().expect("the orphan");
+            b.recover();
+            assert!(
+                offer.autosave.exists(),
+                "kept until this session has a copy"
+            );
+            // Before the next autosave interval: save, or quit with Don't Save.
+            if save {
+                b.dialogs = Box::new(SaveTo(dir.path().join("Saved.voxy")));
+                assert!(b.save());
+            } else {
+                b.finish_session(true);
+            }
+            assert!(
+                !offer.autosave.exists(),
+                "the dead session's file must not come back (save: {save})"
+            );
+            assert_eq!(recovery::orphans(&rec).len(), 0, "save: {save}");
+        }
+    }
+
+    /// A dialog stub that saves to a fixed path.
+    #[derive(Debug)]
+    struct SaveTo(PathBuf);
+
+    impl crate::dialogs::Dialogs for SaveTo {
+        fn pick_media(&self) -> Vec<PathBuf> {
+            Vec::new()
+        }
+        fn pick_image(&self) -> Option<PathBuf> {
+            None
+        }
+        fn pick_video(&self) -> Option<PathBuf> {
+            None
+        }
+        fn pick_relink(&self) -> Option<PathBuf> {
+            None
+        }
+        fn open_project(&self) -> Option<PathBuf> {
+            None
+        }
+        fn save_project(&self, _file_name: &str) -> Option<PathBuf> {
+            Some(self.0.clone())
+        }
+    }
+
+    #[test]
+    fn playback_stops_when_another_tab_takes_the_active_index() {
+        let (mut s, c) = tabs_state(&["B", "A", "C"]);
+        // Tab 0 came from B into A; tab 1 shows B; tab 2 shows C.
+        s.open_comp(c[1]);
+        s.open_comp(c[0]);
+        s.open_comp(c[2]);
+        s.switch_tab(0);
+        s.workspace.tabs[0].path.insert(
+            0,
+            crate::workspace::NavStep {
+                comp: c[0],
+                via_layer: None,
+            },
+        );
+        s.workspace.tabs[0].path[1].via_layer = Some(LayerId(1));
+        s.workspace.tabs[0]
+            .trail
+            .push(crate::workspace::TabView::default());
+        assert_eq!(s.workspace.active, Some(0));
+        s.transport.play(Time::ZERO, FrameRate::FPS_30);
+        assert!(s.transport.is_playing());
+        // Going up lands on B, which tab 1 already shows: tab 0 closes and
+        // the tab that was at index 1 is now at index 0 (the same index!).
+        s.go_to_crumb(0);
+        assert_eq!(s.workspace.tabs.len(), 2);
+        assert_eq!(s.workspace.active, Some(0), "the same index as before");
+        assert_eq!(s.comp_id(), Some(c[0]), "but a different tab");
+        assert!(
+            !s.transport.is_playing(),
+            "playback stopped with the switch"
         );
     }
 }

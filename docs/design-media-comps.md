@@ -814,3 +814,134 @@ What landed in `voxy-core`, and where it refines the design above.
   main composition (`EditorState::comp_id`), and every panel handles a
   project with none. The viewport's frame key now includes the composition
   ID, so switching compositions can never show a stale frame.
+
+## Implementation notes (Milestone D)
+
+- **Core** (`command/dropping.rs`). `resolve_drop(doc, target, items,
+  placement) -> Plan` is pure and is called by both the drag preview and the
+  command, so the preview matches the result. `DropItems { target, items,
+  placement, folder }` imports any `DropItem::File` (already probed by the
+  UI; core does no I/O) and then applies the plan, as one undo step.
+  `DropTarget` is `Timeline`, `Viewport`, `ReplaceLayer` or `NewComp {
+  per_item, source }`. The length rule is `source_layer_length`, shared with
+  `AddSourceLayer`. Cycles block the drop with the reason ("A can't be placed
+  in B: B already contains it (A › B)"); a blocked or failing drop changes
+  nothing.
+- **Timeline** (`drops.rs`, `timeline.rs`). Dragging Project items over the
+  timeline shows an insertion line, a ghost bar per layer at the snapped
+  time, and a label at the pointer ("Add 2 layers"). The time snaps to the
+  playhead, layer edges, 0 and the composition end within 8 points; **Shift
+  turns snapping off**. **Ctrl/Cmd sequences**, **Alt/Option over a layer
+  replaces its source** (outlining the layer). Releasing runs the command; Esc
+  cancels (egui ends the drag). The new layer is selected.
+- **Viewport.** The marker shows where the layer will be centered; on release
+  the layer goes on top at the playhead with its center at the pointer. Alt
+  replace is not offered there because the viewport cannot pick a layer under
+  the pointer yet (viewport hit testing is still deferred).
+- **Files from the OS** dropped on the timeline or viewport are imported and
+  placed in one undo step. On the Project panel they are only imported, as
+  before.
+- **Empty timeline.** Footage dragged onto the empty-state screen makes a
+  composition from it (as the From Footage tile does).
+- The Project panel's "Move item" label only appears over the Project panel;
+  over the timeline and viewport those panels show what the drop will do.
+
+## Implementation notes (Milestone E, rendering)
+
+- **Evaluate recurses.** `EvaluatedContent::Precomp` now carries `collapse`
+  and `nested: Nested`: `Shown(child at child_time)`, `OutsideChild` (the
+  child time is outside the child's duration: nothing is drawn, as in §7.2),
+  `TooDeep` (a cycle that slipped past validation, or more than
+  `MAX_NESTING` = 16 levels in the chain) or `Missing`. Nothing recurses
+  forever.
+- **Plan.** `DrawSource::Comp { plan, opacity }` holds the child's own
+  `RenderPlan`: the child's size times the preview scale, **transparent
+  background** (a nested composition's background colour never shows),
+  drawn through the precomp layer's transform. **Collapse transformations**
+  inline the child's layers into the parent's plan through the precomp
+  layer's matrix, multiplying opacities; no offscreen picture, and content
+  outside the child's bounds stays visible. `RenderPlan::content_key()` is a
+  64-bit FNV-1a over everything that decides the pixels (sizes, working
+  space, clear colour, every draw with exact `f64`/`f32` bits, video frame
+  identity, nested plans by their own keys), so two times that resolve
+  identically share one picture and any change to settings changes the key.
+  The key is computed once per plan. Evaluation and planning are
+  **memoized**: a composition used by several layers at the same child time is
+  evaluated and planned once (`Arc` shared), so a diamond of nested
+  compositions costs linear, not exponential, time.
+- **Compositor.** A `Comp` draw is rendered into a pooled `Rgba16Float`
+  texture (its own submit, so per-draw uniforms never collide) and then drawn
+  like an image. A cached picture is reused only if the plan is **equal** (the
+  key is just a hash) and every image or video asset in it still resolves to
+  the **same file** (a relink changes neither the plan nor the key, so this
+  dependency check is what refreshes it). Pictures are cached up to 512 MiB, least
+  recently drawn first, never one used this frame; textures of the same size
+  are recycled. **A picture that was missing something (an image, a video
+  frame) is not cached**, so a frame that arrives later is picked up. Missing
+  assets and pending video inside a child are reported on the frame's
+  `RenderReport`; `skipped_precomps` counts layers cut for depth or cycles.
+- **Tested** with pixel checks on the GPU (llvmpipe here; skipped without an
+  adapter unless `VOXY_REQUIRE_GPU=1`): centered placement, background never
+  drawn, nested equals direct for a simple scene, preview scale, mapped child
+  time, collapse on/off, caching and no stale picture, texture recycling,
+  missing images, depth limit, determinism. The existing golden images have no
+  precomps and did not change.
+- **Not yet:** audio from precomps (needs audio layers), the viewport-only
+  parent backdrop (§7.5), and region-of-interest clipping (the plan keeps the
+  child's bounds so it can be added without an API change). Tabs and
+  navigation (§7) are the next part of this milestone.
+
+## Implementation notes (Milestone E, tabs and navigation)
+
+- **Workspace** (`workspace.rs`, view state only). `Workspace { tabs, active }`;
+  a tab is a breadcrumb `path` of `NavStep { comp, via_layer }` whose last
+  step is the composition shown, plus a `trail` of the parent views so going
+  up finds the playhead and selection as they were. **One tab per
+  composition**: opening switches to the existing tab; navigating into a
+  composition that has its own tab switches to it; going up into a
+  composition another tab shows closes this tab and switches to that one. A
+  500-step random walk test asserts the invariants and that no command runs
+  (the document and its revision are untouched).
+- **Live view.** The playhead, selection, timeline and graph views are still
+  `EditorState` fields (the active tab's); the other tabs keep theirs in the
+  workspace and `EditorState` swaps them on every tab change, so no panel code
+  changed. Playback pauses when the tab changes.
+- **No tabs is the empty-state screen**, even when compositions exist. A new
+  or opened project shows its main composition (`open_default_tab`); nothing
+  else opens a tab on its own, except creating a composition and Reveal.
+- **Navigation.** Double-click on a precomp layer (name or bar) navigates the
+  current tab (default) or opens its own tab, by the preference "Double-click
+  a precomp layer" in the Window menu; Shift does the other. The layer menu
+  has "Open Composition" and "Open in New Tab". Entering sets the playhead to
+  `child_time` clamped into the child and snapped down to its frame grid
+  (§7.2). The Project panel's double-click always uses the composition's own
+  tab. **Composition > Go to Parent Composition** (Ctrl/Cmd+Shift+Up) steps up
+  the breadcrumb or, with none, goes to the composition that uses this one
+  most (the Reveal tie rule), selecting the layer; it is disabled with a
+  reason when nothing uses the composition.
+- **Breadcrumb** in the timeline panel's header, folded to first, "…" and the
+  last two beyond four levels; labels are read from the document every frame.
+- **Undo across tabs (§7.4).** After undo or redo the tabs are reconciled
+  (closing those whose composition is gone, cutting breadcrumbs) and, if the
+  active composition did not change but another did, the editor goes to the
+  changed one (lowest ID) and selects the layers whose `Arc`s changed.
+  `History` itself is unchanged.
+- **Persistence.** `ui_state` gains `tabs` (path and playhead per tab) and
+  `active_tab`. A file without `tabs` shows the main composition; an empty
+  list means every tab was closed; unreadable entries drop one by one and
+  tabs for compositions that no longer exist are dropped. No format version
+  change (the section is read per field and ignored by older builds).
+- **Parent-time indicator (§7.3)** (`nav_time::child_range`). In a tab entered
+  through a precomp layer the ruler shades the child times that layer never
+  shows, with a tick where its range starts and ends. The range is found by
+  sampling `child_time` on the parent's frames (at most 4000 samples, ends
+  included), so remaps are followed; a loop that wraps shades nothing.
+- **Linked playhead (§7.2, Q5)**: a per-tab toggle next to the breadcrumb,
+  off by default and not saved. With it on, going up takes the parent's
+  playhead to the time that shows what the child's shows, one step at a time
+  up the path. The mapping is invertible only without a remap or loop and
+  with a speed that is not zero; otherwise the parent keeps its own time.
+  (Only one tab is visible at a time, so "scrubbing the parent drives the
+  child" is the entry mapping the tab already does when navigating in.)
+- **Not yet** (tracked in `deferred.md`): the parent backdrop (§7.5) and
+  viewport double-click (needs hit testing).
