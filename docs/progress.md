@@ -414,7 +414,11 @@ at `743b053` (merge of #3).
    1. **Done:** OpenFX 1.5.1 headers (`include/*.h`) and `LICENSE.md`
       vendored into `third_party/openfx/`, with `VERSION` (tag, commit,
       SHA-256 of each file). `.gitattributes` keeps them byte for byte.
-   2. `cargo xtask bindgen` and the checked-in `voxy-ofx-sys` bindings.
+   2. **Done:** `cargo xtask bindgen [--check]` writes the checked-in
+      `voxy-ofx-sys/src/bindings.rs` (libclang 18, rustfmt'd). GPU and
+      OpenGL headers and `ofxOld.h` are left out; status codes are typed
+      `OfxStatus`; the plugin exports are not declared. A new Linux CI job
+      checks the header checksums and that regeneration gives no diff.
    3. `roots(os, env, prefs)` discovery paths and bundle layout.
    4. Host suites in the in-process harness.
    5. `cargo xtask credits --check`.

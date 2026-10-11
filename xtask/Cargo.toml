@@ -1,6 +1,6 @@
 [package]
 name = "xtask"
-description = "voXY developer tasks (license report, later: bindgen, coverage reports)"
+description = "voXY developer tasks (license report, OpenFX bindings, credits)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -13,3 +13,6 @@ workspace = true
 anyhow.workspace = true
 voxy-am-compat.workspace = true
 serde_json.workspace = true
+# Same version as ffmpeg-sys-next's build dependency. `runtime` loads
+# libclang only when `cargo xtask bindgen` runs, so builds never need it.
+bindgen = { version = "0.72.1", default-features = false, features = ["runtime"] }
