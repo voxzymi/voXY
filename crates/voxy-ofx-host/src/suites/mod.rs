@@ -12,6 +12,7 @@
 
 mod memory;
 mod message;
+mod param;
 mod printf;
 mod progress;
 mod property;
@@ -20,6 +21,9 @@ mod timeline;
 
 pub use memory::live_blocks;
 pub use message::take_unattached_messages;
+pub use param::{
+    MAX_OPAQUE_BYTES, capture_bytes_defaults, param_set_handle, release_param_set_handle,
+};
 
 use std::collections::HashMap;
 use std::ffi::{CStr, c_char, c_int, c_void};
@@ -129,6 +133,7 @@ fn suite(name: &CStr, version: c_int) -> *const c_void {
         (n, 1 | 2) if n == ofx::kOfxMessageSuite => (&raw const message::SUITE).cast(),
         (n, 1) if n == ofx::kOfxProgressSuite => (&raw const progress::SUITE_V1).cast(),
         (n, 2) if n == ofx::kOfxProgressSuite => (&raw const progress::SUITE_V2).cast(),
+        (n, 1) if n == ofx::kOfxParameterSuite => (&raw const param::SUITE).cast(),
         (n, 1) if n == ofx::kOfxTimeLineSuite => (&raw const timeline::SUITE).cast(),
         (n, 1) if n == ofx::kOfxMultiThreadSuite => (&raw const thread::SUITE).cast(),
         _ => std::ptr::null(),

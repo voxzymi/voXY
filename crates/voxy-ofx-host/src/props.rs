@@ -183,6 +183,24 @@ impl PropSet {
         self.define(name, default, Dim::Fixed(0), false);
     }
 
+    /// A copy of every property (values, defaults, dimensions and
+    /// writability) under a new kind.
+    #[must_use]
+    pub fn duplicate(&self, kind: &'static str) -> PropSet {
+        let props = self.lock().props.clone();
+        PropSet {
+            kind,
+            inner: Mutex::new(Inner { props }),
+        }
+    }
+
+    /// Changes whether the plugin may set `name`.
+    pub fn set_plugin_writable(&self, name: &str, writable: bool) {
+        if let Some(p) = self.lock().props.get_mut(c_string(name).as_c_str()) {
+            p.plugin_writable = writable;
+        }
+    }
+
     pub fn contains(&self, name: &str) -> bool {
         self.lock().props.contains_key(c_string(name).as_c_str())
     }

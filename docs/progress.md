@@ -435,7 +435,12 @@ at `743b053` (merge of #3).
          (V1/V2, abort replies no), time line and multi-thread suites
          (recursive mutexes), on a host-side `effect::Effect` record. The
          choices are in `docs/ofx-host.md`.
-      3. Parameter suite (descriptors and instance values).
+      3. **Done:** parameter suite: `params::ParamSet` (descriptor and
+         instance), every type's descriptor properties, the variadic value
+         getters and setters, keys, derivative, integral, copy and edit
+         groups, over a `ParamValues` store (`LocalValues` in the
+         harness). Parametric parameters are refused as unsupported for
+         now. Choices in `docs/ofx-host.md`.
       4. Image effect suite (descriptors, clips, instances, images).
       5. The harness: a Rust test plugin driven through Load, Describe,
          DescribeInContext, CreateInstance and Render.

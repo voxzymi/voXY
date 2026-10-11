@@ -100,6 +100,34 @@ Checked against OpenFX 1.5.1, "Packaging OFX Plug-ins".
   `mutexCreate` with a lock count of n is held n times by the creating
   thread; unlocking a mutex the thread does not hold gives
   `kOfxStatFailed`.
+- **Parameter suite (V1).** Descriptor parameters get the descriptor
+  properties their type has in the spec, with its defaults. An instance
+  copies them; on the instance only the properties the spec marks
+  "instance (read/write)" stay writable (labels, hint, enabled, secret,
+  data pointer, evaluate-on-change, ranges, increment, digits, choice
+  options, order and enum values, group open, icon). Where the spec
+  leaves room:
+  - Values are read and written only on instances; on a descriptor those
+    calls, and `paramDefine` on an instance, get `kOfxStatErrBadHandle`.
+  - `paramSetValue` on a parameter with keys sets a key at the instance's
+    current time, otherwise the static value. `paramSetValueAtTime` on a
+    parameter that does not animate gets `kOfxStatErrValue`.
+  - A choice index outside its options, or a string choice not among its
+    enum values, gets `kOfxStatErrValue`. Booleans are stored as 0 or 1.
+  - Custom and Bytes values over 1 MiB get `kOfxStatErrMemory` (P-0 Q3).
+    A Bytes default (an `OfxBytes *`) is copied when Describe ends.
+  - Returned strings and byte buffers stay valid for the parameter's next
+    16 reads.
+  - Derivatives use a central difference over 1/1000 frame and integrals
+    Simpson's rule over 64 steps, for double types only.
+  - "A key at the indicated time" means within 1/10000 frame.
+  - `paramDeleteAllKeys` keeps the value shown at the current time as the
+    static value. `paramCopy` needs the same type, replaces the target's
+    keys, and copies keys inside the range shifted by the offset.
+  - `paramEditBegin`/`End` group changes into one undo step.
+  - Group, page and push-button parameters have no value
+    (`kOfxStatErrUnsupported`). **Parametric parameters are not supported
+    yet**: `paramDefine` gives `kOfxStatErrUnsupported`.
 - **Memory suite (V1).** Blocks are 64-byte aligned. Freeing a pointer the
   suite did not hand out, or freeing twice, gives `kOfxStatErrBadHandle`.
 
