@@ -350,6 +350,22 @@ mod blur_rules {
         }
     }
 
+    /// Grain's base seed changes with each of its inputs.
+    #[test]
+    fn grain_seeds_mix_layer_seed_and_frame() {
+        use voxy_render::kernels::grain_seed;
+        let base = grain_seed(7, 0, 0);
+        assert_eq!(base, grain_seed(7, 0, 0));
+        for other in [
+            grain_seed(8, 0, 0),
+            grain_seed(7, 1, 0),
+            grain_seed(7, 0, 1),
+            grain_seed(7, 0, -1),
+        ] {
+            assert_ne!(other, base);
+        }
+    }
+
     /// Pixelate's regions are whole blocks on the layer's grid.
     #[test]
     fn pixelate_regions_are_whole_blocks() {
@@ -384,6 +400,7 @@ mod blur_rules {
             space: voxy_core::WorkingSpace::Linear,
             origin: DVec2::new(-4.0, 2.0),
             layer_size: DVec2::ZERO,
+            seed: 0,
         };
         let p = &Kernel::ZoomBlur.passes(&f, &ctx)[0];
         assert_eq!(p.p[0], [7.0, 9.0, 0.5, 0.0]);

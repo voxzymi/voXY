@@ -321,7 +321,11 @@ at `743b053` (merge of #3).
    1. **Done:** Vignette and Pixelate. Kernels now also get the layer's own
       size (`PassContext::layer_size`), for effects relative to its edges.
       Three goldens and a region test for Pixelate's block grid.
-   2. Grain (the first seeded effect: chains keyed by layer when seeded).
+   2. **Done:** Grain, the first seeded effect (design §3.4). The planner
+      gives seeded kernels their layer's ID (`EffectNode::seed`, in the
+      chain key) and keeps the frame only while Animate is on. Tests: same
+      frame bit-identical (also across compositors), next frame different,
+      Animate off still, one seed per layer; two goldens.
    3. Chromatic Aberration.
    4. A saved "original input" texture for kernels that combine their
       result with their input: Drop Shadow and Inner Shadow.

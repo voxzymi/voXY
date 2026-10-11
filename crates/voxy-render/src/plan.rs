@@ -132,6 +132,10 @@ impl DrawSource {
 pub struct EffectNode {
     pub kernel: Kernel,
     pub effect: EvaluatedEffect,
+    /// The layer part of a seeded kernel's seed (its layer's ID; design
+    /// §3.4), and 0 for every other kernel, so identical unseeded chains
+    /// on different layers share one rendered result.
+    pub seed: u64,
 }
 
 /// A layer's source and effect stack, rendered in layer-local pixels at the
@@ -205,8 +209,9 @@ impl ChainPlan {
                 }
                 None => h.u32(0),
             }
-            // Zero unless the kernel uses it (see the planner).
+            // Zero unless the kernel uses them (see the planner).
             h.u64(fx.frame as u64);
+            h.u64(node.seed);
         }
         h.f64(self.scale);
         h.u32(match self.working_space {
@@ -313,10 +318,15 @@ impl Builder<'_> {
                         let mut effect = fx.clone();
                         // A kernel without seeds must not tell frames apart,
                         // or a static chain would never be reused.
-                        if !kernel.uses_frame() {
+                        if !kernel.uses_frame(fx) {
                             effect.frame = 0;
                         }
-                        nodes.push(EffectNode { kernel, effect });
+                        let seed = if kernel.seeded() { l.id.raw() } else { 0 };
+                        nodes.push(EffectNode {
+                            kernel,
+                            effect,
+                            seed,
+                        });
                     }
                     None => self.unsupported += 1,
                 }

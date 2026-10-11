@@ -95,6 +95,7 @@ pub(super) fn kernel_shader(kernel: Kernel) -> &'static str {
         Kernel::Lut => include_str!("../shaders/effects/lut.wgsl"),
         Kernel::Vignette => include_str!("../shaders/effects/vignette.wgsl"),
         Kernel::Pixelate => include_str!("../shaders/effects/pixelate.wgsl"),
+        Kernel::Grain => include_str!("../shaders/effects/grain.wgsl"),
     }
 }
 
@@ -195,6 +196,7 @@ impl Compositor {
             .iter()
             .map(|n| (n.kernel, &n.effect))
             .collect();
+        let seeds: Vec<u64> = chain.effects.iter().map(|n| n.seed).collect();
         let rod = chain_rod(&nodes, Rect::of_size(size), chain.scale).round_out();
         if rod.is_empty() {
             return None;
@@ -310,8 +312,9 @@ impl Compositor {
             space,
             origin: rod.min,
             layer_size: size,
+            seed: 0,
         };
-        for (kernel, fx) in &nodes {
+        for ((kernel, fx), seed) in nodes.iter().zip(&seeds) {
             // A LUT that cannot be loaded passes the image through.
             let lut = kernel.asset(fx);
             if let Some(a) = lut
@@ -323,6 +326,7 @@ impl Compositor {
                 lut_missing = true;
                 continue;
             }
+            let ctx = PassContext { seed: *seed, ..ctx };
             for mut k in kernel.passes(fx, &ctx) {
                 if let Some(e) = lut.and_then(|a| self.luts.get(&a)) {
                     k.p[1] = [e.domain_min[0], e.domain_min[1], e.domain_min[2], 0.0];

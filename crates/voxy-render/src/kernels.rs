@@ -178,6 +178,8 @@ pub struct PassContext {
     /// The size of the layer's own content in layer pixels, from its
     /// origin (for effects relative to the layer's edges).
     pub layer_size: DVec2,
+    /// The layer part of the seed ([`crate::EffectNode::seed`]).
+    pub seed: u64,
 }
 
 impl PassContext {
@@ -187,6 +189,7 @@ impl PassContext {
             space,
             origin: DVec2::ZERO,
             layer_size: DVec2::ZERO,
+            seed: 0,
         }
     }
 
@@ -253,6 +256,20 @@ fn scaled(r: Rect, centre: DVec2, k: f64) -> Rect {
     Rect::new(from.min(to), from.max(to))
 }
 
+/// The base seed of Grain: an FNV-1a hash of the layer, the seed
+/// parameter and the frame, folded to 32 bits (design §3.4). Integer
+/// arithmetic only, so it is the same everywhere.
+pub fn grain_seed(layer: u64, seed: i64, frame: i64) -> u32 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for word in [layer, seed as u64, frame as u64] {
+        for byte in word.to_le_bytes() {
+            h ^= u64::from(byte);
+            h = h.wrapping_mul(0x0100_0000_01b3);
+        }
+    }
+    (h ^ (h >> 32)) as u32
+}
+
 /// Pixelate's block size in layer pixels.
 fn pixel_cell(fx: &EvaluatedEffect) -> f64 {
     scalar(fx, "cell", 10.0).clamp(1.0, 1000.0)
@@ -304,11 +321,12 @@ pub enum Kernel {
     Lut,
     Vignette,
     Pixelate,
+    Grain,
 }
 
 impl Kernel {
     /// Every kernel.
-    pub const ALL: [Kernel; 18] = [
+    pub const ALL: [Kernel; 19] = [
         Kernel::Invert,
         Kernel::GaussianBlur,
         Kernel::BoxBlur,
@@ -327,6 +345,7 @@ impl Kernel {
         Kernel::Lut,
         Kernel::Vignette,
         Kernel::Pixelate,
+        Kernel::Grain,
     ];
 
     /// The kernel running `type_id` at `version`, if this build has one.
@@ -336,11 +355,16 @@ impl Kernel {
             .find(|k| k.type_id() == type_id.as_str() && version == 1)
     }
 
-    /// Whether the kernel's output depends on the frame number (seeded
-    /// randomness, design §3.4). Only then is the frame part of the cache
-    /// key, so static effects render once.
-    pub fn uses_frame(self) -> bool {
-        false
+    /// Whether the kernel uses the deterministic seed (design §3.4).
+    pub fn seeded(self) -> bool {
+        self == Kernel::Grain
+    }
+
+    /// Whether the output of `fx` depends on the frame number (animated
+    /// seeded randomness). Only then is the frame part of the cache key, so
+    /// static effects render once.
+    pub fn uses_frame(self, fx: &EvaluatedEffect) -> bool {
+        self == Kernel::Grain && flag(fx, "animate")
     }
 
     /// Whether the kernel reads a LUT asset (bind group 2).
@@ -376,6 +400,7 @@ impl Kernel {
             Kernel::Lut => ids::LUT,
             Kernel::Vignette => ids::VIGNETTE,
             Kernel::Pixelate => ids::PIXELATE,
+            Kernel::Grain => ids::GRAIN,
         }
     }
 
@@ -494,6 +519,23 @@ impl Kernel {
                     0.0,
                 ];
                 k.p[2] = working_rgb(color(fx, "color", LinearRgba::BLACK), space);
+                vec![k]
+            }
+            Kernel::Grain => {
+                let amount = scalar(fx, "amount", 0.1).clamp(0.0, 1.0);
+                if amount == 0.0 {
+                    return Vec::new();
+                }
+                let o = ctx.texel(DVec2::ZERO);
+                let size = scalar(fx, "size", 1.0).clamp(0.5, 50.0) * s;
+                k.p[0] = [o.x as f32, o.y as f32, size as f32, amount as f32];
+                let user = match fx.param("seed") {
+                    Some(Value::Int(n)) => *n,
+                    _ => 0,
+                };
+                let frame = if flag(fx, "animate") { fx.frame } else { 0 };
+                k.i[0] = u32::from(flag(fx, "monochrome"));
+                k.i[2] = grain_seed(ctx.seed, user, frame);
                 vec![k]
             }
             Kernel::Pixelate => {
@@ -656,6 +698,7 @@ impl Kernel {
             | Kernel::GradientMap
             | Kernel::Lut
             | Kernel::Vignette
+            | Kernel::Grain
             // Position-dependent: `rod` and `roi` handle them.
             | Kernel::RadialBlur
             | Kernel::ZoomBlur

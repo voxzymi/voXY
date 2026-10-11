@@ -364,6 +364,32 @@ at the layer origin.
 - **Regions:** RoD and ROI = the rectangle grown to whole blocks. A size
   of 1 changes nothing.
 
+### Grain (`voxy.stylize.grain`, v1)
+
+| Parameter | Type | Range | Default |
+|---|---|---|---|
+| Amount (`amount`) | scalar, normalized | 0–1 (slider 0–0.5) | 0.1 |
+| Grain Size (`size`) | scalar, layer px | 0.5–50 (slider 0.5–10) | 1 |
+| Monochrome (`monochrome`) | bool | — | on |
+| Animate (`animate`) | bool | — | on |
+| Random Seed (`seed`) | integer | 0–1 000 000 | 0 |
+
+- **Space:** working, on straight colour; alpha is kept, transparent
+  pixels stay transparent, and the result is clamped at 0.
+- **Seed (design §3.4):** the base seed is an FNV-1a hash of the layer's
+  ID, the seed parameter and the frame (`floor(t × fps)`, exact; 0 when
+  Animate is off), folded to 32 bits on the CPU
+  (`voxy_render::kernels::grain_seed`).
+- **Formula:** grain cells of `size` layer pixels are counted from the
+  layer's origin, so the pattern does not move with the preview resolution
+  or the effect region. Each cell gets triangular noise
+  `n = u₁ + u₂ − 1` in `[−1, 1]`, with `u₁`, `u₂` from a PCG integer hash of
+  the cell, the channel and the base seed (bit-exact on every GPU).
+  Monochrome uses one `n` for all channels. `rgb' = max(rgb + amount·n, 0)`.
+- **Regions:** per pixel. Amount 0 changes nothing. Only an animated grain
+  puts the frame in the cache key, and only seeded effects put the layer
+  in it.
+
 ## Blend modes
 
 A layer's blend mode decides how it combines with everything below it in

@@ -34,6 +34,7 @@ pub mod ids {
     pub const LUT: &str = "voxy.color.lut";
     pub const VIGNETTE: &str = "voxy.stylize.vignette";
     pub const PIXELATE: &str = "voxy.stylize.pixelate";
+    pub const GRAIN: &str = "voxy.stylize.grain";
 }
 
 /// Every built-in definition, in no particular order.
@@ -57,6 +58,7 @@ pub fn builtin_definitions() -> Vec<EffectDef> {
         lut(),
         vignette(),
         pixelate(),
+        grain(),
     ]
 }
 
@@ -551,4 +553,31 @@ fn pixelate() -> EffectDef {
                 .hint("In layer pixels; the blocks line up with the layer's top-left corner.");
         },
     )
+}
+
+fn grain() -> EffectDef {
+    let mut d = def(
+        ids::GRAIN,
+        "Grain",
+        Category::Stylize,
+        "Adds film-like noise that changes every frame.",
+        |p| {
+            p.add("amount", "Amount", Value::Scalar(0.1), Unit::Normalized)
+                .range(0.0, 1.0)
+                .soft(0.0, 0.5);
+            p.add("size", "Grain Size", Value::Scalar(1.0), Unit::Pixels)
+                .range(0.5, 50.0)
+                .soft(0.5, 10.0)
+                .hint("The side of one grain, in layer pixels.");
+            p.add("monochrome", "Monochrome", Value::Bool(true), Unit::None)
+                .hint("The same noise in every channel; off gives coloured grain.");
+            p.add("animate", "Animate", Value::Bool(true), Unit::None)
+                .hint("New noise every frame; off keeps one still pattern.");
+            p.add("seed", "Random Seed", Value::Int(0), Unit::None)
+                .range(0.0, 1_000_000.0)
+                .hint("Another number gives another, equally random pattern.");
+        },
+    );
+    d.seeded = true;
+    d
 }

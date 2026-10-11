@@ -749,6 +749,7 @@ mod keys {
                     matte: None,
                     frame: 0,
                 },
+                seed: 0,
             }],
             scale,
             WorkingSpace::Linear,
@@ -928,7 +929,7 @@ mod stylize {
     fn stylize_goldens() {
         let Some(gpu) = gpu() else { return };
         let mut c = Compositor::new(&gpu.device);
-        let cases: [Case<'_>; 3] = [
+        let cases: [Case<'_>; 5] = [
             (
                 "effect_vignette",
                 ids::VIGNETTE,
@@ -952,6 +953,21 @@ mod stylize {
                 ids::PIXELATE,
                 vec![("cell", Value::Scalar(7.0))],
             ),
+            (
+                "effect_grain",
+                ids::GRAIN,
+                vec![("amount", Value::Scalar(0.25))],
+            ),
+            (
+                "effect_grain_colour",
+                ids::GRAIN,
+                vec![
+                    ("amount", Value::Scalar(0.3)),
+                    ("size", Value::Scalar(3.0)),
+                    ("monochrome", Value::Bool(false)),
+                    ("seed", Value::Int(42)),
+                ],
+            ),
         ];
         for (name, id, params) in cases {
             let (mut doc, layers) = scene(WorkingSpace::SrgbCompat);
@@ -972,5 +988,64 @@ mod stylize {
             assert_eq!(a, b, "{name}: deterministic across compositors");
             compare(name, &a);
         }
+    }
+
+    /// Grain: the same frame gives the same noise, another frame other
+    /// noise (unless Animate is off), and two layers never share a pattern
+    /// (design §3.4).
+    #[test]
+    fn grain_is_seeded_by_layer_seed_and_frame() {
+        let Some(gpu) = gpu() else { return };
+        let mut c = Compositor::new(&gpu.device);
+        let grainy = |animate: bool| {
+            let (mut doc, layers) = scene(WorkingSpace::SrgbCompat);
+            for l in &layers {
+                let fx = add_effect(&mut doc, *l, ids::GRAIN);
+                set_param(&mut doc, *l, fx, "amount", Value::Scalar(0.5));
+                set_param(&mut doc, *l, fx, "animate", Value::Bool(animate));
+            }
+            doc
+        };
+        let frame = |doc: &Document, n: i64| {
+            let rate = doc.main().unwrap().frame_rate;
+            render(
+                &gpu,
+                &mut Compositor::new(&gpu.device),
+                doc,
+                rate.frame_to_time(n),
+                1.0,
+            )
+        };
+        let doc = grainy(true);
+        let a = render(&gpu, &mut c, &doc, Time::ZERO, 1.0);
+        assert_eq!(a, render(&gpu, &mut c, &doc, Time::ZERO, 1.0), "same frame");
+        assert_eq!(a, frame(&doc, 0), "same frame, fresh compositor");
+        assert_ne!(a, frame(&doc, 1), "the next frame has new noise");
+        let still = grainy(false);
+        assert_eq!(frame(&still, 0), frame(&still, 5), "Animate off");
+
+        // Each layer's chain is seeded by its own layer ID.
+        let comp = doc.main_comp.unwrap();
+        let ids: Vec<u64> = doc
+            .comp(comp)
+            .unwrap()
+            .layers
+            .iter()
+            .map(|l| l.id.raw())
+            .collect();
+        let eval = voxy_core::evaluate(&doc, comp, Time::ZERO).unwrap();
+        let plan = voxy_render::RenderPlan::build(&eval, &RenderSettings::default());
+        let mut seeds: Vec<u64> = plan
+            .draws
+            .iter()
+            .filter_map(|d| match &d.source {
+                voxy_render::DrawSource::Chain { chain, .. } => Some(chain.effects[0].seed),
+                _ => None,
+            })
+            .collect();
+        let mut want = ids.clone();
+        seeds.sort_unstable();
+        want.sort_unstable();
+        assert_eq!(seeds, want);
     }
 }
