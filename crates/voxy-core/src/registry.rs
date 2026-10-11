@@ -509,4 +509,13 @@ impl EffectParamDef {
         self.flags.hide_alpha = true;
         self
     }
+
+    /// An on-canvas point handle (the parameter must be a `Vec2` in layer
+    /// pixels). New instances start at the centre of the layer's content
+    /// (`AddEffect`).
+    pub(crate) fn point(&mut self) -> &mut Self {
+        self.gizmo = Some(GizmoKind::Point);
+        self.desc_mut().spatial = true;
+        self
+    }
 }

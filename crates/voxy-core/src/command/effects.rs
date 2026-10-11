@@ -55,7 +55,16 @@ impl Command for AddEffect {
     ) -> Result<(), CommandError> {
         doc.find_layer(self.layer)
             .ok_or_else(|| CommandError::NotFound(self.layer.to_string()))?;
-        let fx = self.def.instantiate(doc);
+        let mut fx = self.def.instantiate(doc);
+        // Point parameters start at the centre of the layer's content.
+        if let Some(size) = doc.content_size(self.layer) {
+            for (p, d) in fx.params.iter_mut().zip(self.def.params.iter()) {
+                if d.gizmo == Some(crate::registry::GizmoKind::Point) {
+                    // A Vec2 always fits a point parameter.
+                    let _ = p.set_static(Value::Vec2(size / 2.0));
+                }
+            }
+        }
         report.created_effects.push(fx.id);
         let layer = layer_mut(doc, self.layer)?;
         let at = self

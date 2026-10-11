@@ -414,3 +414,32 @@ fn reset_puts_every_parameter_back_in_one_step() {
     assert!(h.undo());
     assert_eq!(**h.current(), *edited);
 }
+
+/// Point parameters of a new effect start at the centre of the layer's
+/// content; an adjustment layer covers its composition.
+#[test]
+fn new_point_parameters_start_at_the_content_centre() {
+    let mut f = fixture();
+    let centre = |h: &History, layer: LayerId| {
+        h.current().find_layer(layer).expect("layer").1.effects[0].params[1].value_at(Time::ZERO)
+    };
+    add(&mut f.h, f.a, ids::RADIAL_BLUR);
+    let size = f.h.current().content_size(f.a).expect("solid size");
+    assert_eq!(centre(&f.h, f.a), Value::Vec2(size / 2.0));
+
+    f.h.execute(AddAdjustmentLayer {
+        comp: f.comp,
+        name: None,
+        index: 0,
+    })
+    .expect("adjustment");
+    let adj = f.h.current().comp(f.comp).expect("comp").layers[0].id;
+    add(&mut f.h, adj, ids::ZOOM_BLUR);
+    assert_eq!(
+        centre(&f.h, adj),
+        Value::Vec2(voxy_core::glam::DVec2::new(32.0, 18.0))
+    );
+    // The edit is the same single undo step as any added effect.
+    assert!(f.h.undo());
+    assert_eq!(effects(&f.h, adj).len(), 0);
+}

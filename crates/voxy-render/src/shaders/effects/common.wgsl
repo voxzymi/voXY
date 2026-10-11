@@ -83,3 +83,20 @@ fn from_linear(c: vec3<f32>) -> vec3<f32> {
 fn luma709(c: vec3<f32>) -> f32 {
     return dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
 }
+
+// Bilinear sample at `at` (texel units, texel centres at +0.5);
+// transparent outside the buffer, so a sweep never repeats edge pixels.
+fn sample_clear(at: vec2<f32>) -> vec4<f32> {
+    let size = vec2<f32>(textureDimensions(src));
+    if at.x < 0.0 || at.y < 0.0 || at.x > size.x || at.y > size.y {
+        return vec4<f32>(0.0);
+    }
+    return textureSampleLevel(src, src_sampler, at / size, 0.0);
+}
+
+// How many samples a sweep of `len` texels takes: one per texel plus one,
+// odd so one sits on the pixel itself, at most `fx.i0.y`.
+fn sweep_count(len: f32) -> u32 {
+    let n = min(u32(ceil(max(len, 0.0))) + 1u, fx.i0.y);
+    return n | 1u;
+}

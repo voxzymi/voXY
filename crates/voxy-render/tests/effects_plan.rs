@@ -8,7 +8,7 @@ use voxy_core::{
     CompId, CompSettings, Document, EffectTypeId, LayerId, LinearRgba, MissingReason, Time, Value,
     evaluate,
 };
-use voxy_render::kernels::{Kernel, Rect, chain_rod, chain_roi};
+use voxy_render::kernels::{Kernel, PassContext, Rect, chain_rod, chain_roi};
 use voxy_render::{DrawSource, EffectsView, RenderPlan, RenderSettings};
 
 fn doc() -> (Document, CompId, LayerId) {
@@ -225,7 +225,9 @@ mod blur_rules {
 
     use voxy_core::glam::DVec2;
     use voxy_core::{EffectId, EffectTypeId, EvaluatedEffect, Value};
-    use voxy_render::kernels::{Kernel, MAX_TAPS, Rect, box_weights, gaussian_weights};
+    use voxy_render::kernels::{
+        Kernel, MAX_TAPS, PassContext, Rect, box_weights, gaussian_weights,
+    };
 
     fn fx(id: &str, params: &[(&str, Value)]) -> EvaluatedEffect {
         EvaluatedEffect {
@@ -239,6 +241,104 @@ mod blur_rules {
             matte: None,
             frame: 0,
         }
+    }
+
+    /// Radial and Zoom Blur: every point a pixel samples lies in the ROI,
+    /// and every pixel an input point reaches lies in the ROD.
+    #[test]
+    fn sweep_regions_cover_every_sample() {
+        use voxy_core::registry::ids;
+        let c = DVec2::new(30.0, -12.0);
+        let area = Rect::new(DVec2::ZERO, DVec2::new(40.0, 25.0));
+        let inside = |rect: &Rect, p: DVec2| {
+            p.x >= rect.min.x - 1e-9
+                && p.y >= rect.min.y - 1e-9
+                && p.x <= rect.max.x + 1e-9
+                && p.y <= rect.max.y + 1e-9
+        };
+        let rot = |v: DVec2, a: f64| DVec2::new(a.cos(), a.sin()).rotate(v);
+        let grid: Vec<DVec2> = (0..=16)
+            .flat_map(|i| (0..=10).map(move |j| DVec2::new(f64::from(i) * 2.5, f64::from(j) * 2.5)))
+            .collect();
+        for angle in [5.0, 70.0, 200.0, 360.0] {
+            let effect = fx(
+                ids::RADIAL_BLUR,
+                &[("angle", Value::Scalar(angle)), ("center", Value::Vec2(c))],
+            );
+            let half = f64::to_radians(angle) / 2.0;
+            let roi = Kernel::RadialBlur.roi(&effect, area, 1.0);
+            let rod = Kernel::RadialBlur.rod(&effect, area, 1.0);
+            for p in &grid {
+                for k in 0..=64 {
+                    let a = half * (f64::from(k) / 32.0 - 1.0);
+                    // A spin is its own inverse over ±half.
+                    let q = c + rot(*p - c, a);
+                    assert!(inside(&roi, q), "radial {angle}° roi misses {q}");
+                    assert!(inside(&rod, q), "radial {angle}° rod misses {q}");
+                }
+            }
+        }
+        for amount in [0.05, 0.4, 0.9] {
+            let effect = fx(
+                ids::ZOOM_BLUR,
+                &[
+                    ("amount", Value::Scalar(amount)),
+                    ("center", Value::Vec2(c)),
+                ],
+            );
+            let roi = Kernel::ZoomBlur.roi(&effect, area, 1.0);
+            let rod = Kernel::ZoomBlur.rod(&effect, area, 1.0);
+            for p in &grid {
+                for k in 0..=64 {
+                    let t = 1.0 - amount * f64::from(k) / 64.0;
+                    let q = c + (*p - c) * t;
+                    assert!(inside(&roi, q), "zoom {amount} roi misses {q}");
+                    let out = c + (*p - c) / t;
+                    assert!(inside(&rod, out), "zoom {amount} rod misses {out}");
+                }
+            }
+        }
+        // Nothing to do: the regions stay as they are.
+        for (kernel, id, name) in [
+            (Kernel::RadialBlur, ids::RADIAL_BLUR, "angle"),
+            (Kernel::ZoomBlur, ids::ZOOM_BLUR, "amount"),
+        ] {
+            let effect = fx(
+                id,
+                &[(name, Value::Scalar(0.0)), ("center", Value::Vec2(c))],
+            );
+            assert_eq!(kernel.rod(&effect, area, 1.0), area);
+            assert_eq!(kernel.roi(&effect, area, 1.0), area);
+            assert_eq!(
+                kernel
+                    .passes(
+                        &effect,
+                        &PassContext::new(1.0, voxy_core::WorkingSpace::Linear)
+                    )
+                    .len(),
+                0
+            );
+        }
+    }
+
+    /// The centre reaches the shader in buffer texels.
+    #[test]
+    fn sweep_centres_are_in_buffer_texels() {
+        use voxy_core::registry::ids;
+        let f = fx(
+            ids::ZOOM_BLUR,
+            &[
+                ("amount", Value::Scalar(0.5)),
+                ("center", Value::Vec2(DVec2::new(10.0, 20.0))),
+            ],
+        );
+        let ctx = PassContext {
+            texel_scale: 0.5,
+            space: voxy_core::WorkingSpace::Linear,
+            origin: DVec2::new(-4.0, 2.0),
+        };
+        let p = &Kernel::ZoomBlur.passes(&f, &ctx)[0];
+        assert_eq!(p.p[0], [7.0, 9.0, 0.5, 0.0]);
     }
 
     #[test]
@@ -304,7 +404,7 @@ mod blur_rules {
         assert_eq!(Kernel::BoxBlur.rod(&b, r, 1.0), r.pad(DVec2::splat(13.0)));
         assert_eq!(
             Kernel::BoxBlur
-                .passes(&b, 1.0, voxy_core::WorkingSpace::Linear)
+                .passes(&b, &PassContext::new(1.0, voxy_core::WorkingSpace::Linear))
                 .len(),
             6
         );
@@ -328,7 +428,10 @@ mod blur_rules {
         );
         assert_eq!(
             Kernel::GaussianBlur
-                .passes(&none, 1.0, voxy_core::WorkingSpace::Linear)
+                .passes(
+                    &none,
+                    &PassContext::new(1.0, voxy_core::WorkingSpace::Linear)
+                )
                 .len(),
             0
         );
@@ -340,8 +443,10 @@ mod blur_rules {
             voxy_core::registry::ids::GAUSSIAN_BLUR,
             &[("radius", Value::Scalar(20.0))],
         );
-        let full = &Kernel::GaussianBlur.passes(&g, 1.0, voxy_core::WorkingSpace::Linear)[0];
-        let half = &Kernel::GaussianBlur.passes(&g, 0.5, voxy_core::WorkingSpace::Linear)[0];
+        let full = &Kernel::GaussianBlur
+            .passes(&g, &PassContext::new(1.0, voxy_core::WorkingSpace::Linear))[0];
+        let half = &Kernel::GaussianBlur
+            .passes(&g, &PassContext::new(0.5, voxy_core::WorkingSpace::Linear))[0];
         assert_eq!(full.i[1], 20);
         assert_eq!(half.i[1], 10);
         assert_eq!(full.w, gaussian_weights(20.0));
@@ -379,6 +484,10 @@ fn kernel_parameters_are_finite_across_the_grid() {
                         vec![Value::Enum(0), d.default.clone(), Value::Enum(hi as u32)]
                     }
                     ValueKind::Bool => vec![Value::Bool(false), Value::Bool(true)],
+                    ValueKind::Vec2 => vec![
+                        d.default.clone(),
+                        Value::Vec2(voxy_core::glam::DVec2::new(-1e6, 1e6)),
+                    ],
                     _ => vec![d.default.clone()],
                 }
             })
@@ -406,7 +515,7 @@ fn kernel_parameters_are_finite_across_the_grid() {
             };
             for space in [WorkingSpace::Linear, WorkingSpace::SrgbCompat] {
                 for scale in [1.0, 0.25] {
-                    for pass in kernel.passes(&fx, scale, space) {
+                    for pass in kernel.passes(&fx, &PassContext::new(scale, space)) {
                         assert!(
                             pass.p.iter().flatten().all(|v| v.is_finite())
                                 && pass.w.iter().all(|v| v.is_finite()),

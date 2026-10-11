@@ -15,7 +15,7 @@ use voxy_core::{AssetId, AssetTable};
 use super::{
     Compositor, LayerUniform, MAX_RENDER_DEPTH, RenderReport, VideoFrames, WORKING_FORMAT,
 };
-use crate::kernels::{Kernel, Rect, chain_rod};
+use crate::kernels::{Kernel, PassContext, Rect, chain_rod};
 use crate::plan::{ChainPlan, DrawSource};
 
 /// The memory the cache of rendered chains may hold.
@@ -79,6 +79,8 @@ pub(super) fn kernel_shader(kernel: Kernel) -> &'static str {
             include_str!("../shaders/effects/convolve.wgsl")
         }
         Kernel::DirectionalBlur => include_str!("../shaders/effects/directional.wgsl"),
+        Kernel::RadialBlur => include_str!("../shaders/effects/radial.wgsl"),
+        Kernel::ZoomBlur => include_str!("../shaders/effects/zoom.wgsl"),
         Kernel::BrightnessContrast => {
             include_str!("../shaders/effects/brightness_contrast.wgsl")
         }
@@ -294,8 +296,13 @@ impl Compositor {
         let stride = self.effect_stride;
         let mut bytes = Vec::new();
         let mut passes = Vec::new();
+        let ctx = PassContext {
+            texel_scale: s,
+            space,
+            origin: rod.min,
+        };
         for (kernel, fx) in &nodes {
-            for k in kernel.passes(fx, s, space) {
+            for k in kernel.passes(fx, &ctx) {
                 let mut w = [[0.0f32; 4]; 256];
                 for (i, v) in k.w.iter().take(1024).enumerate() {
                     w[i / 4][i % 4] = *v;

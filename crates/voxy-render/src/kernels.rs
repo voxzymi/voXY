@@ -14,6 +14,11 @@ use voxy_core::glam::DVec2;
 use voxy_core::registry::ids;
 use voxy_core::{EffectTypeId, EvaluatedEffect, LinearRgba, Value, WorkingSpace};
 
+/// The most samples Radial and Zoom Blur average per pixel; each pixel
+/// takes one per texel of its sweep, up to this (odd, so one sits on the
+/// pixel itself).
+pub const SWEEP_SAMPLES: u32 = 255;
+
 /// The most taps one side of a convolution pass may have (the shader's
 /// weight array holds `MAX_TAPS + 1` weights: the centre and one side).
 pub const MAX_TAPS: usize = 1023;
@@ -159,6 +164,80 @@ fn convolve(axis: u32, repeat_edges: bool, w: Vec<f32>) -> KernelParams {
     }
 }
 
+/// Where a kernel's passes run: the chain buffer they read and write.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PassContext {
+    /// Texels per layer pixel (the preview scale, possibly reduced to fit
+    /// the GPU); pixel parameters are multiplied by it.
+    pub texel_scale: f64,
+    /// The working space colour parameters are encoded for.
+    pub space: WorkingSpace,
+    /// The layer pixel at the buffer's top-left corner (texel `(0, 0)`).
+    pub origin: DVec2,
+}
+
+impl PassContext {
+    pub fn new(texel_scale: f64, space: WorkingSpace) -> Self {
+        PassContext {
+            texel_scale,
+            space,
+            origin: DVec2::ZERO,
+        }
+    }
+
+    /// A layer-pixel position in buffer texels.
+    pub fn texel(&self, layer_px: DVec2) -> DVec2 {
+        (layer_px - self.origin) * self.texel_scale
+    }
+}
+
+fn point(fx: &EvaluatedEffect, name: &str) -> DVec2 {
+    match fx.param(name) {
+        Some(Value::Vec2(v)) if v.is_finite() => *v,
+        _ => DVec2::ZERO,
+    }
+}
+
+/// The largest distance from `c` to `r`'s corners.
+fn farthest(r: Rect, c: DVec2) -> f64 {
+    [
+        r.min,
+        r.max,
+        DVec2::new(r.min.x, r.max.y),
+        DVec2::new(r.max.x, r.min.y),
+    ]
+    .iter()
+    .map(|p| p.distance(c))
+    .fold(0.0, f64::max)
+}
+
+/// `r` scaled by `k` around `c`.
+fn scaled(r: Rect, centre: DVec2, k: f64) -> Rect {
+    let from = centre + (r.min - centre) * k;
+    let to = centre + (r.max - centre) * k;
+    Rect::new(from.min(to), from.max(to))
+}
+
+/// Half the spin of Radial Blur, in radians.
+fn spin_half(fx: &EvaluatedEffect) -> f64 {
+    scalar(fx, "angle", 0.0).clamp(0.0, 360.0).to_radians() / 2.0
+}
+
+fn zoom_amount(fx: &EvaluatedEffect) -> f64 {
+    scalar(fx, "amount", 0.0).clamp(0.0, 0.9)
+}
+
+/// The region a spin of `±half` radians around `c` can carry `r` to: `r`
+/// grown by the longest chord a corner travels, kept within the circle
+/// through the farthest corner.
+fn spun(r: Rect, c: DVec2, half: f64) -> Rect {
+    let reach = farthest(r, c);
+    let circle = Rect::new(c - DVec2::splat(reach), c + DVec2::splat(reach));
+    r.pad(DVec2::splat(reach * half.min(2.0) + 1.0))
+        .intersect(&circle.pad(DVec2::ONE))
+        .union(&r)
+}
+
 /// The built-in effects the renderer can run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Kernel {
@@ -166,6 +245,8 @@ pub enum Kernel {
     GaussianBlur,
     BoxBlur,
     DirectionalBlur,
+    RadialBlur,
+    ZoomBlur,
     BrightnessContrast,
     Exposure,
     Tint,
@@ -174,11 +255,13 @@ pub enum Kernel {
 
 impl Kernel {
     /// Every kernel.
-    pub const ALL: [Kernel; 8] = [
+    pub const ALL: [Kernel; 10] = [
         Kernel::Invert,
         Kernel::GaussianBlur,
         Kernel::BoxBlur,
         Kernel::DirectionalBlur,
+        Kernel::RadialBlur,
+        Kernel::ZoomBlur,
         Kernel::BrightnessContrast,
         Kernel::Exposure,
         Kernel::Tint,
@@ -205,6 +288,8 @@ impl Kernel {
             Kernel::GaussianBlur => ids::GAUSSIAN_BLUR,
             Kernel::BoxBlur => ids::BOX_BLUR,
             Kernel::DirectionalBlur => ids::DIRECTIONAL_BLUR,
+            Kernel::RadialBlur => ids::RADIAL_BLUR,
+            Kernel::ZoomBlur => ids::ZOOM_BLUR,
             Kernel::BrightnessContrast => ids::BRIGHTNESS_CONTRAST,
             Kernel::Exposure => ids::EXPOSURE,
             Kernel::Tint => ids::TINT,
@@ -212,18 +297,12 @@ impl Kernel {
         }
     }
 
-    /// The shader passes for `fx`, in order. `texel_scale` is texels per
-    /// layer pixel (the preview scale, possibly reduced to fit the GPU), by
-    /// which pixel parameters are multiplied; `space` is the working space
-    /// colour parameters are encoded for. An empty list means the effect
-    /// does nothing with these parameters, so defaults pass through exactly.
-    pub fn passes(
-        self,
-        fx: &EvaluatedEffect,
-        texel_scale: f64,
-        space: WorkingSpace,
-    ) -> Vec<KernelParams> {
-        let s = texel_scale;
+    /// The shader passes for `fx`, in order, run in the buffer `ctx`
+    /// describes. An empty list means the effect does nothing with these
+    /// parameters, so defaults pass through exactly.
+    pub fn passes(self, fx: &EvaluatedEffect, ctx: &PassContext) -> Vec<KernelParams> {
+        let s = ctx.texel_scale;
+        let space = ctx.space;
         let mut k = KernelParams::default();
         match self {
             Kernel::BrightnessContrast => {
@@ -343,6 +422,20 @@ impl Kernel {
                 k.i[1] = samples as u32;
                 vec![k]
             }
+            Kernel::RadialBlur | Kernel::ZoomBlur => {
+                let amount = if self == Kernel::RadialBlur {
+                    spin_half(fx)
+                } else {
+                    zoom_amount(fx)
+                };
+                if amount == 0.0 {
+                    return Vec::new();
+                }
+                let c = ctx.texel(point(fx, "center"));
+                k.p[0] = [c.x as f32, c.y as f32, amount as f32, 0.0];
+                k.i[1] = SWEEP_SAMPLES;
+                vec![k]
+            }
         }
     }
 
@@ -357,7 +450,10 @@ impl Kernel {
             | Kernel::BrightnessContrast
             | Kernel::Exposure
             | Kernel::Tint
-            | Kernel::HueSaturation => DVec2::ZERO,
+            | Kernel::HueSaturation
+            // Position-dependent: `rod` and `roi` handle them.
+            | Kernel::RadialBlur
+            | Kernel::ZoomBlur => DVec2::ZERO,
             Kernel::GaussianBlur | Kernel::BoxBlur => {
                 let passes = if self == Kernel::BoxBlur {
                     scalar(fx, "passes", 1.0).clamp(1.0, 5.0)
@@ -386,16 +482,30 @@ impl Kernel {
     /// region (layer pixels).
     pub fn rod(self, fx: &EvaluatedEffect, input: Rect, scale: f64) -> Rect {
         let _ = scale;
-        if self.repeats_edges(fx) {
-            return input;
+        let c = point(fx, "center");
+        match self {
+            Kernel::RadialBlur if spin_half(fx) > 0.0 => spun(input, c, spin_half(fx)),
+            // A pixel at `p` averages `c + (p − c)·k` for k in [1 − a, 1],
+            // so input reaches out to `c + (input − c) / (1 − a)`.
+            Kernel::ZoomBlur if zoom_amount(fx) > 0.0 => input
+                .union(&scaled(input, c, 1.0 / (1.0 - zoom_amount(fx))))
+                .pad(DVec2::ONE),
+            _ if self.repeats_edges(fx) => input,
+            _ => input.pad(self.reach(fx)),
         }
-        input.pad(self.reach(fx))
     }
 
     /// Region of interest: the input pixels needed to compute `output`.
     pub fn roi(self, fx: &EvaluatedEffect, output: Rect, scale: f64) -> Rect {
         let _ = scale;
-        output.pad(self.reach(fx))
+        let c = point(fx, "center");
+        match self {
+            Kernel::RadialBlur if spin_half(fx) > 0.0 => spun(output, c, spin_half(fx)),
+            Kernel::ZoomBlur if zoom_amount(fx) > 0.0 => output
+                .union(&scaled(output, c, 1.0 - zoom_amount(fx)))
+                .pad(DVec2::ONE),
+            _ => output.pad(self.reach(fx)),
+        }
     }
 }
 

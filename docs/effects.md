@@ -82,6 +82,46 @@ is the specification of the WGSL kernels in
 - **Regions:** RoD = input padded by `(|cos θ|, |sin θ|)·(L/2 + 1)` px, and
   ROI is the same.
 
+### Radial Blur (`voxy.blur.radial`, v1)
+
+| Parameter | Type | Range | Default |
+|---|---|---|---|
+| Angle (`angle`) | angle, degrees | 0–360 (slider 0–90) | 10 |
+| Center (`center`) | point, layer px, on-canvas handle | any | centre of the layer's content |
+
+- **Space:** working.
+- **Formula:** with `h` half the angle and `d = p − c` (pixel minus
+  centre, in texels), the average of `N` bilinear samples at
+  `c + R(a)·d` for `a` evenly from `−h` to `+h`. `N` is one per texel of
+  the arc `2·h·|d|`, plus one, rounded up to odd and capped at 255. Samples
+  outside the buffer are transparent.
+- **Regions:** with `r` the largest distance from `c` to a corner of the
+  rectangle, RoD = input padded by `r·min(h, 2) + 1` px, kept inside the
+  circle of radius `r` around `c` (padded by 1). ROI uses the same rule on
+  the output rectangle. Angle 0 changes nothing.
+
+### Zoom Blur (`voxy.blur.zoom`, v1)
+
+| Parameter | Type | Range | Default |
+|---|---|---|---|
+| Amount (`amount`) | scalar, factor | 0–0.9 (slider 0–0.5) | 0.2 |
+| Center (`center`) | point, layer px, on-canvas handle | any | centre of the layer's content |
+
+- **Space:** working.
+- **Formula:** with `d = p − c` in texels and amount `a`, the average of
+  `N` bilinear samples at `c + d·k` for `k` evenly from 1 down to `1 − a`.
+  `N` is one per texel of `a·|d|`, plus one, rounded up to odd and capped
+  at 255. Samples outside the buffer are transparent. Bright areas streak
+  outwards, away from the centre.
+- **Regions:** RoD = the input and the input scaled by `1 / (1 − a)`
+  around `c`, padded by 1 px (hence the 0.9 cap: at most 10×). ROI = the
+  output and the output scaled by `1 − a` around `c`, padded by 1 px.
+  Amount 0 changes nothing.
+
+Point parameters (Radial and Zoom Blur centres) start at the centre of the
+layer's content when the effect is added and its size is known; otherwise
+at the layer origin.
+
 ## Color
 
 ### Invert (`voxy.color.invert`, v1)

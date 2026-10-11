@@ -301,6 +301,27 @@ impl Document {
             .find_map(|c| c.layer(id).map(|l| (c.id, l)))
     }
 
+    /// Size of a layer's content in layer pixels, when known: a solid's
+    /// size at time zero, an asset's recorded size, a precomp's (or, for an
+    /// adjustment layer, its own) composition size.
+    pub fn content_size(&self, id: LayerId) -> Option<glam::DVec2> {
+        let (comp, layer) = self.find_layer(id)?;
+        let px = |s: [u32; 2]| glam::DVec2::new(f64::from(s[0]), f64::from(s[1]));
+        let comp_size = |c: CompId| self.comp(c).map(|c| px([c.width, c.height]));
+        match &layer.kind {
+            LayerKind::Solid { size, .. } => match size.value_at(Time::ZERO) {
+                Value::Vec2(v) if v.is_finite() => Some(v),
+                _ => None,
+            },
+            LayerKind::Image { asset } | LayerKind::Video { asset } => {
+                self.assets.get(*asset).and_then(|a| a.pixel_size).map(px)
+            }
+            LayerKind::Precomp { comp: child, .. } => comp_size(*child),
+            LayerKind::Adjustment => comp_size(comp),
+            LayerKind::Placeholder { was } => was.pixel_size.map(px),
+        }
+    }
+
     pub fn layer_mut(&mut self, id: LayerId) -> Option<&mut Layer> {
         let (comp, _) = self.find_layer(id)?;
         self.comp_mut(comp)?.layer_mut(id)

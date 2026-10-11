@@ -259,9 +259,30 @@ at `743b053` (merge of #3).
         definition. The first built-in users come in E-D.
 
    **E-C complete.** `cargo clippy -D warnings` (Rust 1.99) is clean, and
-   all 610 workspace tests pass on Linux.
-   Stop after E-C if the owner says so.
-4. E-D, then O-A to O-D.
+   all 610 workspace tests pass on Linux. CI green on all four platforms
+   (run 38070338244), and `main` fast-forwarded to `9e3665d`.
+4. E-D (in progress), group by group (design §5), each in small steps:
+   1. **Done:** Radial Blur (spin) and Zoom Blur, the first built-ins with
+      an on-canvas point (their centre).
+      - Kernels get a `PassContext` (texel scale, working space and the
+        buffer's origin in layer pixels), so position-based parameters
+        reach the shader in buffer texels.
+      - Region rules for both are tested on the CPU against sampled
+        geometry: every sample a pixel reads is inside the ROI, and every
+        pixel an input point reaches is inside the RoD.
+      - Core: `AddEffect` starts point parameters at the centre of the
+        layer's content when its size is known
+        (`Document::content_size`).
+      - Two goldens; `docs/effects.md` has the formulas. 613 workspace
+        tests pass, clippy clean.
+   2. Levels and Posterize.
+   3. Curves, with a curve editor in Effect Controls (`Value::Curve`).
+   4. Color Balance.
+   5. Gradient Map (three colour stops).
+   6. `AssetKind::Lut` with import, and the LUT (`.cube`) effect.
+   Then groups 3 to 6 (group 6 brings adjustment-layer rendering and
+   the transitions).
+5. O-A to O-D.
 
 ## Approved decisions
 

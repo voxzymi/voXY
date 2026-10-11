@@ -12,12 +12,15 @@ use crate::color::LinearRgba;
 use crate::effect::EffectTypeId;
 use crate::property::Unit;
 use crate::value::Value;
+use glam::DVec2;
 
 /// Type IDs of the built-in effects.
 pub mod ids {
     pub const GAUSSIAN_BLUR: &str = "voxy.blur.gaussian";
     pub const BOX_BLUR: &str = "voxy.blur.box";
     pub const DIRECTIONAL_BLUR: &str = "voxy.blur.directional";
+    pub const RADIAL_BLUR: &str = "voxy.blur.radial";
+    pub const ZOOM_BLUR: &str = "voxy.blur.zoom";
     pub const BRIGHTNESS_CONTRAST: &str = "voxy.color.brightness_contrast";
     pub const EXPOSURE: &str = "voxy.color.exposure";
     pub const INVERT: &str = "voxy.color.invert";
@@ -31,6 +34,8 @@ pub fn builtin_definitions() -> Vec<EffectDef> {
         gaussian_blur(),
         box_blur(),
         directional_blur(),
+        radial_blur(),
+        zoom_blur(),
         brightness_contrast(),
         exposure(),
         invert(),
@@ -126,6 +131,42 @@ fn directional_blur() -> EffectDef {
             p.add("length", "Blur Length", Value::Scalar(10.0), Unit::Pixels)
                 .range(0.0, 2000.0)
                 .soft(0.0, 200.0);
+        },
+    )
+}
+
+fn radial_blur() -> EffectDef {
+    def(
+        ids::RADIAL_BLUR,
+        "Radial Blur",
+        Category::Blur,
+        "Spins the layer around a centre point, like a turning wheel.",
+        |p| {
+            p.add("angle", "Angle", Value::Scalar(10.0), Unit::Degrees)
+                .range(0.0, 360.0)
+                .soft(0.0, 90.0)
+                .hint("How far the blur turns, split evenly both ways.");
+            p.add("center", "Center", Value::Vec2(DVec2::ZERO), Unit::Pixels)
+                .point()
+                .hint("In layer pixels. Drag the handle in the viewer.");
+        },
+    )
+}
+
+fn zoom_blur() -> EffectDef {
+    def(
+        ids::ZOOM_BLUR,
+        "Zoom Blur",
+        Category::Blur,
+        "Streaks the layer out from a centre point, like a fast zoom.",
+        |p| {
+            p.add("amount", "Amount", Value::Scalar(0.2), Unit::Factor)
+                .range(0.0, 0.9)
+                .soft(0.0, 0.5)
+                .hint("How far each streak reaches towards the centre (0.5 = halfway).");
+            p.add("center", "Center", Value::Vec2(DVec2::ZERO), Unit::Pixels)
+                .point()
+                .hint("In layer pixels. Drag the handle in the viewer.");
         },
     )
 }

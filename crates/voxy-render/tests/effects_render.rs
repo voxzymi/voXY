@@ -219,7 +219,7 @@ mod blurs {
     fn blur_goldens() {
         let Some(gpu) = gpu() else { return };
         let mut c = Compositor::new(&gpu.device);
-        let cases: [Case<'_>; 4] = [
+        let cases: [Case<'_>; 6] = [
             (
                 "effect_blur_gaussian",
                 ids::GAUSSIAN_BLUR,
@@ -240,6 +240,21 @@ mod blurs {
                 vec![
                     ("direction", Value::Scalar(30.0)),
                     ("length", Value::Scalar(16.0)),
+                ],
+            ),
+            // Centred on each layer (where a new effect's point starts).
+            (
+                "effect_blur_radial",
+                ids::RADIAL_BLUR,
+                vec![("angle", Value::Scalar(40.0))],
+            ),
+            // Off-centre, so the streaks leave the layer on one side.
+            (
+                "effect_blur_zoom",
+                ids::ZOOM_BLUR,
+                vec![
+                    ("amount", Value::Scalar(0.4)),
+                    ("center", Value::Vec2(voxy_core::glam::DVec2::new(4.0, 6.0))),
                 ],
             ),
             (
@@ -678,6 +693,7 @@ mod keys {
                     Value::Int(v) => Value::Int(v + 1),
                     Value::Enum(v) => Value::Enum(v + 1),
                     Value::Bool(b) => Value::Bool(!b),
+                    Value::Vec2(v) => Value::Vec2(*v + voxy_core::glam::DVec2::new(0.125, 0.0)),
                     Value::Color(c) => Value::Color(voxy_core::LinearRgba::new(c.r, c.g, 0.5, c.a)),
                     other => other.clone(),
                 };
