@@ -175,6 +175,9 @@ pub struct PassContext {
     pub space: WorkingSpace,
     /// The layer pixel at the buffer's top-left corner (texel `(0, 0)`).
     pub origin: DVec2,
+    /// The size of the layer's own content in layer pixels, from its
+    /// origin (for effects relative to the layer's edges).
+    pub layer_size: DVec2,
 }
 
 impl PassContext {
@@ -183,6 +186,7 @@ impl PassContext {
             texel_scale,
             space,
             origin: DVec2::ZERO,
+            layer_size: DVec2::ZERO,
         }
     }
 
@@ -249,6 +253,16 @@ fn scaled(r: Rect, centre: DVec2, k: f64) -> Rect {
     Rect::new(from.min(to), from.max(to))
 }
 
+/// Pixelate's block size in layer pixels.
+fn pixel_cell(fx: &EvaluatedEffect) -> f64 {
+    scalar(fx, "cell", 10.0).clamp(1.0, 1000.0)
+}
+
+/// `r` grown to whole blocks of `cell` on the layer's grid.
+fn cells(r: Rect, cell: f64) -> Rect {
+    Rect::new((r.min / cell).floor() * cell, (r.max / cell).ceil() * cell)
+}
+
 /// Half the spin of Radial Blur, in radians.
 fn spin_half(fx: &EvaluatedEffect) -> f64 {
     scalar(fx, "angle", 0.0).clamp(0.0, 360.0).to_radians() / 2.0
@@ -288,11 +302,13 @@ pub enum Kernel {
     ColorBalance,
     GradientMap,
     Lut,
+    Vignette,
+    Pixelate,
 }
 
 impl Kernel {
     /// Every kernel.
-    pub const ALL: [Kernel; 16] = [
+    pub const ALL: [Kernel; 18] = [
         Kernel::Invert,
         Kernel::GaussianBlur,
         Kernel::BoxBlur,
@@ -309,6 +325,8 @@ impl Kernel {
         Kernel::ColorBalance,
         Kernel::GradientMap,
         Kernel::Lut,
+        Kernel::Vignette,
+        Kernel::Pixelate,
     ];
 
     /// The kernel running `type_id` at `version`, if this build has one.
@@ -356,6 +374,8 @@ impl Kernel {
             Kernel::ColorBalance => ids::COLOR_BALANCE,
             Kernel::GradientMap => ids::GRADIENT_MAP,
             Kernel::Lut => ids::LUT,
+            Kernel::Vignette => ids::VIGNETTE,
+            Kernel::Pixelate => ids::PIXELATE,
         }
     }
 
@@ -457,6 +477,35 @@ impl Kernel {
                     return Vec::new();
                 }
                 k.w = curve_tables(&master, [&red, &green, &blue, &alpha]);
+                vec![k]
+            }
+            Kernel::Vignette => {
+                let amount = scalar(fx, "amount", 0.5).clamp(0.0, 1.0);
+                if amount == 0.0 {
+                    return Vec::new();
+                }
+                let a = ctx.texel(DVec2::ZERO);
+                let b = ctx.texel(ctx.layer_size);
+                k.p[0] = [a.x as f32, a.y as f32, b.x as f32, b.y as f32];
+                k.p[1] = [
+                    amount as f32,
+                    scalar(fx, "size", 0.6).clamp(0.0, 1.5) as f32,
+                    scalar(fx, "feather", 0.6).clamp(0.0, 1.5) as f32,
+                    0.0,
+                ];
+                k.p[2] = working_rgb(color(fx, "color", LinearRgba::BLACK), space);
+                vec![k]
+            }
+            Kernel::Pixelate => {
+                let cell = pixel_cell(fx);
+                if cell <= 1.0 {
+                    return Vec::new();
+                }
+                let o = ctx.texel(DVec2::ZERO);
+                let c = cell * s;
+                k.p[0] = [o.x as f32, o.y as f32, c as f32, 0.0];
+                // One sample per texel of a block, at most 16 per side.
+                k.i[1] = (c.ceil() as u32).clamp(1, 16);
                 vec![k]
             }
             Kernel::Lut => {
@@ -606,9 +655,11 @@ impl Kernel {
             | Kernel::ColorBalance
             | Kernel::GradientMap
             | Kernel::Lut
+            | Kernel::Vignette
             // Position-dependent: `rod` and `roi` handle them.
             | Kernel::RadialBlur
-            | Kernel::ZoomBlur => DVec2::ZERO,
+            | Kernel::ZoomBlur
+            | Kernel::Pixelate => DVec2::ZERO,
             Kernel::GaussianBlur | Kernel::BoxBlur => {
                 let passes = if self == Kernel::BoxBlur {
                     scalar(fx, "passes", 1.0).clamp(1.0, 5.0)
@@ -645,6 +696,7 @@ impl Kernel {
             Kernel::ZoomBlur if zoom_amount(fx) > 0.0 => input
                 .union(&scaled(input, c, 1.0 / (1.0 - zoom_amount(fx))))
                 .pad(DVec2::ONE),
+            Kernel::Pixelate if pixel_cell(fx) > 1.0 => cells(input, pixel_cell(fx)),
             _ if self.repeats_edges(fx) => input,
             _ => input.pad(self.reach(fx)),
         }
@@ -659,6 +711,7 @@ impl Kernel {
             Kernel::ZoomBlur if zoom_amount(fx) > 0.0 => output
                 .union(&scaled(output, c, 1.0 - zoom_amount(fx)))
                 .pad(DVec2::ONE),
+            Kernel::Pixelate if pixel_cell(fx) > 1.0 => cells(output, pixel_cell(fx)),
             _ => output.pad(self.reach(fx)),
         }
     }

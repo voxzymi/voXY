@@ -316,6 +316,17 @@ at `743b053` (merge of #3).
         spaces, the missing-file path, core rules, the import step.
 
    **E-D group 2 complete.** 624 workspace tests pass, clippy clean.
+
+   Group 3, in steps:
+   1. **Done:** Vignette and Pixelate. Kernels now also get the layer's own
+      size (`PassContext::layer_size`), for effects relative to its edges.
+      Three goldens and a region test for Pixelate's block grid.
+   2. Grain (the first seeded effect: chains keyed by layer when seeded).
+   3. Chromatic Aberration.
+   4. A saved "original input" texture for kernels that combine their
+      result with their input: Drop Shadow and Inner Shadow.
+   5. Glow.
+   6. Stroke.
    Then groups 3 to 6 (group 6 brings adjustment-layer rendering and
    the transitions).
 5. O-A to O-D.

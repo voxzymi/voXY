@@ -920,3 +920,57 @@ mod lut {
         assert_eq!(&centre(&img)[..3], &[230, 120, 40]);
     }
 }
+
+mod stylize {
+    use super::*;
+
+    #[test]
+    fn stylize_goldens() {
+        let Some(gpu) = gpu() else { return };
+        let mut c = Compositor::new(&gpu.device);
+        let cases: [Case<'_>; 3] = [
+            (
+                "effect_vignette",
+                ids::VIGNETTE,
+                vec![("amount", Value::Scalar(0.8))],
+            ),
+            (
+                "effect_vignette_tinted",
+                ids::VIGNETTE,
+                vec![
+                    ("size", Value::Scalar(0.2)),
+                    ("feather", Value::Scalar(0.4)),
+                    (
+                        "color",
+                        Value::Color(LinearRgba::from_srgb8(255, 240, 200, 255)),
+                    ),
+                ],
+            ),
+            // Blocks that do not divide the layers, so edge blocks are partial.
+            (
+                "effect_pixelate",
+                ids::PIXELATE,
+                vec![("cell", Value::Scalar(7.0))],
+            ),
+        ];
+        for (name, id, params) in cases {
+            let (mut doc, layers) = scene(WorkingSpace::SrgbCompat);
+            for l in &layers {
+                let fx = add_effect(&mut doc, *l, id);
+                for (n, v) in &params {
+                    set_param(&mut doc, *l, fx, n, v.clone());
+                }
+            }
+            let a = render(&gpu, &mut c, &doc, Time::ZERO, 1.0);
+            let b = render(
+                &gpu,
+                &mut Compositor::new(&gpu.device),
+                &doc,
+                Time::ZERO,
+                1.0,
+            );
+            assert_eq!(a, b, "{name}: deterministic across compositors");
+            compare(name, &a);
+        }
+    }
+}

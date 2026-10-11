@@ -93,6 +93,8 @@ pub(super) fn kernel_shader(kernel: Kernel) -> &'static str {
         Kernel::ColorBalance => include_str!("../shaders/effects/color_balance.wgsl"),
         Kernel::GradientMap => include_str!("../shaders/effects/gradient_map.wgsl"),
         Kernel::Lut => include_str!("../shaders/effects/lut.wgsl"),
+        Kernel::Vignette => include_str!("../shaders/effects/vignette.wgsl"),
+        Kernel::Pixelate => include_str!("../shaders/effects/pixelate.wgsl"),
     }
 }
 
@@ -307,6 +309,7 @@ impl Compositor {
             texel_scale: s,
             space,
             origin: rod.min,
+            layer_size: size,
         };
         for (kernel, fx) in &nodes {
             // A LUT that cannot be loaded passes the image through.

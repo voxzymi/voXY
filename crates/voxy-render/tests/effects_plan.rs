@@ -350,6 +350,24 @@ mod blur_rules {
         }
     }
 
+    /// Pixelate's regions are whole blocks on the layer's grid.
+    #[test]
+    fn pixelate_regions_are_whole_blocks() {
+        use voxy_core::registry::ids;
+        let f = fx(ids::PIXELATE, &[("cell", Value::Scalar(8.0))]);
+        let r = Rect::new(DVec2::new(-3.0, 0.0), DVec2::new(20.0, 17.0));
+        let want = Rect::new(DVec2::new(-8.0, 0.0), DVec2::new(24.0, 24.0));
+        assert_eq!(Kernel::Pixelate.rod(&f, r, 1.0), want);
+        assert_eq!(Kernel::Pixelate.roi(&f, r, 1.0), want);
+        let one = fx(ids::PIXELATE, &[("cell", Value::Scalar(1.0))]);
+        assert_eq!(Kernel::Pixelate.rod(&one, r, 1.0), r);
+        let ctx = PassContext::new(1.0, voxy_core::WorkingSpace::Linear);
+        assert_eq!(Kernel::Pixelate.passes(&one, &ctx).len(), 0);
+        // Big blocks are subsampled: 16 samples per side at most.
+        let big = fx(ids::PIXELATE, &[("cell", Value::Scalar(100.0))]);
+        assert_eq!(Kernel::Pixelate.passes(&big, &ctx)[0].i[1], 16);
+    }
+
     /// The centre reaches the shader in buffer texels.
     #[test]
     fn sweep_centres_are_in_buffer_texels() {
@@ -365,6 +383,7 @@ mod blur_rules {
             texel_scale: 0.5,
             space: voxy_core::WorkingSpace::Linear,
             origin: DVec2::new(-4.0, 2.0),
+            layer_size: DVec2::ZERO,
         };
         let p = &Kernel::ZoomBlur.passes(&f, &ctx)[0];
         assert_eq!(p.p[0], [7.0, 9.0, 0.5, 0.0]);

@@ -32,6 +32,8 @@ pub mod ids {
     pub const COLOR_BALANCE: &str = "voxy.color.color_balance";
     pub const GRADIENT_MAP: &str = "voxy.color.gradient_map";
     pub const LUT: &str = "voxy.color.lut";
+    pub const VIGNETTE: &str = "voxy.stylize.vignette";
+    pub const PIXELATE: &str = "voxy.stylize.pixelate";
 }
 
 /// Every built-in definition, in no particular order.
@@ -53,6 +55,8 @@ pub fn builtin_definitions() -> Vec<EffectDef> {
         color_balance(),
         gradient_map(),
         lut(),
+        vignette(),
+        pixelate(),
     ]
 }
 
@@ -504,6 +508,47 @@ fn lut() -> EffectDef {
                 .hint("What the LUT expects; most creative LUTs expect sRGB-encoded values.");
             p.add("amount", "Amount", Value::Scalar(1.0), Unit::Normalized)
                 .range(0.0, 1.0);
+        },
+    )
+}
+
+fn vignette() -> EffectDef {
+    def(
+        ids::VIGNETTE,
+        "Vignette",
+        Category::Stylize,
+        "Darkens (or tints) the layer towards its edges.",
+        |p| {
+            p.add("amount", "Amount", Value::Scalar(0.5), Unit::Normalized)
+                .range(0.0, 1.0);
+            p.add("size", "Size", Value::Scalar(0.6), Unit::Normalized)
+                .range(0.0, 1.5)
+                .hint("Where the darkening starts: 1 is the middle of each edge.");
+            p.add("feather", "Feather", Value::Scalar(0.6), Unit::Normalized)
+                .range(0.0, 1.5)
+                .hint("How gradually it fades in.");
+            p.add(
+                "color",
+                "Color",
+                Value::Color(LinearRgba::new(0.0, 0.0, 0.0, 1.0)),
+                Unit::None,
+            )
+            .hide_alpha();
+        },
+    )
+}
+
+fn pixelate() -> EffectDef {
+    def(
+        ids::PIXELATE,
+        "Pixelate",
+        Category::Stylize,
+        "Turns the layer into large square blocks of colour.",
+        |p| {
+            p.add("cell", "Block Size", Value::Scalar(10.0), Unit::Pixels)
+                .range(1.0, 1000.0)
+                .soft(1.0, 100.0)
+                .hint("In layer pixels; the blocks line up with the layer's top-left corner.");
         },
     )
 }

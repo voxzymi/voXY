@@ -330,6 +330,40 @@ at the layer origin.
   `floor(v·(n − 1) + 0.5) / (n − 1)`.
 - **Regions:** per pixel.
 
+## Stylize
+
+### Vignette (`voxy.stylize.vignette`, v1)
+
+| Parameter | Type | Range | Default |
+|---|---|---|---|
+| Amount (`amount`) | scalar, normalized | 0–1 | 0.5 |
+| Size (`size`) | scalar, normalized | 0–1.5 | 0.6 |
+| Feather (`feather`) | scalar, normalized | 0–1.5 | 0.6 |
+| Color (`color`) | colour, no alpha | — | black |
+
+- **Space:** working, on straight colour; alpha is kept (only the layer's
+  own pixels change).
+- **Formula:** with `d` the distance from the layer's centre in an ellipse
+  fitted to the layer (1 at the middle of each edge, √2 at the corners),
+  `t = amount · smoothstep(size, size + max(feather, 0.001), d)` and
+  `rgb' = mix(rgb, color, t)`.
+- **Regions:** per pixel. Amount 0 changes nothing.
+
+### Pixelate (`voxy.stylize.pixelate`, v1)
+
+| Parameter | Type | Range | Default |
+|---|---|---|---|
+| Block Size (`cell`) | scalar, layer px | 1–1000 (slider 1–100) | 10 |
+
+- **Space:** working, premultiplied.
+- **Formula:** blocks of `cell` layer pixels on a grid starting at the
+  layer's origin; each pixel shows the average of its block. A block side
+  takes one sample per texel, up to 16 samples (larger blocks are averaged
+  from a 16 × 16 grid of texels). Blocks at the layer's edge also average
+  the transparent pixels beyond it.
+- **Regions:** RoD and ROI = the rectangle grown to whole blocks. A size
+  of 1 changes nothing.
+
 ## Blend modes
 
 A layer's blend mode decides how it combines with everything below it in
