@@ -340,7 +340,10 @@ at `743b053` (merge of #3).
       - Three goldens and a region and stage test.
    5. **Done:** Glow, in linear light (design §3.5): bright pass, blur,
       and an additive composite over the kept input. One golden.
-   6. Stroke.
+   6. **Done:** Stroke (outside, behind the layer, or the outline alone),
+      by jump flooding. Two goldens and an exact width check on the GPU.
+
+   **E-D group 3 complete.** 630 workspace tests pass, clippy clean.
    Then groups 3 to 6 (group 6 brings adjustment-layer rendering and
    the transitions).
 5. O-A to O-D.

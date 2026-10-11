@@ -281,6 +281,11 @@ fn shadow_offset(fx: &EvaluatedEffect) -> DVec2 {
     DVec2::new(libm::cos(a), libm::sin(a)) * d
 }
 
+/// Stroke's width in layer pixels.
+fn stroke_width(fx: &EvaluatedEffect) -> f64 {
+    scalar(fx, "width", 0.0).clamp(0.0, 500.0)
+}
+
 /// How far the shadow's blur reaches, in layer pixels (as Gaussian Blur).
 fn shadow_reach(fx: &EvaluatedEffect) -> f64 {
     scalar(fx, "softness", 0.0).clamp(0.0, 500.0) + 1.0
@@ -347,11 +352,12 @@ pub enum Kernel {
     DropShadow,
     InnerShadow,
     Glow,
+    Stroke,
 }
 
 impl Kernel {
     /// Every kernel.
-    pub const ALL: [Kernel; 23] = [
+    pub const ALL: [Kernel; 24] = [
         Kernel::Invert,
         Kernel::GaussianBlur,
         Kernel::BoxBlur,
@@ -375,6 +381,7 @@ impl Kernel {
         Kernel::DropShadow,
         Kernel::InnerShadow,
         Kernel::Glow,
+        Kernel::Stroke,
     ];
 
     /// The kernel running `type_id` at `version`, if this build has one.
@@ -401,7 +408,7 @@ impl Kernel {
     pub fn keeps_input(self) -> bool {
         matches!(
             self,
-            Kernel::DropShadow | Kernel::InnerShadow | Kernel::Glow
+            Kernel::DropShadow | Kernel::InnerShadow | Kernel::Glow | Kernel::Stroke
         )
     }
 
@@ -443,6 +450,7 @@ impl Kernel {
             Kernel::DropShadow => ids::DROP_SHADOW,
             Kernel::InnerShadow => ids::INNER_SHADOW,
             Kernel::Glow => ids::GLOW,
+            Kernel::Stroke => ids::STROKE,
         }
     }
 
@@ -562,6 +570,35 @@ impl Kernel {
                 ];
                 k.p[2] = working_rgb(color(fx, "color", LinearRgba::BLACK), space);
                 vec![k]
+            }
+            Kernel::Stroke => {
+                let width = stroke_width(fx) * s;
+                let opacity = scalar(fx, "opacity", 1.0).clamp(0.0, 1.0);
+                let only = flag(fx, "outline_only");
+                if width <= 0.0 || (opacity == 0.0 && !only) {
+                    return Vec::new();
+                }
+                // Stage 0 marks the opaque pixels; stage 1 floods each
+                // pixel with the offset to its nearest one, in steps that
+                // halve down to 1 (jump flooding).
+                let mut out = vec![KernelParams::default()];
+                let mut step = (width.ceil() as u32 + 1).next_power_of_two();
+                while step >= 1 {
+                    let mut p = KernelParams {
+                        stage: 1,
+                        ..KernelParams::default()
+                    };
+                    p.p[0][0] = step as f32;
+                    out.push(p);
+                    step /= 2;
+                }
+                // Stage 2: the outline, behind the kept input.
+                k.stage = 2;
+                k.p[0] = working_rgb(color(fx, "color", LinearRgba::WHITE), space);
+                k.p[1] = [width as f32, opacity as f32, 0.0, 0.0];
+                k.i[0] = u32::from(only);
+                out.push(k);
+                out
             }
             Kernel::Glow => {
                 let intensity = scalar(fx, "intensity", 1.0).clamp(0.0, 10.0);
@@ -815,6 +852,7 @@ impl Kernel {
             | Kernel::DropShadow
             | Kernel::InnerShadow => DVec2::ZERO,
             Kernel::Glow => DVec2::splat(r("radius").min(500.0) + 1.0),
+            Kernel::Stroke => DVec2::splat(stroke_width(fx) + 1.0),
             Kernel::GaussianBlur | Kernel::BoxBlur => {
                 let passes = if self == Kernel::BoxBlur {
                     scalar(fx, "passes", 1.0).clamp(1.0, 5.0)

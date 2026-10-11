@@ -39,6 +39,7 @@ pub mod ids {
     pub const DROP_SHADOW: &str = "voxy.stylize.drop_shadow";
     pub const INNER_SHADOW: &str = "voxy.stylize.inner_shadow";
     pub const GLOW: &str = "voxy.stylize.glow";
+    pub const STROKE: &str = "voxy.stylize.stroke";
 }
 
 /// Every built-in definition, in no particular order.
@@ -67,6 +68,7 @@ pub fn builtin_definitions() -> Vec<EffectDef> {
         shadow(ids::DROP_SHADOW),
         shadow(ids::INNER_SHADOW),
         glow(),
+        stroke(),
     ]
 }
 
@@ -675,4 +677,35 @@ fn glow() -> EffectDef {
     );
     d.space = EffectSpace::Linear;
     d
+}
+
+fn stroke() -> EffectDef {
+    def(
+        ids::STROKE,
+        "Stroke",
+        Category::Stylize,
+        "Draws an even outline around the layer's shape.",
+        |p| {
+            p.add(
+                "color",
+                "Color",
+                Value::Color(LinearRgba::new(1.0, 1.0, 1.0, 1.0)),
+                Unit::None,
+            )
+            .hide_alpha();
+            p.add("width", "Width", Value::Scalar(4.0), Unit::Pixels)
+                .range(0.0, 500.0)
+                .soft(0.0, 50.0)
+                .hint("How far the outline reaches out from the shape, in layer pixels.");
+            p.add("opacity", "Opacity", Value::Scalar(1.0), Unit::Normalized)
+                .range(0.0, 1.0);
+            p.add(
+                "outline_only",
+                "Outline Only",
+                Value::Bool(false),
+                Unit::None,
+            )
+            .hint("Show the outline without the layer.");
+        },
+    )
 }

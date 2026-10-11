@@ -929,7 +929,7 @@ mod stylize {
     fn stylize_goldens() {
         let Some(gpu) = gpu() else { return };
         let mut c = Compositor::new(&gpu.device);
-        let cases: [Case<'_>; 10] = [
+        let cases: [Case<'_>; 12] = [
             (
                 "effect_vignette",
                 ids::VIGNETTE,
@@ -982,6 +982,23 @@ mod stylize {
                     (
                         "color",
                         Value::Color(LinearRgba::from_srgb8(200, 30, 120, 255)),
+                    ),
+                ],
+            ),
+            (
+                "effect_stroke",
+                ids::STROKE,
+                vec![("width", Value::Scalar(3.0))],
+            ),
+            (
+                "effect_stroke_outline_only",
+                ids::STROKE,
+                vec![
+                    ("width", Value::Scalar(2.0)),
+                    ("outline_only", Value::Bool(true)),
+                    (
+                        "color",
+                        Value::Color(LinearRgba::from_srgb8(255, 220, 60, 255)),
                     ),
                 ],
             ),
@@ -1092,5 +1109,58 @@ mod stylize {
         seeds.sort_unstable();
         want.sort_unstable();
         assert_eq!(seeds, want);
+    }
+
+    /// Stroke reaches exactly its width out from an opaque edge.
+    #[test]
+    fn the_stroke_has_its_width() {
+        let Some(gpu) = gpu() else { return };
+        let mut doc = Document::with_comp(
+            "Stroke",
+            CompSettings {
+                width: 64,
+                height: 32,
+                ..CompSettings::default()
+            },
+        );
+        doc.meta.working_space = WorkingSpace::SrgbCompat;
+        let comp = doc.main_comp.unwrap();
+        AddSolidLayer {
+            comp,
+            name: None,
+            color: LinearRgba::from_srgb8(0, 0, 0, 255),
+            index: 0,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let l = doc.main().unwrap().layers[0].clone();
+        if let voxy_core::LayerKind::Solid { size, .. } = &l.kind {
+            set(&mut doc, size.id, Value::Vec2(DVec2::new(20.0, 10.0)));
+        }
+        set(&mut doc, l.transform.anchor.id, Value::Vec2(DVec2::ZERO));
+        set(
+            &mut doc,
+            l.transform.position.id,
+            Value::Vec2(DVec2::new(20.0, 10.0)),
+        );
+        let fx = add_effect(&mut doc, l.id, ids::STROKE);
+        set_param(&mut doc, l.id, fx, "width", Value::Scalar(5.0));
+        let img = render(
+            &gpu,
+            &mut Compositor::new(&gpu.device),
+            &doc,
+            Time::ZERO,
+            1.0,
+        );
+        let at = |x: u32, y: u32| img.pixels[((y * img.width + x) * 4) as usize];
+        // The solid covers x 20..40; the white line reaches 5 px past it on
+        // each side, and nothing beyond.
+        assert_eq!(at(30, 15), 0, "inside: the black solid");
+        for x in [16, 19, 40, 44] {
+            assert_eq!(at(x, 15), 255, "x = {x} is on the line");
+        }
+        for x in [13, 47] {
+            assert_eq!(at(x, 15), 0, "x = {x} is past the line");
+        }
     }
 }

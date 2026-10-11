@@ -456,6 +456,30 @@ at the layer origin.
 - **Regions:** RoD and ROI = padded by Radius + 1 px. Intensity 0 changes
   nothing.
 
+### Stroke (`voxy.stylize.stroke`, v1)
+
+| Parameter | Type | Range | Default |
+|---|---|---|---|
+| Color (`color`) | colour, no alpha | — | white |
+| Width (`width`) | scalar, layer px | 0–500 (slider 0–50) | 4 |
+| Opacity (`opacity`) | scalar, normalized | 0–1 | 1 |
+| Outline Only (`outline_only`) | bool | — | off |
+
+- **Space:** working, premultiplied.
+- **Passes:** (1) marks the pixels at least half opaque; (2) jump
+  flooding: in steps from the power of two above `w + 1` down to 1, each
+  texel keeps the nearest marked pixel known to itself or the eight texels
+  one step away, stored as an offset (exact small integers in RGBA16F);
+  (3) the line, coverage `clamp(w − d + 1, 0, 1)` with `d` the distance to
+  the nearest marked pixel's centre (about half a pixel past the edge), so
+  the line ends `w` pixels from the shape, with round corners.
+- **Formula:** `line = opacity·cover·(color, 1)`, drawn behind the
+  effect's kept input: `in + line·(1 − in.a)`; Outline Only keeps just
+  `line·(1 − in.a)`. Jump flooding is approximate at a few rare pixels; the
+  test checks the width on a straight edge exactly.
+- **Regions:** RoD and ROI = padded by Width + 1 px. Width 0 changes
+  nothing.
+
 ## Blend modes
 
 A layer's blend mode decides how it combines with everything below it in
