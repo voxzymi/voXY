@@ -8,6 +8,8 @@ use voxy_core::persist;
 
 /// File extensions voXY imports as images.
 pub const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg"];
+/// File extensions voXY imports as LUTs (for the LUT effect).
+pub const LUT_EXTENSIONS: &[&str] = &["cube"];
 /// File extensions voXY imports as video.
 pub const VIDEO_EXTENSIONS: &[&str] = &[
     "mp4", "m4v", "mov", "mkv", "webm", "avi", "ts", "mts", "mxf",
@@ -22,6 +24,10 @@ pub trait Dialogs: Debug + Send {
     fn pick_video(&self) -> Option<PathBuf>;
     /// One image or video file to relink to.
     fn pick_relink(&self) -> Option<PathBuf>;
+    /// One LUT file, for the LUT effect's "Import LUT…".
+    fn pick_lut(&self) -> Option<PathBuf> {
+        None
+    }
     fn open_project(&self) -> Option<PathBuf>;
     fn save_project(&self, file_name: &str) -> Option<PathBuf>;
 }
@@ -38,6 +44,7 @@ fn media_extensions() -> Vec<&'static str> {
     IMAGE_EXTENSIONS
         .iter()
         .chain(VIDEO_EXTENSIONS)
+        .chain(LUT_EXTENSIONS)
         .copied()
         .collect()
 }
@@ -46,9 +53,10 @@ impl Dialogs for NativeDialogs {
     fn pick_media(&self) -> Vec<PathBuf> {
         rfd::FileDialog::new()
             .set_title("Import")
-            .add_filter("Images and video", &media_extensions())
+            .add_filter("Images, video and LUTs", &media_extensions())
             .add_filter("Images", IMAGE_EXTENSIONS)
             .add_filter("Video", VIDEO_EXTENSIONS)
+            .add_filter("LUTs", LUT_EXTENSIONS)
             .pick_files()
             .unwrap_or_default()
     }
@@ -70,7 +78,14 @@ impl Dialogs for NativeDialogs {
     fn pick_relink(&self) -> Option<PathBuf> {
         rfd::FileDialog::new()
             .set_title("Relink")
-            .add_filter("Images and video", &media_extensions())
+            .add_filter("Images, video and LUTs", &media_extensions())
+            .pick_file()
+    }
+
+    fn pick_lut(&self) -> Option<PathBuf> {
+        rfd::FileDialog::new()
+            .set_title("Import LUT")
+            .add_filter("LUTs", LUT_EXTENSIONS)
             .pick_file()
     }
 

@@ -14,6 +14,9 @@ pub enum AssetKind {
     Image,
     /// A video file (format 0.3.0). Its audio is not used yet.
     Video,
+    /// A 3D colour lookup table (`.cube`) for the LUT effect (format 0.7.0).
+    /// Never a layer source.
+    Lut,
 }
 
 impl AssetKind {
@@ -21,6 +24,7 @@ impl AssetKind {
         match self {
             AssetKind::Image => "Image",
             AssetKind::Video => "Video",
+            AssetKind::Lut => "LUT",
         }
     }
 }

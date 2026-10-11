@@ -28,6 +28,7 @@ mod history;
 mod id;
 pub mod keyframe;
 mod layer;
+pub mod lut;
 pub mod motion_path;
 pub mod persist;
 mod pool;

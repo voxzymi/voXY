@@ -101,7 +101,8 @@ pub fn required_version(doc: &Document) -> Version {
                 || matches!(layer.kind, LayerKind::Adjustment)
         })
     });
-    if effects {
+    let luts = doc.assets.iter().any(|a| a.kind == crate::AssetKind::Lut);
+    if effects || luts {
         return FORMAT_VERSION;
     }
     let parametric = doc.comps.values().any(|comp| {

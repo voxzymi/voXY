@@ -298,7 +298,24 @@ at `743b053` (merge of #3).
         before its children, so no cycles). 617 tests pass, clippy clean.
    5. **Done:** Gradient Map (shadow, midtone and highlight stops, a
       midtone position and an amount). One golden.
-   6. `AssetKind::Lut` with import, and the LUT (`.cube`) effect.
+   6. **Done:** `AssetKind::Lut` with import, and Apply LUT (`.cube`).
+      - Core: `voxy_core::lut` (tolerant `.cube` parser, never panics, and
+        `CubeLut::apply`, the CPU reference). A LUT asset is never a layer
+        source (refused with the reason), and removing one clears the
+        parameters that used it, in the same undo step.
+      - **Format:** a project with a LUT asset is written as 0.7.0, like
+        effects (docs/voxy-format.md).
+      - Render: LUTs upload as 32-bit float 3D textures, read with
+        `textureLoad` and interpolated by hand (bind group 2 for the LUT
+        kernel only). A chain is re-rendered when a LUT's path changes, and
+        a missing LUT passes through, is reported, and is retried.
+      - UI: a LUT picker for asset parameters with "Import…" (one undo
+        step), LUTs in the Import dialog and Project panel (own icon,
+        Missing filter, relink).
+      - Tests: the parser, the GPU against the CPU reference in both working
+        spaces, the missing-file path, core rules, the import step.
+
+   **E-D group 2 complete.** 624 workspace tests pass, clippy clean.
    Then groups 3 to 6 (group 6 brings adjustment-layer rendering and
    the transitions).
 5. O-A to O-D.

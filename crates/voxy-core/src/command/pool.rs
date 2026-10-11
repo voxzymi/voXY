@@ -116,9 +116,18 @@ pub(crate) fn source_duration(doc: &Document, s: SourceRef) -> Option<Time> {
     }
 }
 
+/// Fails unless `s` exists and can be shown by a layer (a LUT cannot).
 pub(crate) fn source_exists(doc: &Document, s: SourceRef) -> Result<(), CommandError> {
     let found = match s {
-        SourceRef::Asset(a) => doc.assets.get(a).is_some(),
+        SourceRef::Asset(a) => match doc.assets.get(a) {
+            Some(asset) if asset.kind == AssetKind::Lut => {
+                return Err(CommandError::Invalid(format!(
+                    "“{}” is a LUT: apply it with the LUT effect instead",
+                    asset.name
+                )));
+            }
+            found => found.is_some(),
+        },
         SourceRef::Comp(c) => doc.comp(c).is_some(),
     };
     if found {
@@ -520,6 +529,8 @@ impl Command for RemoveItems {
                 }
             }
         }
+        let gone: Vec<AssetId> = ex.assets.iter().copied().collect();
+        super::effects::clear_asset_refs(doc, &gone);
         if doc.main_comp.is_some_and(|m| ex.comps.contains(&m)) {
             doc.main_comp = doc.comps.keys().next().copied();
         }

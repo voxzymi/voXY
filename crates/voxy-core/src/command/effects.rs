@@ -434,6 +434,49 @@ pub(crate) fn clear_layer_refs(layers: &mut [Arc<Layer>], removed: &[LayerId]) {
     }
 }
 
+/// Sets every effect parameter that refers to a removed asset (a LUT) to
+/// `None`, in every composition. Placeholders keep their data verbatim.
+pub(crate) fn clear_asset_refs(doc: &mut Document, removed: &[crate::AssetId]) {
+    if removed.is_empty() {
+        return;
+    }
+    let hits = |v: &Value| matches!(v, Value::Asset(Some(a)) if removed.contains(a));
+    let refers = |l: &Layer| {
+        l.effects.iter().any(|fx| {
+            fx.params.iter().any(|p| match p.animation() {
+                crate::property::Animation::Static(v) => hits(v),
+                crate::property::Animation::Keyframed(t) => t.keys().iter().any(|k| hits(&k.value)),
+            })
+        })
+    };
+    let comps: Vec<CompId> = doc
+        .comps
+        .values()
+        .filter(|c| c.layers.iter().any(|l| refers(l)))
+        .map(|c| c.id)
+        .collect();
+    for cid in comps {
+        let Some(c) = doc.comp_mut(cid) else { continue };
+        for l in c.layers.iter_mut().filter(|l| refers(l)) {
+            for fx in &mut Arc::make_mut(l).effects {
+                for p in fx.editable_params_mut() {
+                    // Mapping asset references to `None` never fails validation.
+                    let _ = p.map_values(
+                        |v| {
+                            if hits(v) {
+                                Value::Asset(None)
+                            } else {
+                                v.clone()
+                            }
+                        },
+                        |t: SpatialTangents| t,
+                    );
+                }
+            }
+        }
+    }
+}
+
 /// Sets the blend mode of layers.
 #[derive(Debug, Clone)]
 pub struct SetBlendMode {

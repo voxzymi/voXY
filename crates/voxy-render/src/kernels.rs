@@ -287,11 +287,12 @@ pub enum Kernel {
     Curves,
     ColorBalance,
     GradientMap,
+    Lut,
 }
 
 impl Kernel {
     /// Every kernel.
-    pub const ALL: [Kernel; 15] = [
+    pub const ALL: [Kernel; 16] = [
         Kernel::Invert,
         Kernel::GaussianBlur,
         Kernel::BoxBlur,
@@ -307,6 +308,7 @@ impl Kernel {
         Kernel::Curves,
         Kernel::ColorBalance,
         Kernel::GradientMap,
+        Kernel::Lut,
     ];
 
     /// The kernel running `type_id` at `version`, if this build has one.
@@ -321,6 +323,19 @@ impl Kernel {
     /// key, so static effects render once.
     pub fn uses_frame(self) -> bool {
         false
+    }
+
+    /// Whether the kernel reads a LUT asset (bind group 2).
+    pub fn uses_lut(self) -> bool {
+        self == Kernel::Lut
+    }
+
+    /// The asset `fx` reads, for kernels that read one.
+    pub fn asset(self, fx: &EvaluatedEffect) -> Option<voxy_core::AssetId> {
+        match (self, fx.param("lut")) {
+            (Kernel::Lut, Some(Value::Asset(a))) => *a,
+            _ => None,
+        }
     }
 
     pub fn type_id(self) -> &'static str {
@@ -340,6 +355,7 @@ impl Kernel {
             Kernel::Curves => ids::CURVES,
             Kernel::ColorBalance => ids::COLOR_BALANCE,
             Kernel::GradientMap => ids::GRADIENT_MAP,
+            Kernel::Lut => ids::LUT,
         }
     }
 
@@ -441,6 +457,17 @@ impl Kernel {
                     return Vec::new();
                 }
                 k.w = curve_tables(&master, [&red, &green, &blue, &alpha]);
+                vec![k]
+            }
+            Kernel::Lut => {
+                let amount = scalar(fx, "amount", 1.0).clamp(0.0, 1.0);
+                if amount == 0.0 || self.asset(fx).is_none() {
+                    return Vec::new();
+                }
+                // The table's size and domain are filled in by the
+                // compositor once the file is loaded (`p1`, `p2`, `i0.y`).
+                k.p[0][0] = amount as f32;
+                k.i[0] = choice(fx, "input").min(1);
                 vec![k]
             }
             Kernel::GradientMap => {
@@ -578,6 +605,7 @@ impl Kernel {
             | Kernel::Curves
             | Kernel::ColorBalance
             | Kernel::GradientMap
+            | Kernel::Lut
             // Position-dependent: `rod` and `roi` handle them.
             | Kernel::RadialBlur
             | Kernel::ZoomBlur => DVec2::ZERO,

@@ -918,6 +918,24 @@ fn paint_icon(p: &Painter, rect: Rect, kind: ItemKind, color: Color32, badge: bo
                 Stroke::NONE,
             ));
         }
+        ItemKind::Lut => {
+            // A cube in three-quarter view: a colour volume.
+            let (top, left, right, front) =
+                (at(8.0, 1.8), at(2.0, 5.0), at(14.0, 5.0), at(8.0, 8.2));
+            p.add(Shape::closed_line(
+                vec![
+                    top,
+                    right,
+                    at(14.0, 11.2),
+                    at(8.0, 14.4),
+                    at(2.0, 11.2),
+                    left,
+                ],
+                stroke,
+            ));
+            p.add(Shape::line(vec![left, front, right], stroke));
+            p.line_segment([front, at(8.0, 14.4)], stroke);
+        }
     }
     if badge {
         let warn = Color32::from_rgb(240, 170, 40);

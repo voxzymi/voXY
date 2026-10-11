@@ -301,7 +301,7 @@ impl Panels<'_> {
                     .striped(true)
                     .show(ui, |ui| {
                         for p in layer.transform.properties() {
-                            self.property_row(ui, p, None, &[]);
+                            self.property_row(ui, p, None, &ParamRefs::default());
                         }
                     });
                 if let LayerKind::Solid { color, size } = &layer.kind {
@@ -311,8 +311,8 @@ impl Panels<'_> {
                         .num_columns(2)
                         .striped(true)
                         .show(ui, |ui| {
-                            self.property_row(ui, color, None, &[]);
-                            self.property_row(ui, size, None, &[]);
+                            self.property_row(ui, color, None, &ParamRefs::default());
+                            self.property_row(ui, size, None, &ParamRefs::default());
                         });
                 }
                 if let Some(asset) = layer.kind.asset()
@@ -367,6 +367,15 @@ impl Panels<'_> {
                     .collect()
             })
             .unwrap_or_default();
+        let refs = ParamRefs {
+            layers: others,
+            luts: doc
+                .assets
+                .iter()
+                .filter(|a| a.kind == voxy_core::AssetKind::Lut)
+                .map(|a| (a.id, a.name.clone()))
+                .collect(),
+        };
         let count = layer.effects.len();
         for (i, fx) in layer.effects.iter().enumerate() {
             let def = self.state.effects.get(&fx.type_id, fx.version).cloned();
@@ -383,7 +392,7 @@ impl Panels<'_> {
                             ),
                         );
                     }
-                    self.effect_params(ui, fx, def.as_deref(), None, &others, 0);
+                    self.effect_params(ui, fx, def.as_deref(), None, &refs, 0);
                 });
         }
     }
@@ -397,7 +406,7 @@ impl Panels<'_> {
         fx: &EffectInstance,
         def: Option<&voxy_core::registry::EffectDef>,
         group: Option<u32>,
-        others: &[(LayerId, String)],
+        refs: &ParamRefs,
         depth: usize,
     ) {
         egui::Grid::new(("effect-params", fx.id, group))
@@ -418,7 +427,7 @@ impl Panels<'_> {
                         ui.weak(crate::timeline::value_text(&p.value_at(self.state.time)));
                         ui.end_row();
                     } else {
-                        self.property_row(ui, p, pd, others);
+                        self.property_row(ui, p, pd, refs);
                     }
                 }
             });
@@ -431,7 +440,7 @@ impl Panels<'_> {
                 .id_salt(("effect-group", fx.id, g.id))
                 .default_open(g.open_by_default)
                 .show(ui, |ui| {
-                    self.effect_params(ui, fx, Some(def), Some(g.id), others, depth + 1);
+                    self.effect_params(ui, fx, Some(def), Some(g.id), refs, depth + 1);
                 });
         }
     }
@@ -663,7 +672,7 @@ impl Panels<'_> {
                     ui.label("Duration");
                     ui.label(format!("{:.3} s", comp.duration.as_secs_f64()));
                     ui.end_row();
-                    self.property_row(ui, &comp.background, None, &[]);
+                    self.property_row(ui, &comp.background, None, &ParamRefs::default());
                 }
                 ui.label("Working space");
                 let mut space = doc.meta.working_space;
@@ -719,7 +728,7 @@ impl Panels<'_> {
         ui: &mut Ui,
         p: &Property,
         param: Option<&EffectParamDef>,
-        layers: &[(LayerId, String)],
+        refs: &ParamRefs,
     ) {
         let time = self.state.time;
         let value = p.value_at(time);
@@ -733,7 +742,18 @@ impl Panels<'_> {
             label.inner.on_hover_text(hint);
         }
         let new = ui
-            .horizontal(|ui| edit_value(ui, p, &value, param, layers))
+            .horizontal(|ui| {
+                let new = edit_value(ui, p, &value, param, refs);
+                if matches!(value, Value::Asset(_))
+                    && ui
+                        .small_button("Import…")
+                        .on_hover_text("Import a .cube file and use it here")
+                        .clicked()
+                {
+                    self.state.import_lut_for(p.id);
+                }
+                new
+            })
             .inner;
         if let Some(v) = new
             && v != value
@@ -863,13 +883,23 @@ pub fn working_space_label(space: WorkingSpace) -> &'static str {
 
 /// Edits a value according to its descriptor; returns the new value if the
 /// user changed it this frame.
+/// What reference parameters in Effect Controls can point at.
+#[derive(Debug, Default)]
+pub(crate) struct ParamRefs {
+    /// The other layers of the composition.
+    pub layers: Vec<(LayerId, String)>,
+    /// The project's LUTs.
+    pub luts: Vec<(voxy_core::AssetId, String)>,
+}
+
 fn edit_value(
     ui: &mut Ui,
     p: &Property,
     value: &Value,
     param: Option<&EffectParamDef>,
-    layers: &[(LayerId, String)],
+    refs: &ParamRefs,
 ) -> Option<Value> {
+    let layers = &refs.layers;
     let (factor, suffix) = match p.desc.unit {
         Unit::Factor | Unit::Normalized => (100.0, " %"),
         Unit::Degrees => (1.0, "°"),
@@ -958,6 +988,26 @@ fn edit_value(
                     }
                 });
             (chosen != *target).then_some(Value::Layer(chosen))
+        }
+        Value::Asset(target) => {
+            let label = |t: Option<voxy_core::AssetId>| match t {
+                None => "None".to_owned(),
+                Some(id) => refs
+                    .luts
+                    .iter()
+                    .find(|(a, _)| *a == id)
+                    .map_or_else(|| "(missing LUT)".to_owned(), |(_, n)| n.clone()),
+            };
+            let mut chosen = *target;
+            egui::ComboBox::from_id_salt(("asset", p.id))
+                .selected_text(label(*target))
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut chosen, None, "None");
+                    for (id, name) in &refs.luts {
+                        ui.selectable_value(&mut chosen, Some(*id), name);
+                    }
+                });
+            (chosen != *target).then_some(Value::Asset(chosen))
         }
         Value::Curve(c) => crate::curve_editor::show(ui, egui::Id::new(("curve", p.id)), c)
             .map(|c| Value::Curve(std::sync::Arc::new(c))),

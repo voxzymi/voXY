@@ -443,3 +443,78 @@ fn new_point_parameters_start_at_the_content_centre() {
     assert!(f.h.undo());
     assert_eq!(effects(&f.h, adj).len(), 0);
 }
+
+/// LUT assets (format 0.7.0) feed the LUT effect only: they cannot become
+/// layers, and removing one clears every parameter that used it.
+#[test]
+fn luts_are_effect_inputs_not_layer_sources() {
+    use voxy_core::command::{AddSourceLayer, ImportAssets, RemoveItems, RemoveMode};
+    use voxy_core::{Asset, AssetKind, PoolItem, SourceRef};
+    let mut f = fixture();
+    // An unused LUT alone already needs 0.7.0 (older readers do not know
+    // the kind).
+    let report =
+        f.h.execute_reported(ImportAssets {
+            assets: vec![Asset::new(AssetKind::Lut, "Look", "looks/look.cube")],
+            folder: None,
+        })
+        .expect("import");
+    let lut = report.created_assets[0];
+    let mut doc = (**f.h.current()).clone();
+    for l in &mut doc.comp_mut(f.comp).unwrap().layers {
+        std::sync::Arc::make_mut(l).effects.clear();
+    }
+    assert_eq!(persist::required_version(&doc), persist::FORMAT_VERSION);
+
+    let err = f.h.execute(AddSourceLayer {
+        comp: f.comp,
+        source: SourceRef::Asset(lut),
+        index: 0,
+        in_point: Time::ZERO,
+    });
+    assert!(err.is_err(), "a LUT is not a layer source");
+
+    let fx = add(&mut f.h, f.a, ids::LUT);
+    let prop =
+        f.h.current()
+            .find_layer(f.a)
+            .unwrap()
+            .1
+            .effect(fx)
+            .unwrap()
+            .params[0]
+            .id;
+    f.h.execute(voxy_core::command::SetProperty {
+        prop,
+        time: Time::ZERO,
+        value: Value::Asset(Some(lut)),
+    })
+    .expect("point at the LUT");
+    f.h.execute(RemoveItems {
+        items: vec![PoolItem::Asset(lut)],
+        mode: RemoveMode::PlaceholderLayers,
+    })
+    .expect("remove");
+    let value =
+        f.h.current()
+            .find_layer(f.a)
+            .unwrap()
+            .1
+            .effect(fx)
+            .unwrap()
+            .params[0]
+            .value_at(Time::ZERO);
+    assert_eq!(value, Value::Asset(None));
+    // One undo brings the LUT and the reference back.
+    assert!(f.h.undo());
+    let value =
+        f.h.current()
+            .find_layer(f.a)
+            .unwrap()
+            .1
+            .effect(fx)
+            .unwrap()
+            .params[0]
+            .value_at(Time::ZERO);
+    assert_eq!(value, Value::Asset(Some(lut)));
+}

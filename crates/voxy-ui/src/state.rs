@@ -1293,6 +1293,52 @@ impl EditorState {
         }
     }
 
+    /// Asks for a `.cube` file and imports it as a LUT for parameter
+    /// `prop` (the LUT effect's "Import LUT…").
+    pub fn import_lut_for(&mut self, prop: voxy_core::PropId) {
+        if let Some(path) = self.dialogs.pick_lut() {
+            self.import_lut_path_for(&path, prop);
+        }
+    }
+
+    /// Imports `path` as a LUT and points `prop` at it, as one undo step.
+    pub(crate) fn import_lut_path_for(&mut self, path: &Path, prop: voxy_core::PropId) {
+        let asset = match probe_asset(path, self.asset_root().as_deref()) {
+            Ok(a) if a.kind == AssetKind::Lut => a,
+            Ok(_) => {
+                self.error(format!("{} is not a .cube LUT", path.display()));
+                return;
+            }
+            Err(e) => {
+                self.error(format!("Could not import {}: {e}", path.display()));
+                return;
+            }
+        };
+        let folder = self.target_folder();
+        self.history.begin("Import LUT");
+        let report = self.history.execute_reported(ImportAssets {
+            assets: vec![asset],
+            folder,
+        });
+        let set = report.and_then(|r| {
+            self.history.execute(voxy_core::command::SetProperty {
+                prop,
+                time: self.time,
+                value: voxy_core::Value::Asset(r.created_assets.first().copied()),
+            })
+        });
+        match set {
+            Ok(()) => {
+                self.history.commit();
+                self.project.missing.invalidate();
+            }
+            Err(e) => {
+                self.history.rollback();
+                self.error(e.to_string());
+            }
+        }
+    }
+
     pub fn rename_item(&mut self, item: PoolItem, name: String) {
         match item {
             PoolItem::Asset(asset) => self.execute(RenameMedia { asset, name }),
@@ -2105,6 +2151,8 @@ fn media_kind(path: &Path) -> Option<AssetKind> {
         Some(AssetKind::Image)
     } else if VIDEO_EXTENSIONS.contains(&ext.as_str()) {
         Some(AssetKind::Video)
+    } else if crate::dialogs::LUT_EXTENSIONS.contains(&ext.as_str()) {
+        Some(AssetKind::Lut)
     } else {
         None
     }
@@ -2135,7 +2183,24 @@ pub(crate) fn probe_asset(path: &Path, root: Option<&Path>) -> Result<Asset, Str
                 ..Asset::new(AssetKind::Video, name, stored)
             })
         }
+        AssetKind::Lut => {
+            read_lut(path)?;
+            Ok(Asset::new(AssetKind::Lut, name, stored))
+        }
     }
+}
+
+/// The largest `.cube` file read (a 129³ table is about 60 MB of text).
+const MAX_LUT_BYTES: u64 = 96 * 1024 * 1024;
+
+/// Reads and checks a `.cube` file. Fails with a short reason.
+pub(crate) fn read_lut(path: &Path) -> Result<voxy_core::lut::CubeLut, String> {
+    let len = std::fs::metadata(path).map_err(|e| e.to_string())?.len();
+    if len > MAX_LUT_BYTES {
+        return Err("the LUT file is too large".to_owned());
+    }
+    let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    voxy_core::lut::parse_cube(&text).map_err(|e| e.to_string())
 }
 
 /// Stores `path` relative to `base` with `/` separators when it lies inside

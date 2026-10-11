@@ -92,6 +92,7 @@ pub(super) fn kernel_shader(kernel: Kernel) -> &'static str {
         Kernel::Curves => include_str!("../shaders/effects/curves.wgsl"),
         Kernel::ColorBalance => include_str!("../shaders/effects/color_balance.wgsl"),
         Kernel::GradientMap => include_str!("../shaders/effects/gradient_map.wgsl"),
+        Kernel::Lut => include_str!("../shaders/effects/lut.wgsl"),
     }
 }
 
@@ -301,13 +302,30 @@ impl Compositor {
         let stride = self.effect_stride;
         let mut bytes = Vec::new();
         let mut passes = Vec::new();
+        let mut lut_missing = false;
         let ctx = PassContext {
             texel_scale: s,
             space,
             origin: rod.min,
         };
         for (kernel, fx) in &nodes {
-            for k in kernel.passes(fx, &ctx) {
+            // A LUT that cannot be loaded passes the image through.
+            let lut = kernel.asset(fx);
+            if let Some(a) = lut
+                && !self.ensure_lut(device, queue, assets, a)
+            {
+                if !report.missing_assets.contains(&a) {
+                    report.missing_assets.push(a);
+                }
+                lut_missing = true;
+                continue;
+            }
+            for mut k in kernel.passes(fx, &ctx) {
+                if let Some(e) = lut.and_then(|a| self.luts.get(&a)) {
+                    k.p[1] = [e.domain_min[0], e.domain_min[1], e.domain_min[2], 0.0];
+                    k.p[2] = [e.domain_max[0], e.domain_max[1], e.domain_max[2], 0.0];
+                    k.i[1] = e.size;
+                }
                 let mut w = [[0.0f32; 4]; 256];
                 for (i, v) in k.w.iter().take(1024).enumerate() {
                     w[i / 4][i % 4] = *v;
@@ -330,7 +348,7 @@ impl Compositor {
                 let at = bytes.len();
                 bytes.extend_from_slice(bytemuck::bytes_of(&u));
                 bytes.resize(at + stride as usize, 0);
-                passes.push(*kernel);
+                passes.push((*kernel, lut));
             }
         }
         let mut cur = 0;
@@ -338,10 +356,14 @@ impl Compositor {
             self.ensure_effect_uniforms(device, bytes.len() as u64);
             let (buffer, group, _) = self.effect_uniforms.as_ref().expect("ensured");
             queue.write_buffer(buffer, 0, &bytes);
-            for (i, kernel) in passes.iter().enumerate() {
+            for (i, (kernel, lut)) in passes.iter().enumerate() {
                 let Some(pipeline) = self.effect_pipelines.get(kernel) else {
                     continue;
                 };
+                let lut_group = lut.and_then(|a| self.luts.get(&a)).map(|e| &e.bind_group);
+                if kernel.uses_lut() && lut_group.is_none() {
+                    continue;
+                }
                 let next = 1 - cur;
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("voxy-effect"),
@@ -359,6 +381,9 @@ impl Compositor {
                 pass.set_pipeline(pipeline);
                 pass.set_bind_group(0, group, &[(i as u64 * stride) as u32]);
                 pass.set_bind_group(1, &entry.input_groups[cur], &[]);
+                if let Some(g) = lut_group {
+                    pass.set_bind_group(2, g, &[]);
+                }
                 pass.draw(0..3, 0..1);
                 cur = next;
                 self.chain_stats.passes += 1;
@@ -370,7 +395,8 @@ impl Compositor {
         entry.used = self.frame_counter;
         entry.chain = Some(Arc::clone(chain));
         entry.deps = deps;
-        entry.complete = true;
+        // Drawn without a LUT it could not load: try again next frame.
+        entry.complete = !lut_missing;
         self.chains.insert(key, entry);
         Some(key)
     }
@@ -386,6 +412,12 @@ impl Compositor {
             DrawSource::Comp { plan, .. } => ids = plan.assets(),
             DrawSource::Solid(_) | DrawSource::Chain { .. } => {}
         }
+        ids.extend(
+            chain
+                .effects
+                .iter()
+                .filter_map(|n| n.kernel.asset(&n.effect)),
+        );
         ids.into_iter()
             .map(|a| {
                 (

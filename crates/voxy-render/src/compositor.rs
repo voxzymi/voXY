@@ -1,6 +1,7 @@
 //! The wgpu compositor: executes a [`RenderPlan`].
 
 mod chain;
+mod lut;
 
 pub use chain::ChainStats;
 
@@ -252,6 +253,9 @@ pub struct Compositor {
     effect_pipelines: HashMap<Kernel, wgpu::RenderPipeline>,
     effect_uniform_layout: wgpu::BindGroupLayout,
     effect_input_layout: wgpu::BindGroupLayout,
+    /// LUT assets for the LUT effect, and their bind group layout.
+    luts: HashMap<AssetId, lut::LutEntry>,
+    lut_layout: wgpu::BindGroupLayout,
     effect_uniforms: Option<(wgpu::Buffer, wgpu::BindGroup, u64)>,
     effect_stride: u64,
     blend_pipeline: wgpu::RenderPipeline,
@@ -504,6 +508,12 @@ impl Compositor {
             WORKING_FORMAT,
             None,
         );
+        let lut_layout = lut::lut_layout(device);
+        let layouts = [
+            Some(&effect_uniform_layout),
+            Some(&effect_input_layout),
+            Some(&lut_layout),
+        ];
         let effect_pipelines = Kernel::ALL
             .iter()
             .map(|&k| {
@@ -518,7 +528,11 @@ impl Compositor {
                     device,
                     &label,
                     &module,
-                    &[Some(&effect_uniform_layout), Some(&effect_input_layout)],
+                    if k.uses_lut() {
+                        &layouts[..]
+                    } else {
+                        &layouts[..2]
+                    },
                     WORKING_FORMAT,
                     None,
                 );
@@ -560,6 +574,8 @@ impl Compositor {
             effect_pipelines,
             effect_uniform_layout,
             effect_input_layout,
+            luts: HashMap::new(),
+            lut_layout,
             effect_uniforms: None,
             effect_stride,
             blend_pipeline,
@@ -582,6 +598,7 @@ impl Compositor {
             self.asset_root = root;
             self.images.clear();
             self.failed.clear();
+            self.luts.clear();
             self.nested.clear();
             self.chains.clear();
         }

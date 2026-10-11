@@ -783,6 +783,7 @@ mod keys {
                     Value::Enum(v) => Value::Enum(v + 1),
                     Value::Bool(b) => Value::Bool(!b),
                     Value::Vec2(v) => Value::Vec2(*v + voxy_core::glam::DVec2::new(0.125, 0.0)),
+                    Value::Asset(_) => Value::Asset(Some(voxy_core::AssetId(7))),
                     Value::Curve(_) => Value::Curve(Arc::new(
                         voxy_core::Curve::new(vec![
                             voxy_core::glam::DVec2::new(0.0, 0.125),
@@ -801,5 +802,121 @@ mod keys {
                 );
             }
         }
+    }
+}
+
+mod lut {
+    use super::*;
+    use voxy_core::lut::CubeLut;
+    use voxy_core::{Asset, AssetKind};
+
+    /// A table that is not linear in any channel, so interpolation shows.
+    fn table() -> CubeLut {
+        let mut lut = CubeLut::identity(5);
+        for e in &mut lut.data {
+            let [r, g, b] = *e;
+            *e = [g * g, 1.0 - b, f32::midpoint(r, b)];
+        }
+        lut
+    }
+
+    fn cube_text(lut: &CubeLut) -> String {
+        let rows: Vec<String> = lut
+            .data
+            .iter()
+            .map(|[r, g, b]| format!("{r} {g} {b}"))
+            .collect();
+        format!("LUT_3D_SIZE {}\n{}\n", lut.size, rows.join("\n"))
+    }
+
+    /// One opaque solid with the LUT effect reading `path`.
+    fn doc_with_lut(
+        space: WorkingSpace,
+        path: &str,
+        color: [u8; 3],
+    ) -> (Document, voxy_core::AssetId) {
+        let mut doc = Document::with_comp(
+            "LUT",
+            CompSettings {
+                width: 8,
+                height: 8,
+                ..CompSettings::default()
+            },
+        );
+        doc.meta.working_space = space;
+        let comp = doc.main_comp.unwrap();
+        AddSolidLayer {
+            comp,
+            name: None,
+            color: LinearRgba::from_srgb8(color[0], color[1], color[2], 255),
+            index: 0,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let layer = doc.main().unwrap().layers[0].id;
+        let asset = doc.add_asset(Asset::new(AssetKind::Lut, "table", path));
+        let fx = add_effect(&mut doc, layer, ids::LUT);
+        set_param(&mut doc, layer, fx, "lut", Value::Asset(Some(asset)));
+        (doc, asset)
+    }
+
+    fn centre(img: &RgbaImage) -> [u8; 4] {
+        let i = ((4 * img.width + 4) * 4) as usize;
+        img.pixels[i..i + 4].try_into().unwrap()
+    }
+
+    /// The GPU matches `CubeLut::apply` on sRGB-encoded values, in both
+    /// working spaces.
+    #[test]
+    fn the_lut_matches_the_cpu_reference() {
+        let Some(gpu) = gpu() else { return };
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("table.cube");
+        let lut = table();
+        std::fs::write(&path, cube_text(&lut)).unwrap();
+        let path = path.to_string_lossy().replace('\\', "/");
+        for space in [WorkingSpace::SrgbCompat, WorkingSpace::Linear] {
+            for color in [[230, 120, 40], [12, 200, 250], [128, 128, 128]] {
+                let mut c = Compositor::new(&gpu.device);
+                let (doc, _) = doc_with_lut(space, &path, color);
+                let px = centre(&render(&gpu, &mut c, &doc, Time::ZERO, 1.0));
+                // The solid's colour as sRGB-encoded values (what the
+                // table expects), through the table, back to 8-bit sRGB.
+                let srgb = LinearRgba::from_srgb8(color[0], color[1], color[2], 255).to_srgb();
+                let want = lut.apply([srgb[0], srgb[1], srgb[2]]);
+                for ch in 0..3 {
+                    let w = (want[ch].clamp(0.0, 1.0) * 255.0).round() as u8;
+                    assert!(
+                        px[ch].abs_diff(w) <= 2,
+                        "{space:?} {color:?} channel {ch}: {} vs {w}",
+                        px[ch]
+                    );
+                }
+            }
+        }
+    }
+
+    /// A missing LUT file passes the layer through and is reported.
+    #[test]
+    fn a_missing_lut_passes_through_and_is_reported() {
+        let Some(gpu) = gpu() else { return };
+        let mut c = Compositor::new(&gpu.device);
+        let (doc, asset) = doc_with_lut(
+            WorkingSpace::SrgbCompat,
+            "/no/such/table.cube",
+            [230, 120, 40],
+        );
+        let (img, report) = render_frame(
+            &mut c,
+            &gpu.device,
+            &gpu.queue,
+            &doc,
+            &NoVideo,
+            &FrameRequest::export(doc.main_comp.unwrap(), Time::ZERO),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(report.missing_assets, vec![asset]);
+        assert_eq!(&centre(&img)[..3], &[230, 120, 40]);
     }
 }

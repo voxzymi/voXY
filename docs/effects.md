@@ -293,6 +293,32 @@ at the layer origin.
 - **Regions:** per pixel.
 - A general gradient value comes with shapes later (D1).
 
+### Apply LUT (`voxy.color.lut`, v1)
+
+| Parameter | Type | Range | Default |
+|---|---|---|---|
+| LUT (`lut`) | asset (a project LUT) | — | none |
+| LUT Input (`input`) | enum: sRGB-encoded, Linear light | — | sRGB-encoded |
+| Amount (`amount`) | scalar, normalized | 0–1 | 1 |
+
+- **File:** a 3D `.cube` table (`LUT_3D_SIZE` 2–129, optional
+  `DOMAIN_MIN`/`DOMAIN_MAX` and `TITLE`; red changes fastest). 1D tables are
+  refused for now. Parsed by `voxy_core::lut::parse_cube`; a damaged file
+  is refused at import and passes the image through when rendered.
+- **Space:** the straight colour is first encoded as the table expects:
+  sRGB-encoded values (in a linear project, the working values are encoded
+  with the sRGB curve), or linear light. The result is decoded back.
+- **Formula:** inputs are mapped from the domain onto the table and
+  clamped, then interpolated trilinearly between the eight surrounding
+  entries (`CubeLut::apply` is the CPU reference; the shader does the same
+  arithmetic on a 32-bit float 3D texture). The output is
+  `mix(encoded, table(encoded), amount)`, decoded; alpha is kept.
+- **Regions:** per pixel. No LUT or amount 0 changes nothing; a missing
+  file is reported with the other missing media.
+- **UI:** pick a LUT from the project, or "Import…" a `.cube` file and use
+  it in one undo step. LUTs are listed in the Project panel with their own
+  icon, and relink like media.
+
 ### Posterize (`voxy.color.posterize`, v1)
 
 | Parameter | Type | Range | Default |

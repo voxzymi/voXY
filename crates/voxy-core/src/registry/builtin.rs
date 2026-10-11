@@ -31,6 +31,7 @@ pub mod ids {
     pub const CURVES: &str = "voxy.color.curves";
     pub const COLOR_BALANCE: &str = "voxy.color.color_balance";
     pub const GRADIENT_MAP: &str = "voxy.color.gradient_map";
+    pub const LUT: &str = "voxy.color.lut";
 }
 
 /// Every built-in definition, in no particular order.
@@ -51,6 +52,7 @@ pub fn builtin_definitions() -> Vec<EffectDef> {
         curves(),
         color_balance(),
         gradient_map(),
+        lut(),
     ]
 }
 
@@ -482,6 +484,24 @@ fn gradient_map() -> EffectDef {
             )
             .range(0.01, 0.99)
             .hint("The brightness that gets the midtone colour.");
+            p.add("amount", "Amount", Value::Scalar(1.0), Unit::Normalized)
+                .range(0.0, 1.0);
+        },
+    )
+}
+
+fn lut() -> EffectDef {
+    def(
+        ids::LUT,
+        "Apply LUT",
+        Category::Color,
+        "Recolours the layer with a 3D lookup table (.cube file).",
+        |p| {
+            p.add("lut", "LUT", Value::Asset(None), Unit::None)
+                .hint("A LUT from the Project panel, or import one.");
+            p.add("input", "LUT Input", Value::Enum(0), Unit::None)
+                .choices(&["sRGB-encoded", "Linear light"])
+                .hint("What the LUT expects; most creative LUTs expect sRGB-encoded values.");
             p.add("amount", "Amount", Value::Scalar(1.0), Unit::Normalized)
                 .range(0.0, 1.0);
         },
