@@ -273,6 +273,26 @@ at the layer origin.
 - **Regions:** per pixel. All shifts at 0 change nothing.
 - The three ranges are collapsible groups in Effect Controls.
 
+### Gradient Map (`voxy.color.gradient_map`, v1)
+
+| Parameter | Type | Range | Default |
+|---|---|---|---|
+| Shadows (`shadow`) | colour, no alpha | — | black |
+| Midtones (`midtone`) | colour, no alpha | — | sRGB grey 128 |
+| Highlights (`highlight`) | colour, no alpha | — | white |
+| Midtone Position (`midpoint`) | scalar, normalized | 0.01–0.99 | 0.5 |
+| Amount (`amount`) | scalar, normalized | 0–1 | 1 |
+
+- **Space:** working; the stops are encoded for the working space, and the
+  gradient is interpolated there.
+- **Formula:** with `L` the Rec. 709 luma clamped to `[0, 1]` and `m` the
+  midtone position, the mapped colour is `mix(shadow, midtone, L/m)` for
+  `L ≤ m`, else `mix(midtone, highlight, (L − m)/(1 − m))`. The output is
+  `mix(rgb, mapped, amount)`; alpha is kept. The defaults give a grey
+  version of the layer (a map, not the identity); amount 0 changes nothing.
+- **Regions:** per pixel.
+- A general gradient value comes with shapes later (D1).
+
 ### Posterize (`voxy.color.posterize`, v1)
 
 | Parameter | Type | Range | Default |

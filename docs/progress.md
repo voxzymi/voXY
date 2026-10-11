@@ -296,7 +296,8 @@ at `743b053` (merge of #3).
         nested (needed for OpenFX pages and groups too).
       - Core: the registry checks groups (unique IDs, each parent listed
         before its children, so no cycles). 617 tests pass, clippy clean.
-   5. Gradient Map (three colour stops).
+   5. **Done:** Gradient Map (shadow, midtone and highlight stops, a
+      midtone position and an amount). One golden.
    6. `AssetKind::Lut` with import, and the LUT (`.cube`) effect.
    Then groups 3 to 6 (group 6 brings adjustment-layer rendering and
    the transitions).

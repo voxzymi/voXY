@@ -407,7 +407,7 @@ mod color {
     fn color_goldens() {
         let Some(gpu) = gpu() else { return };
         let mut c = Compositor::new(&gpu.device);
-        let cases: [Case<'_>; 11] = [
+        let cases: [Case<'_>; 12] = [
             (
                 "effect_brightness_contrast",
                 ids::BRIGHTNESS_CONTRAST,
@@ -507,6 +507,27 @@ mod color {
                 vec![
                     ("mid_red", Value::Scalar(0.4)),
                     ("preserve_luminosity", Value::Bool(false)),
+                ],
+            ),
+            // A duotone-like map with the midtone pushed towards the shadows.
+            (
+                "effect_gradient_map",
+                ids::GRADIENT_MAP,
+                vec![
+                    (
+                        "shadow",
+                        Value::Color(LinearRgba::from_srgb8(20, 10, 60, 255)),
+                    ),
+                    (
+                        "midtone",
+                        Value::Color(LinearRgba::from_srgb8(200, 60, 90, 255)),
+                    ),
+                    (
+                        "highlight",
+                        Value::Color(LinearRgba::from_srgb8(255, 240, 180, 255)),
+                    ),
+                    ("midpoint", Value::Scalar(0.35)),
+                    ("amount", Value::Scalar(0.9)),
                 ],
             ),
             (

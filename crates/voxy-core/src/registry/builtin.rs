@@ -30,6 +30,7 @@ pub mod ids {
     pub const POSTERIZE: &str = "voxy.color.posterize";
     pub const CURVES: &str = "voxy.color.curves";
     pub const COLOR_BALANCE: &str = "voxy.color.color_balance";
+    pub const GRADIENT_MAP: &str = "voxy.color.gradient_map";
 }
 
 /// Every built-in definition, in no particular order.
@@ -49,6 +50,7 @@ pub fn builtin_definitions() -> Vec<EffectDef> {
         posterize(),
         curves(),
         color_balance(),
+        gradient_map(),
     ]
 }
 
@@ -448,4 +450,40 @@ fn color_balance() -> EffectDef {
         })
         .collect();
     d
+}
+
+fn gradient_map() -> EffectDef {
+    def(
+        ids::GRADIENT_MAP,
+        "Gradient Map",
+        Category::Color,
+        "Replaces each tone with a colour from a three-stop gradient.",
+        |p| {
+            for (name, label, c) in [
+                ("shadow", "Shadows", LinearRgba::from_srgb8(0, 0, 0, 255)),
+                (
+                    "midtone",
+                    "Midtones",
+                    LinearRgba::from_srgb8(128, 128, 128, 255),
+                ),
+                (
+                    "highlight",
+                    "Highlights",
+                    LinearRgba::from_srgb8(255, 255, 255, 255),
+                ),
+            ] {
+                p.add(name, label, Value::Color(c), Unit::None).hide_alpha();
+            }
+            p.add(
+                "midpoint",
+                "Midtone Position",
+                Value::Scalar(0.5),
+                Unit::Normalized,
+            )
+            .range(0.01, 0.99)
+            .hint("The brightness that gets the midtone colour.");
+            p.add("amount", "Amount", Value::Scalar(1.0), Unit::Normalized)
+                .range(0.0, 1.0);
+        },
+    )
 }

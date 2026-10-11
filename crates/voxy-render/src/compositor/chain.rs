@@ -91,6 +91,7 @@ pub(super) fn kernel_shader(kernel: Kernel) -> &'static str {
         Kernel::Posterize => include_str!("../shaders/effects/posterize.wgsl"),
         Kernel::Curves => include_str!("../shaders/effects/curves.wgsl"),
         Kernel::ColorBalance => include_str!("../shaders/effects/color_balance.wgsl"),
+        Kernel::GradientMap => include_str!("../shaders/effects/gradient_map.wgsl"),
     }
 }
 

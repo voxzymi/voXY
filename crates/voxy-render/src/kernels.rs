@@ -286,11 +286,12 @@ pub enum Kernel {
     Posterize,
     Curves,
     ColorBalance,
+    GradientMap,
 }
 
 impl Kernel {
     /// Every kernel.
-    pub const ALL: [Kernel; 14] = [
+    pub const ALL: [Kernel; 15] = [
         Kernel::Invert,
         Kernel::GaussianBlur,
         Kernel::BoxBlur,
@@ -305,6 +306,7 @@ impl Kernel {
         Kernel::Posterize,
         Kernel::Curves,
         Kernel::ColorBalance,
+        Kernel::GradientMap,
     ];
 
     /// The kernel running `type_id` at `version`, if this build has one.
@@ -337,6 +339,7 @@ impl Kernel {
             Kernel::Posterize => ids::POSTERIZE,
             Kernel::Curves => ids::CURVES,
             Kernel::ColorBalance => ids::COLOR_BALANCE,
+            Kernel::GradientMap => ids::GRADIENT_MAP,
         }
     }
 
@@ -438,6 +441,25 @@ impl Kernel {
                     return Vec::new();
                 }
                 k.w = curve_tables(&master, [&red, &green, &blue, &alpha]);
+                vec![k]
+            }
+            Kernel::GradientMap => {
+                let amount = scalar(fx, "amount", 1.0).clamp(0.0, 1.0);
+                if amount == 0.0 {
+                    return Vec::new();
+                }
+                k.p[0] = working_rgb(color(fx, "shadow", LinearRgba::BLACK), space);
+                k.p[1] = working_rgb(
+                    color(fx, "midtone", LinearRgba::from_srgb8(128, 128, 128, 255)),
+                    space,
+                );
+                k.p[2] = working_rgb(color(fx, "highlight", LinearRgba::WHITE), space);
+                k.p[3] = [
+                    scalar(fx, "midpoint", 0.5).clamp(0.01, 0.99) as f32,
+                    amount as f32,
+                    0.0,
+                    0.0,
+                ];
                 vec![k]
             }
             Kernel::ColorBalance => {
@@ -555,6 +577,7 @@ impl Kernel {
             | Kernel::Posterize
             | Kernel::Curves
             | Kernel::ColorBalance
+            | Kernel::GradientMap
             // Position-dependent: `rod` and `roi` handle them.
             | Kernel::RadialBlur
             | Kernel::ZoomBlur => DVec2::ZERO,
