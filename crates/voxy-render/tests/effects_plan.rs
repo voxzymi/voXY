@@ -374,6 +374,41 @@ mod blur_rules {
         }
     }
 
+    /// The shadows reach the moved, blurred copy of their input.
+    #[test]
+    fn shadow_regions_cover_the_moved_blur() {
+        use voxy_core::registry::ids;
+        let r = Rect::new(DVec2::ZERO, DVec2::new(40.0, 20.0));
+        for id in [ids::DROP_SHADOW, ids::INNER_SHADOW] {
+            let kernel = Kernel::find(&voxy_core::EffectTypeId::new(id), 1).unwrap();
+            let f = fx(
+                id,
+                &[
+                    ("direction", Value::Scalar(90.0)),
+                    ("distance", Value::Scalar(10.0)),
+                    ("softness", Value::Scalar(4.0)),
+                    ("opacity", Value::Scalar(0.5)),
+                ],
+            );
+            // 90° is straight down: the shadow is 10 px lower, blurred by 4.
+            let rod = kernel.rod(&f, r, 1.0);
+            assert!(
+                (rod.max.y - 35.0).abs() < 1e-9 && (rod.min.x + 5.0).abs() < 1e-9,
+                "{rod:?}"
+            );
+            assert_eq!(rod.min.y, 0.0);
+            let roi = kernel.roi(&f, r, 1.0);
+            assert!((roi.min.y + 15.0).abs() < 1e-9, "{roi:?}");
+            // Mask, two blur passes, composite.
+            let ctx = PassContext::new(1.0, voxy_core::WorkingSpace::Linear);
+            let stages: Vec<u8> = kernel.passes(&f, &ctx).iter().map(|p| p.stage).collect();
+            assert_eq!(stages, [0, 1, 1, 2]);
+            assert!(kernel.keeps_input());
+            let none = fx(id, &[("opacity", Value::Scalar(0.0))]);
+            assert_eq!(kernel.passes(&none, &ctx).len(), 0);
+        }
+    }
+
     /// Grain's base seed changes with each of its inputs.
     #[test]
     fn grain_seeds_mix_layer_seed_and_frame() {

@@ -407,6 +407,35 @@ at the layer origin.
   padded by 1 px. ROI = the output and the output scaled by `1/(1 ± k)`,
   padded by 1 px. Amount 0 changes nothing.
 
+### Drop Shadow (`voxy.stylize.drop_shadow`, v1) and Inner Shadow (`voxy.stylize.inner_shadow`, v1)
+
+| Parameter | Type | Range | Default |
+|---|---|---|---|
+| Shadow Color (`color`) | colour, no alpha | — | black |
+| Opacity (`opacity`) | scalar, normalized | 0–1 | 0.5 |
+| Direction (`direction`) | angle, degrees | any (slider ±180) | 45 |
+| Distance (`distance`) | scalar, layer px | 0–1000 (slider 0–100) | 5 |
+| Softness (`softness`) | scalar, layer px | 0–500 (slider 0–50) | 5 |
+| Shadow Only (`shadow_only`, Drop Shadow only) | bool | — | off |
+
+- **Space:** working, premultiplied.
+- **Passes:** (1) the input's alpha moved by the offset
+  `distance·(cos θ, sin θ)` (0° right, clockwise on screen; bilinear,
+  transparent outside), (2) blurred like Gaussian Blur with radius
+  Softness (skipped at 0), (3) combined with the effect's input, which is
+  kept while the passes run.
+- **Drop Shadow:** with `m` the moved, blurred alpha,
+  `shadow = opacity·(color·m, m)` and the output is the input over the
+  shadow, `in + shadow·(1 − in.a)`, or the shadow alone.
+- **Inner Shadow:** `s = opacity·(1 − m)` and
+  `rgb' = mix(rgb, color, s)` on the input's straight colour, keeping its
+  alpha: the shadow shows inside the layer where the moved copy does not
+  cover it.
+- **Regions:** RoD = the input and the moved input padded by Softness + 1
+  px (Inner Shadow needs the moved, blurred alpha beyond the layer too).
+  ROI = the output and the output moved back, padded the same. Opacity 0
+  changes nothing (unless Shadow Only is on).
+
 ## Blend modes
 
 A layer's blend mode decides how it combines with everything below it in

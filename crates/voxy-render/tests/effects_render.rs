@@ -929,7 +929,7 @@ mod stylize {
     fn stylize_goldens() {
         let Some(gpu) = gpu() else { return };
         let mut c = Compositor::new(&gpu.device);
-        let cases: [Case<'_>; 6] = [
+        let cases: [Case<'_>; 9] = [
             (
                 "effect_vignette",
                 ids::VIGNETTE,
@@ -962,6 +962,37 @@ mod stylize {
                 "effect_chromatic_aberration",
                 ids::CHROMATIC_ABERRATION,
                 vec![("amount", Value::Scalar(0.08))],
+            ),
+            (
+                "effect_drop_shadow",
+                ids::DROP_SHADOW,
+                vec![
+                    ("distance", Value::Scalar(6.0)),
+                    ("softness", Value::Scalar(4.0)),
+                    ("opacity", Value::Scalar(0.8)),
+                ],
+            ),
+            (
+                "effect_drop_shadow_only",
+                ids::DROP_SHADOW,
+                vec![
+                    ("direction", Value::Scalar(-60.0)),
+                    ("softness", Value::Scalar(0.0)),
+                    ("shadow_only", Value::Bool(true)),
+                    (
+                        "color",
+                        Value::Color(LinearRgba::from_srgb8(200, 30, 120, 255)),
+                    ),
+                ],
+            ),
+            (
+                "effect_inner_shadow",
+                ids::INNER_SHADOW,
+                vec![
+                    ("distance", Value::Scalar(4.0)),
+                    ("softness", Value::Scalar(3.0)),
+                    ("opacity", Value::Scalar(0.9)),
+                ],
             ),
             (
                 "effect_grain_colour",

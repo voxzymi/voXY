@@ -273,6 +273,19 @@ pub fn grain_seed(layer: u64, seed: i64, frame: i64) -> u32 {
     (h ^ (h >> 32)) as u32
 }
 
+/// The shadow's offset in layer pixels: Distance along Direction (0° right,
+/// clockwise on screen).
+fn shadow_offset(fx: &EvaluatedEffect) -> DVec2 {
+    let a = scalar(fx, "direction", 45.0).to_radians();
+    let d = scalar(fx, "distance", 0.0).clamp(0.0, 1000.0);
+    DVec2::new(libm::cos(a), libm::sin(a)) * d
+}
+
+/// How far the shadow's blur reaches, in layer pixels (as Gaussian Blur).
+fn shadow_reach(fx: &EvaluatedEffect) -> f64 {
+    scalar(fx, "softness", 0.0).clamp(0.0, 500.0) + 1.0
+}
+
 /// Chromatic Aberration's scale difference `k` (red `1 + k`, blue `1 − k`).
 fn aberration(fx: &EvaluatedEffect) -> f64 {
     scalar(fx, "amount", 0.0).clamp(0.0, 0.2)
@@ -331,11 +344,13 @@ pub enum Kernel {
     Pixelate,
     Grain,
     ChromaticAberration,
+    DropShadow,
+    InnerShadow,
 }
 
 impl Kernel {
     /// Every kernel.
-    pub const ALL: [Kernel; 20] = [
+    pub const ALL: [Kernel; 22] = [
         Kernel::Invert,
         Kernel::GaussianBlur,
         Kernel::BoxBlur,
@@ -356,6 +371,8 @@ impl Kernel {
         Kernel::Pixelate,
         Kernel::Grain,
         Kernel::ChromaticAberration,
+        Kernel::DropShadow,
+        Kernel::InnerShadow,
     ];
 
     /// The kernel running `type_id` at `version`, if this build has one.
@@ -380,7 +397,7 @@ impl Kernel {
     /// Whether the kernel combines its result with its own input, so the
     /// input is kept (bound as `orig`) while its passes run.
     pub fn keeps_input(self) -> bool {
-        false
+        matches!(self, Kernel::DropShadow | Kernel::InnerShadow)
     }
 
     /// Whether the kernel reads a LUT asset (bind group 2).
@@ -418,6 +435,8 @@ impl Kernel {
             Kernel::Pixelate => ids::PIXELATE,
             Kernel::Grain => ids::GRAIN,
             Kernel::ChromaticAberration => ids::CHROMATIC_ABERRATION,
+            Kernel::DropShadow => ids::DROP_SHADOW,
+            Kernel::InnerShadow => ids::INNER_SHADOW,
         }
     }
 
@@ -537,6 +556,38 @@ impl Kernel {
                 ];
                 k.p[2] = working_rgb(color(fx, "color", LinearRgba::BLACK), space);
                 vec![k]
+            }
+            Kernel::DropShadow | Kernel::InnerShadow => {
+                let opacity = scalar(fx, "opacity", 0.5).clamp(0.0, 1.0);
+                let only = self == Kernel::DropShadow && flag(fx, "shadow_only");
+                if opacity == 0.0 && !only {
+                    return Vec::new();
+                }
+                let off = shadow_offset(fx) * s;
+                // Stage 0: the input's alpha, moved by the offset.
+                let mut mask = KernelParams::default();
+                mask.p[0] = [off.x as f32, off.y as f32, 0.0, 0.0];
+                let mut out = vec![mask];
+                // Stage 1: blurred, like Gaussian Blur.
+                let w = gaussian_weights(scalar(fx, "softness", 0.0).clamp(0.0, 500.0) * s);
+                if w.len() > 1 {
+                    for axis in [0, 1] {
+                        out.push(KernelParams {
+                            stage: 1,
+                            ..convolve(axis, false, w.clone())
+                        });
+                    }
+                }
+                // Stage 2: coloured and combined with the input.
+                k.stage = 2;
+                k.p[0] = working_rgb(color(fx, "color", LinearRgba::BLACK), space);
+                k.p[1][0] = opacity as f32;
+                k.i[0] = match self {
+                    Kernel::InnerShadow => 2,
+                    _ => u32::from(only),
+                };
+                out.push(k);
+                out
             }
             Kernel::ChromaticAberration => {
                 let amount = aberration(fx);
@@ -729,7 +780,9 @@ impl Kernel {
             | Kernel::RadialBlur
             | Kernel::ZoomBlur
             | Kernel::Pixelate
-            | Kernel::ChromaticAberration => DVec2::ZERO,
+            | Kernel::ChromaticAberration
+            | Kernel::DropShadow
+            | Kernel::InnerShadow => DVec2::ZERO,
             Kernel::GaussianBlur | Kernel::BoxBlur => {
                 let passes = if self == Kernel::BoxBlur {
                     scalar(fx, "passes", 1.0).clamp(1.0, 5.0)
@@ -775,6 +828,12 @@ impl Kernel {
                     .union(&scaled(input, c, 1.0 - k))
                     .pad(DVec2::ONE)
             }
+            // The moved, blurred alpha (Inner Shadow needs it beyond the
+            // layer too, to shade near the edges correctly).
+            Kernel::DropShadow | Kernel::InnerShadow => input.union(
+                &Rect::new(input.min + shadow_offset(fx), input.max + shadow_offset(fx))
+                    .pad(DVec2::splat(shadow_reach(fx))),
+            ),
             _ if self.repeats_edges(fx) => input,
             _ => input.pad(self.reach(fx)),
         }
@@ -797,6 +856,13 @@ impl Kernel {
                     .union(&scaled(output, c, 1.0 / (1.0 - k)))
                     .pad(DVec2::ONE)
             }
+            Kernel::DropShadow | Kernel::InnerShadow => output.union(
+                &Rect::new(
+                    output.min - shadow_offset(fx),
+                    output.max - shadow_offset(fx),
+                )
+                .pad(DVec2::splat(shadow_reach(fx))),
+            ),
             _ => output.pad(self.reach(fx)),
         }
     }

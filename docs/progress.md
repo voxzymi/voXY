@@ -330,8 +330,14 @@ at `743b053` (merge of #3).
       draggable centre). Region rules tested against sampled geometry; one
       golden. CI green on all four platforms for group 2 (run 38123139130,
       `bf3b52c`).
-   4. A saved "original input" texture for kernels that combine their
-      result with their input: Drop Shadow and Inner Shadow.
+   4. **Done:** Drop Shadow and Inner Shadow, on new chain machinery:
+      - Kernels can have several stages (shaders), with pipelines keyed by
+        kernel and stage.
+      - A kernel can keep its own input (bound as `orig`) while its passes
+        ping-pong between the other textures; only such chains get a third
+        texture. Landed first as its own commit with every golden
+        unchanged.
+      - Three goldens and a region and stage test.
    5. Glow.
    6. Stroke.
    Then groups 3 to 6 (group 6 brings adjustment-layer rendering and

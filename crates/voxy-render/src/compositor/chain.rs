@@ -74,7 +74,14 @@ impl ChainEntry {
 
 /// The shaders of `kernel`'s stages ([`crate::kernels::KernelParams::stage`]).
 pub(super) fn kernel_shaders(kernel: Kernel) -> Vec<&'static str> {
-    vec![kernel_shader(kernel)]
+    match kernel {
+        Kernel::DropShadow | Kernel::InnerShadow => vec![
+            include_str!("../shaders/effects/shadow_mask.wgsl"),
+            include_str!("../shaders/effects/convolve.wgsl"),
+            include_str!("../shaders/effects/shadow.wgsl"),
+        ],
+        _ => vec![kernel_shader(kernel)],
+    }
 }
 
 fn kernel_shader(kernel: Kernel) -> &'static str {
@@ -103,6 +110,9 @@ fn kernel_shader(kernel: Kernel) -> &'static str {
         Kernel::Grain => include_str!("../shaders/effects/grain.wgsl"),
         Kernel::ChromaticAberration => {
             include_str!("../shaders/effects/chromatic_aberration.wgsl")
+        }
+        Kernel::DropShadow | Kernel::InnerShadow => {
+            include_str!("../shaders/effects/shadow.wgsl")
         }
     }
 }

@@ -36,6 +36,8 @@ pub mod ids {
     pub const PIXELATE: &str = "voxy.stylize.pixelate";
     pub const GRAIN: &str = "voxy.stylize.grain";
     pub const CHROMATIC_ABERRATION: &str = "voxy.stylize.chromatic_aberration";
+    pub const DROP_SHADOW: &str = "voxy.stylize.drop_shadow";
+    pub const INNER_SHADOW: &str = "voxy.stylize.inner_shadow";
 }
 
 /// Every built-in definition, in no particular order.
@@ -61,6 +63,8 @@ pub fn builtin_definitions() -> Vec<EffectDef> {
         pixelate(),
         grain(),
         chromatic_aberration(),
+        shadow(ids::DROP_SHADOW),
+        shadow(ids::INNER_SHADOW),
     ]
 }
 
@@ -600,6 +604,45 @@ fn chromatic_aberration() -> EffectDef {
             p.add("center", "Center", Value::Vec2(DVec2::ZERO), Unit::Pixels)
                 .point()
                 .hint("In layer pixels. Drag the handle in the viewer.");
+        },
+    )
+}
+
+/// Drop Shadow and Inner Shadow share their parameters.
+fn shadow(id: &str) -> EffectDef {
+    let inner = id == ids::INNER_SHADOW;
+    def(
+        id,
+        if inner { "Inner Shadow" } else { "Drop Shadow" },
+        Category::Stylize,
+        if inner {
+            "Shades the inside of the layer's edges, as if it were cut in."
+        } else {
+            "Casts a soft shadow of the layer behind it."
+        },
+        |p| {
+            p.add(
+                "color",
+                "Shadow Color",
+                Value::Color(LinearRgba::new(0.0, 0.0, 0.0, 1.0)),
+                Unit::None,
+            )
+            .hide_alpha();
+            p.add("opacity", "Opacity", Value::Scalar(0.5), Unit::Normalized)
+                .range(0.0, 1.0);
+            p.add("direction", "Direction", Value::Scalar(45.0), Unit::Degrees)
+                .soft(-180.0, 180.0)
+                .hint("Where the shadow falls: 0° is right, positive angles turn clockwise.");
+            p.add("distance", "Distance", Value::Scalar(5.0), Unit::Pixels)
+                .range(0.0, 1000.0)
+                .soft(0.0, 100.0);
+            p.add("softness", "Softness", Value::Scalar(5.0), Unit::Pixels)
+                .range(0.0, 500.0)
+                .soft(0.0, 50.0)
+                .hint("Blur radius of the shadow, in layer pixels.");
+            if !inner {
+                p.add("shadow_only", "Shadow Only", Value::Bool(false), Unit::None);
+            }
         },
     )
 }
