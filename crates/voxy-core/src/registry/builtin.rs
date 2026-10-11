@@ -28,6 +28,7 @@ pub mod ids {
     pub const HUE_SATURATION: &str = "voxy.color.hue_saturation";
     pub const LEVELS: &str = "voxy.color.levels";
     pub const POSTERIZE: &str = "voxy.color.posterize";
+    pub const CURVES: &str = "voxy.color.curves";
 }
 
 /// Every built-in definition, in no particular order.
@@ -45,6 +46,7 @@ pub fn builtin_definitions() -> Vec<EffectDef> {
         hue_saturation(),
         levels(),
         posterize(),
+        curves(),
     ]
 }
 
@@ -374,6 +376,24 @@ fn posterize() -> EffectDef {
                 .range(2.0, 256.0)
                 .soft(2.0, 32.0)
                 .hint("Steps per channel, black and white included.");
+        },
+    )
+}
+
+fn curves() -> EffectDef {
+    def(
+        ids::CURVES,
+        "Curves",
+        Category::Color,
+        "Reshapes the tones with a curve per channel.",
+        |p| {
+            let identity = || Value::Curve(Arc::new(crate::value::Curve::identity()));
+            p.add("master", "RGB", identity(), Unit::None)
+                .hint("Applied after the red, green and blue curves.");
+            p.add("red", "Red", identity(), Unit::None);
+            p.add("green", "Green", identity(), Unit::None);
+            p.add("blue", "Blue", identity(), Unit::None);
+            p.add("alpha", "Alpha", identity(), Unit::None);
         },
     )
 }

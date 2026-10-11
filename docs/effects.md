@@ -234,6 +234,29 @@ at the layer origin.
   `[0, 1]`) and keeps the straight colour.
 - **Regions:** per pixel. The defaults change nothing.
 
+### Curves (`voxy.color.curves`, v1)
+
+| Parameter | Type | Range | Default |
+|---|---|---|---|
+| RGB (`master`) | curve | 2–64 points in `[0, 1]²` | identity |
+| Red, Green, Blue (`red`, `green`, `blue`) | curve | as above | identity |
+| Alpha (`alpha`) | curve | as above | identity |
+
+- **Space:** working, on straight colour clamped to `[0, 1]` (Curves clips
+  HDR values).
+- **Curve:** a monotone cubic through the points (Fritsch–Carlson
+  tangents: the mean of the neighbouring slopes, zero at a local extreme,
+  then scaled so `α² + β² ≤ 9`), flat before the first point and after the
+  last, clamped to `[0, 1]`. It never overshoots its points. Evaluated in
+  `f64` (`voxy_core::Curve::eval`). Curves hold between keyframes (D1).
+- **Formula:** `r' = RGB(Red(r))`, likewise for green and blue, and
+  `a' = Alpha(a)`. The CPU samples each composite at 256 evenly spaced
+  inputs, and the shader interpolates linearly between samples.
+- **Regions:** per pixel. All-identity curves change nothing.
+- **Editor:** in Effect Controls. Drag a point to move it (kept between its
+  neighbours), drag on empty space to add one, double-click to remove one
+  (at least two stay).
+
 ### Posterize (`voxy.color.posterize`, v1)
 
 | Parameter | Type | Range | Default |

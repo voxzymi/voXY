@@ -8,6 +8,7 @@ mod audit;
 mod comp_dialog;
 mod comp_draft;
 mod compat;
+mod curve_editor;
 mod dialogs;
 mod drops;
 mod ease_params;

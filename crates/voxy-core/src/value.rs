@@ -176,6 +176,79 @@ impl Curve {
     pub fn points(&self) -> &[DVec2] {
         &self.points
     }
+
+    /// Whether this is the identity: exactly `(0, 0)` and `(1, 1)`.
+    pub fn is_identity(&self) -> bool {
+        self.points == [DVec2::ZERO, DVec2::ONE]
+    }
+
+    /// The curve at `x`: a monotone cubic through the points (Fritsch and
+    /// Carlson, so it never overshoots and stays in `0..=1`), flat before
+    /// the first point and after the last. Pure `f64`, the same on every
+    /// platform. A non-finite `x` reads as 0.
+    #[allow(clippy::many_single_char_names)] // The Hermite form's own names.
+    pub fn eval(&self, x: f64) -> f64 {
+        let p = &self.points;
+        let x = if x.is_finite() { x } else { 0.0 };
+        let last = p.len() - 1;
+        if x <= p[0].x {
+            return p[0].y;
+        }
+        if x >= p[last].x {
+            return p[last].y;
+        }
+        // The segment holding x: p[k].x < x < p[k + 1].x (or equal to p[k].x).
+        let k = p
+            .partition_point(|q| q.x <= x)
+            .saturating_sub(1)
+            .min(last - 1);
+        let m = self.tangents();
+        let h = p[k + 1].x - p[k].x;
+        let t = (x - p[k].x) / h;
+        let (t2, t3) = (t * t, t * t * t);
+        let y = (2.0 * t3 - 3.0 * t2 + 1.0) * p[k].y
+            + (t3 - 2.0 * t2 + t) * h * m[k]
+            + (-2.0 * t3 + 3.0 * t2) * p[k + 1].y
+            + (t3 - t2) * h * m[k + 1];
+        y.clamp(0.0, 1.0)
+    }
+
+    /// Fritsch–Carlson tangents: the mean of the neighbouring slopes, zero
+    /// at local extremes, then limited so each segment stays monotone.
+    #[allow(clippy::many_single_char_names)] // The paper's names: d, m, a, b.
+    fn tangents(&self) -> Vec<f64> {
+        let p = &self.points;
+        let n = p.len();
+        let d: Vec<f64> = p
+            .windows(2)
+            .map(|w| (w[1].y - w[0].y) / (w[1].x - w[0].x))
+            .collect();
+        let mut m = vec![0.0; n];
+        m[0] = d[0];
+        m[n - 1] = d[n - 2];
+        for k in 1..n - 1 {
+            m[k] = if d[k - 1] * d[k] <= 0.0 {
+                0.0
+            } else {
+                f64::midpoint(d[k - 1], d[k])
+            };
+        }
+        for k in 0..n - 1 {
+            if d[k] == 0.0 {
+                m[k] = 0.0;
+                m[k + 1] = 0.0;
+                continue;
+            }
+            let (a, b) = (m[k] / d[k], m[k + 1] / d[k]);
+            let r = a * a + b * b;
+            if r > 9.0 {
+                let s = 3.0 / r.sqrt();
+                m[k] = s * a * d[k];
+                m[k + 1] = s * b * d[k];
+            }
+        }
+        m
+    }
 }
 
 impl TryFrom<CurveRepr> for Curve {
@@ -197,6 +270,48 @@ impl From<Curve> for CurveRepr {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn curves_pass_through_their_points_and_never_overshoot() {
+        let id = Curve::identity();
+        assert!(id.is_identity());
+        for i in 0..=20 {
+            let x = f64::from(i) / 20.0;
+            assert!((id.eval(x) - x).abs() < 1e-12);
+        }
+        let s = Curve::new(vec![
+            DVec2::new(0.0, 0.0),
+            DVec2::new(0.25, 0.1),
+            DVec2::new(0.5, 0.5),
+            DVec2::new(0.75, 0.9),
+            DVec2::new(1.0, 1.0),
+        ])
+        .unwrap();
+        for p in s.points() {
+            assert!((s.eval(p.x) - p.y).abs() < 1e-12, "{p}");
+        }
+        // Monotone input points give a monotone curve.
+        let mut prev = -1.0;
+        for i in 0..=1000 {
+            let y = s.eval(f64::from(i) / 1000.0);
+            assert!(y >= prev - 1e-12 && (0.0..=1.0).contains(&y));
+            prev = y;
+        }
+        // A peak stays at its point's height, and the ends hold flat.
+        let peak = Curve::new(vec![
+            DVec2::new(0.2, 0.0),
+            DVec2::new(0.5, 1.0),
+            DVec2::new(0.8, 0.0),
+        ])
+        .unwrap();
+        for i in 0..=1000 {
+            let y = peak.eval(f64::from(i) / 1000.0);
+            assert!((0.0..=1.0).contains(&y));
+        }
+        assert_eq!(peak.eval(0.1), 0.0);
+        assert_eq!(peak.eval(0.95), 0.0);
+        assert_eq!(peak.eval(f64::NAN), 0.0);
+    }
 
     fn pts(p: &[(f64, f64)]) -> Vec<DVec2> {
         p.iter().map(|&(x, y)| DVec2::new(x, y)).collect()

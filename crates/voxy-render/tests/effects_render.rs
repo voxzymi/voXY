@@ -360,12 +360,13 @@ mod color {
         img.pixels[i..i + 4].try_into().unwrap()
     }
 
-    const COLOR: [&str; 5] = [
+    const COLOR: [&str; 6] = [
         ids::BRIGHTNESS_CONTRAST,
         ids::EXPOSURE,
         ids::TINT,
         ids::HUE_SATURATION,
         ids::LEVELS,
+        ids::CURVES,
     ];
 
     #[test]
@@ -393,11 +394,19 @@ mod color {
         }
     }
 
+    fn curve(points: &[(f64, f64)]) -> Value {
+        let points = points
+            .iter()
+            .map(|(x, y)| voxy_core::glam::DVec2::new(*x, *y))
+            .collect();
+        Value::Curve(std::sync::Arc::new(voxy_core::Curve::new(points).unwrap()))
+    }
+
     #[test]
     fn color_goldens() {
         let Some(gpu) = gpu() else { return };
         let mut c = Compositor::new(&gpu.device);
-        let cases: [Case<'_>; 8] = [
+        let cases: [Case<'_>; 9] = [
             (
                 "effect_brightness_contrast",
                 ids::BRIGHTNESS_CONTRAST,
@@ -465,6 +474,18 @@ mod color {
                     ("channel", Value::Enum(1)),
                     ("input_black", Value::Scalar(0.9)),
                     ("input_white", Value::Scalar(0.1)),
+                ],
+            ),
+            // An S-curve on RGB after lifting the red shadows.
+            (
+                "effect_curves",
+                ids::CURVES,
+                vec![
+                    (
+                        "master",
+                        curve(&[(0.0, 0.0), (0.3, 0.2), (0.7, 0.85), (1.0, 1.0)]),
+                    ),
+                    ("red", curve(&[(0.0, 0.2), (1.0, 1.0)])),
                 ],
             ),
             (
@@ -720,6 +741,13 @@ mod keys {
                     Value::Enum(v) => Value::Enum(v + 1),
                     Value::Bool(b) => Value::Bool(!b),
                     Value::Vec2(v) => Value::Vec2(*v + voxy_core::glam::DVec2::new(0.125, 0.0)),
+                    Value::Curve(_) => Value::Curve(Arc::new(
+                        voxy_core::Curve::new(vec![
+                            voxy_core::glam::DVec2::new(0.0, 0.125),
+                            voxy_core::glam::DVec2::ONE,
+                        ])
+                        .unwrap(),
+                    )),
                     Value::Color(c) => Value::Color(voxy_core::LinearRgba::new(c.r, c.g, 0.5, c.a)),
                     other => other.clone(),
                 };

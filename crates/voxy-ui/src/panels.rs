@@ -936,6 +936,8 @@ fn edit_value(
                 });
             (chosen != *target).then_some(Value::Layer(chosen))
         }
+        Value::Curve(c) => crate::curve_editor::show(ui, egui::Id::new(("curve", p.id)), c)
+            .map(|c| Value::Curve(std::sync::Arc::new(c))),
         other => {
             ui.weak(format!("{other:?}"));
             None

@@ -279,7 +279,17 @@ at `743b053` (merge of #3).
       clipping above white) and Posterize. Three goldens, a CPU test of
       their parameter edge cases, and Levels joins the
       defaults-pass-through test.
-   3. Curves, with a curve editor in Effect Controls (`Value::Curve`).
+   3. **Done:** Curves (RGB, red, green, blue and alpha) with a curve
+      editor in Effect Controls (`curve_editor.rs`).
+      - Core: `Curve::eval`, a monotone cubic (Fritsch–Carlson) in `f64`,
+        tested to pass through its points, never overshoot and hold flat
+        past the ends.
+      - The renderer bakes four 256-entry tables (the RGB curve folded into
+        red, green and blue), which fill the uniform's table exactly.
+      - Editor helpers (move within neighbours, insert, remove, limits) are
+        unit-tested; each edit is one `SetProperty`, so one drag is one undo
+        step. A golden, and Curves joins the defaults-pass-through test.
+        617 workspace tests pass, clippy clean.
    4. Color Balance.
    5. Gradient Map (three colour stops).
    6. `AssetKind::Lut` with import, and the LUT (`.cube`) effect.

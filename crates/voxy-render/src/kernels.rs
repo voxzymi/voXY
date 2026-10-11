@@ -12,7 +12,7 @@
 
 use voxy_core::glam::DVec2;
 use voxy_core::registry::ids;
-use voxy_core::{EffectTypeId, EvaluatedEffect, LinearRgba, Value, WorkingSpace};
+use voxy_core::{Curve, EffectTypeId, EvaluatedEffect, LinearRgba, Value, WorkingSpace};
 
 /// The most samples Radial and Zoom Blur average per pixel; each pixel
 /// takes one per texel of its sweep, up to this (odd, so one sits on the
@@ -29,7 +29,8 @@ pub const MAX_TAPS: usize = 1023;
 pub struct KernelParams {
     pub p: [[f32; 4]; 4],
     pub i: [u32; 4],
-    /// Convolution weights, centre first; at most `MAX_TAPS + 1`.
+    /// Convolution weights, centre first, or other tables (Curves); at
+    /// most `MAX_TAPS + 1`.
     pub w: Vec<f32>,
 }
 
@@ -198,6 +199,36 @@ fn point(fx: &EvaluatedEffect, name: &str) -> DVec2 {
     }
 }
 
+/// Entries per channel table of Curves.
+pub const CURVE_TABLE: usize = 256;
+
+fn curve(fx: &EvaluatedEffect, name: &str) -> std::sync::Arc<Curve> {
+    match fx.param(name) {
+        Some(Value::Curve(c)) => c.clone(),
+        _ => std::sync::Arc::new(Curve::identity()),
+    }
+}
+
+/// The four tables of Curves, one after another: red, green and blue, each
+/// with the master curve applied after it, then alpha.
+/// [`CURVE_TABLE`] samples each, at `i / (CURVE_TABLE − 1)`.
+pub fn curve_tables(master: &Curve, channels: [&Curve; 4]) -> Vec<f32> {
+    let last = (CURVE_TABLE - 1) as f64;
+    let mut w = Vec::with_capacity(4 * CURVE_TABLE);
+    for (i, c) in channels.iter().enumerate() {
+        for k in 0..CURVE_TABLE {
+            let x = k as f64 / last;
+            let y = if i < 3 {
+                master.eval(c.eval(x))
+            } else {
+                c.eval(x)
+            };
+            w.push(y as f32);
+        }
+    }
+    w
+}
+
 /// The largest distance from `c` to `r`'s corners.
 fn farthest(r: Rect, c: DVec2) -> f64 {
     [
@@ -253,11 +284,12 @@ pub enum Kernel {
     HueSaturation,
     Levels,
     Posterize,
+    Curves,
 }
 
 impl Kernel {
     /// Every kernel.
-    pub const ALL: [Kernel; 12] = [
+    pub const ALL: [Kernel; 13] = [
         Kernel::Invert,
         Kernel::GaussianBlur,
         Kernel::BoxBlur,
@@ -270,6 +302,7 @@ impl Kernel {
         Kernel::HueSaturation,
         Kernel::Levels,
         Kernel::Posterize,
+        Kernel::Curves,
     ];
 
     /// The kernel running `type_id` at `version`, if this build has one.
@@ -300,6 +333,7 @@ impl Kernel {
             Kernel::HueSaturation => ids::HUE_SATURATION,
             Kernel::Levels => ids::LEVELS,
             Kernel::Posterize => ids::POSTERIZE,
+            Kernel::Curves => ids::CURVES,
         }
     }
 
@@ -388,6 +422,19 @@ impl Kernel {
                 k.p[0] = [ib as f32, (1.0 / span) as f32, (1.0 / gamma) as f32, 0.0];
                 k.p[1] = [ob as f32, ow as f32, 0.0, 0.0];
                 k.i[0] = choice(fx, "channel").min(4);
+                vec![k]
+            }
+            Kernel::Curves => {
+                let master = curve(fx, "master");
+                let [red, green, blue, alpha] =
+                    ["red", "green", "blue", "alpha"].map(|n| curve(fx, n));
+                if [&master, &red, &green, &blue, &alpha]
+                    .iter()
+                    .all(|c| c.is_identity())
+                {
+                    return Vec::new();
+                }
+                k.w = curve_tables(&master, [&red, &green, &blue, &alpha]);
                 vec![k]
             }
             Kernel::Posterize => {
@@ -487,6 +534,7 @@ impl Kernel {
             | Kernel::HueSaturation
             | Kernel::Levels
             | Kernel::Posterize
+            | Kernel::Curves
             // Position-dependent: `rod` and `roi` handle them.
             | Kernel::RadialBlur
             | Kernel::ZoomBlur => DVec2::ZERO,
