@@ -257,6 +257,22 @@ at the layer origin.
   neighbours), drag on empty space to add one, double-click to remove one
   (at least two stay).
 
+### Color Balance (`voxy.color.color_balance`, v1)
+
+| Parameter | Type | Range | Default |
+|---|---|---|---|
+| Shadows, Midtones, Highlights → Cyan / Red, Magenta / Green, Yellow / Blue (`shadow_red` … `high_blue`, nine in all) | scalar, normalized | −1–1 (slider ±0.5) | 0 |
+| Preserve Luminosity (`preserve_luminosity`) | bool | — | on |
+
+- **Space:** working, on straight colour.
+- **Formula:** with `L` the Rec. 709 luma clamped to `[0, 1]`, the three
+  ranges are weighted `(1 − L)²`, `2L(1 − L)` and `L²` (they sum to 1), and
+  `rgb' = rgb + Σ weightᵢ·shiftᵢ`. With Preserve Luminosity, the luma
+  difference is added back: `rgb'' = rgb' + (luma(rgb) − luma(rgb'))`. The
+  result is clamped at 0 below; HDR values above 1 are kept.
+- **Regions:** per pixel. All shifts at 0 change nothing.
+- The three ranges are collapsible groups in Effect Controls.
+
 ### Posterize (`voxy.color.posterize`, v1)
 
 | Parameter | Type | Range | Default |

@@ -207,6 +207,20 @@ impl EffectDef {
                 return Err(bad(format!("parameter `{}` is in a missing group", p.name)));
             }
         }
+        // Group IDs are unique, and a parent comes before its children, so
+        // the tree has no cycles.
+        for (i, g) in self.groups.iter().enumerate() {
+            let earlier = &self.groups[..i];
+            if earlier.iter().any(|e| e.id == g.id) {
+                return Err(bad(format!("group {} is repeated", g.id)));
+            }
+            if g.parent.is_some_and(|p| !earlier.iter().any(|e| e.id == p)) {
+                return Err(bad(format!(
+                    "group {} has a parent not listed before it",
+                    g.id
+                )));
+            }
+        }
         Ok(())
     }
 }
@@ -502,6 +516,11 @@ impl EffectParamDef {
 
     pub(crate) fn hint(&mut self, text: &str) -> &mut Self {
         self.hint = Some(text.into());
+        self
+    }
+
+    pub(crate) fn in_group(&mut self, group: u32) -> &mut Self {
+        self.group = Some(group);
         self
     }
 

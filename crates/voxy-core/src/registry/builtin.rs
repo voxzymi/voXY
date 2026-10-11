@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use super::{Category, EffectDef, EffectOrigin, EffectSpace, ParamBuilder};
+use super::{Category, EffectDef, EffectOrigin, EffectSpace, ParamBuilder, ParamGroup};
 use crate::color::LinearRgba;
 use crate::effect::EffectTypeId;
 use crate::property::Unit;
@@ -29,6 +29,7 @@ pub mod ids {
     pub const LEVELS: &str = "voxy.color.levels";
     pub const POSTERIZE: &str = "voxy.color.posterize";
     pub const CURVES: &str = "voxy.color.curves";
+    pub const COLOR_BALANCE: &str = "voxy.color.color_balance";
 }
 
 /// Every built-in definition, in no particular order.
@@ -47,6 +48,7 @@ pub fn builtin_definitions() -> Vec<EffectDef> {
         levels(),
         posterize(),
         curves(),
+        color_balance(),
     ]
 }
 
@@ -396,4 +398,54 @@ fn curves() -> EffectDef {
             p.add("alpha", "Alpha", identity(), Unit::None);
         },
     )
+}
+
+fn color_balance() -> EffectDef {
+    const RANGES: [(&str, &str, u32); 3] = [
+        ("shadow", "Shadows", 0),
+        ("mid", "Midtones", 1),
+        ("high", "Highlights", 2),
+    ];
+    let mut d = def(
+        ids::COLOR_BALANCE,
+        "Color Balance",
+        Category::Color,
+        "Pushes the shadows, midtones and highlights towards a colour.",
+        |p| {
+            for (prefix, _, group) in RANGES {
+                for (axis, label) in [
+                    ("red", "Cyan / Red"),
+                    ("green", "Magenta / Green"),
+                    ("blue", "Yellow / Blue"),
+                ] {
+                    p.add(
+                        &format!("{prefix}_{axis}"),
+                        label,
+                        Value::Scalar(0.0),
+                        Unit::Normalized,
+                    )
+                    .range(-1.0, 1.0)
+                    .soft(-0.5, 0.5)
+                    .in_group(group);
+                }
+            }
+            p.add(
+                "preserve_luminosity",
+                "Preserve Luminosity",
+                Value::Bool(true),
+                Unit::None,
+            )
+            .hint("Keep each pixel's brightness; only its colour moves.");
+        },
+    );
+    d.groups = RANGES
+        .iter()
+        .map(|(_, label, id)| ParamGroup {
+            id: *id,
+            label: (*label).into(),
+            parent: None,
+            open_by_default: true,
+        })
+        .collect();
+    d
 }

@@ -285,11 +285,12 @@ pub enum Kernel {
     Levels,
     Posterize,
     Curves,
+    ColorBalance,
 }
 
 impl Kernel {
     /// Every kernel.
-    pub const ALL: [Kernel; 13] = [
+    pub const ALL: [Kernel; 14] = [
         Kernel::Invert,
         Kernel::GaussianBlur,
         Kernel::BoxBlur,
@@ -303,6 +304,7 @@ impl Kernel {
         Kernel::Levels,
         Kernel::Posterize,
         Kernel::Curves,
+        Kernel::ColorBalance,
     ];
 
     /// The kernel running `type_id` at `version`, if this build has one.
@@ -334,6 +336,7 @@ impl Kernel {
             Kernel::Levels => ids::LEVELS,
             Kernel::Posterize => ids::POSTERIZE,
             Kernel::Curves => ids::CURVES,
+            Kernel::ColorBalance => ids::COLOR_BALANCE,
         }
     }
 
@@ -437,6 +440,22 @@ impl Kernel {
                 k.w = curve_tables(&master, [&red, &green, &blue, &alpha]);
                 vec![k]
             }
+            Kernel::ColorBalance => {
+                let shift = |range: &str| {
+                    let v = |axis: &str| {
+                        scalar(fx, &format!("{range}_{axis}"), 0.0).clamp(-1.0, 1.0) as f32
+                    };
+                    [v("red"), v("green"), v("blue"), 0.0]
+                };
+                k.p[0] = shift("shadow");
+                k.p[1] = shift("mid");
+                k.p[2] = shift("high");
+                if k.p[..3].iter().flatten().all(|v| *v == 0.0) {
+                    return Vec::new();
+                }
+                k.i[0] = u32::from(flag(fx, "preserve_luminosity"));
+                vec![k]
+            }
             Kernel::Posterize => {
                 let levels = match fx.param("levels") {
                     Some(Value::Int(n)) => (*n).clamp(2, 256) as u32,
@@ -535,6 +554,7 @@ impl Kernel {
             | Kernel::Levels
             | Kernel::Posterize
             | Kernel::Curves
+            | Kernel::ColorBalance
             // Position-dependent: `rod` and `roi` handle them.
             | Kernel::RadialBlur
             | Kernel::ZoomBlur => DVec2::ZERO,

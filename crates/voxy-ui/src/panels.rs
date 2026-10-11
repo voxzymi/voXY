@@ -383,32 +383,55 @@ impl Panels<'_> {
                             ),
                         );
                     }
-                    egui::Grid::new(("effect-params", fx.id))
-                        .num_columns(2)
-                        .striped(true)
-                        .show(ui, |ui| {
-                            for p in &fx.params {
-                                let pd = def.as_ref().and_then(|d| d.param(fx.param_name(p)));
-                                if pd.is_some_and(|pd| {
-                                    pd.flags.visibility == ParamVisibility::Hidden
-                                }) {
-                                    continue;
-                                }
-                                if fx.is_placeholder()
-                                    || pd.is_some_and(|pd| {
-                                        pd.flags.visibility == ParamVisibility::ReadOnly
-                                    })
-                                {
-                                    ui.label(p.desc.label.as_ref());
-                                    ui.weak(crate::timeline::value_text(
-                                        &p.value_at(self.state.time),
-                                    ));
-                                    ui.end_row();
-                                } else {
-                                    self.property_row(ui, p, pd, &others);
-                                }
-                            }
-                        });
+                    self.effect_params(ui, fx, def.as_deref(), None, &others, 0);
+                });
+        }
+    }
+
+    /// The parameters of `fx` in `group` (`None`: the top level), then its
+    /// subgroups as collapsible sections. Without a definition (a
+    /// placeholder) every parameter is shown at the top level.
+    fn effect_params(
+        &mut self,
+        ui: &mut Ui,
+        fx: &EffectInstance,
+        def: Option<&voxy_core::registry::EffectDef>,
+        group: Option<u32>,
+        others: &[(LayerId, String)],
+        depth: usize,
+    ) {
+        egui::Grid::new(("effect-params", fx.id, group))
+            .num_columns(2)
+            .striped(true)
+            .show(ui, |ui| {
+                for p in &fx.params {
+                    let pd = def.and_then(|d| d.param(fx.param_name(p)));
+                    if pd.map_or(group.is_some(), |pd| pd.group != group)
+                        || pd.is_some_and(|pd| pd.flags.visibility == ParamVisibility::Hidden)
+                    {
+                        continue;
+                    }
+                    if fx.is_placeholder()
+                        || pd.is_some_and(|pd| pd.flags.visibility == ParamVisibility::ReadOnly)
+                    {
+                        ui.label(p.desc.label.as_ref());
+                        ui.weak(crate::timeline::value_text(&p.value_at(self.state.time)));
+                        ui.end_row();
+                    } else {
+                        self.property_row(ui, p, pd, others);
+                    }
+                }
+            });
+        // Nesting is capped, so a damaged group tree cannot recurse forever.
+        let Some(def) = def.filter(|_| depth < 8) else {
+            return;
+        };
+        for g in def.groups.iter().filter(|g| g.parent == group) {
+            egui::CollapsingHeader::new(g.label.as_ref())
+                .id_salt(("effect-group", fx.id, g.id))
+                .default_open(g.open_by_default)
+                .show(ui, |ui| {
+                    self.effect_params(ui, fx, Some(def), Some(g.id), others, depth + 1);
                 });
         }
     }

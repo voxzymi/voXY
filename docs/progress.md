@@ -290,7 +290,12 @@ at `743b053` (merge of #3).
         unit-tested; each edit is one `SetProperty`, so one drag is one undo
         step. A golden, and Curves joins the defaults-pass-through test.
         617 workspace tests pass, clippy clean.
-   4. Color Balance.
+   4. **Done:** Color Balance (shadow, midtone and highlight shifts with
+      luma weights, optional preserve-luminosity). Two goldens.
+      - Effect Controls now draws parameter groups as collapsible sections,
+        nested (needed for OpenFX pages and groups too).
+      - Core: the registry checks groups (unique IDs, each parent listed
+        before its children, so no cycles). 617 tests pass, clippy clean.
    5. Gradient Map (three colour stops).
    6. `AssetKind::Lut` with import, and the LUT (`.cube`) effect.
    Then groups 3 to 6 (group 6 brings adjustment-layer rendering and

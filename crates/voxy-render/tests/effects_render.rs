@@ -360,13 +360,14 @@ mod color {
         img.pixels[i..i + 4].try_into().unwrap()
     }
 
-    const COLOR: [&str; 6] = [
+    const COLOR: [&str; 7] = [
         ids::BRIGHTNESS_CONTRAST,
         ids::EXPOSURE,
         ids::TINT,
         ids::HUE_SATURATION,
         ids::LEVELS,
         ids::CURVES,
+        ids::COLOR_BALANCE,
     ];
 
     #[test]
@@ -406,7 +407,7 @@ mod color {
     fn color_goldens() {
         let Some(gpu) = gpu() else { return };
         let mut c = Compositor::new(&gpu.device);
-        let cases: [Case<'_>; 9] = [
+        let cases: [Case<'_>; 11] = [
             (
                 "effect_brightness_contrast",
                 ids::BRIGHTNESS_CONTRAST,
@@ -486,6 +487,26 @@ mod color {
                         curve(&[(0.0, 0.0), (0.3, 0.2), (0.7, 0.85), (1.0, 1.0)]),
                     ),
                     ("red", curve(&[(0.0, 0.2), (1.0, 1.0)])),
+                ],
+            ),
+            // Warm highlights, cool shadows.
+            (
+                "effect_color_balance",
+                ids::COLOR_BALANCE,
+                vec![
+                    ("shadow_blue", Value::Scalar(0.3)),
+                    ("shadow_red", Value::Scalar(-0.1)),
+                    ("high_red", Value::Scalar(0.25)),
+                    ("high_blue", Value::Scalar(-0.2)),
+                    ("mid_green", Value::Scalar(0.1)),
+                ],
+            ),
+            (
+                "effect_color_balance_free",
+                ids::COLOR_BALANCE,
+                vec![
+                    ("mid_red", Value::Scalar(0.4)),
+                    ("preserve_luminosity", Value::Bool(false)),
                 ],
             ),
             (
