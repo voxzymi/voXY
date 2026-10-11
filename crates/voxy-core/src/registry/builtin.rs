@@ -48,6 +48,7 @@ pub mod ids {
     pub const WAVE: &str = "voxy.distort.wave";
     pub const RIPPLE: &str = "voxy.distort.ripple";
     pub const BULGE: &str = "voxy.distort.bulge";
+    pub const TILE: &str = "voxy.distort.tile";
 }
 
 /// Every built-in definition, in no particular order.
@@ -85,6 +86,7 @@ pub fn builtin_definitions() -> Vec<EffectDef> {
         wave(),
         ripple(),
         bulge(),
+        tile(),
     ]
 }
 
@@ -947,6 +949,45 @@ fn bulge() -> EffectDef {
             p.add("amount", "Amount", Value::Scalar(0.5), Unit::Normalized)
                 .range(-1.0, 1.0)
                 .hint("Positive swells the centre, negative pinches it.");
+        },
+    )
+}
+
+fn tile() -> EffectDef {
+    def(
+        ids::TILE,
+        "Tile",
+        Category::Distort,
+        "Repeats the layer in a grid of smaller copies.",
+        |p| {
+            p.add(
+                "center",
+                "Tile Center",
+                Value::Vec2(DVec2::ZERO),
+                Unit::Pixels,
+            )
+            .point()
+            .hint("The centre of one tile. Drag the handle in the viewer.");
+            p.add(
+                "tile_size",
+                "Tile Size",
+                Value::Vec2(DVec2::splat(0.5)),
+                Unit::Factor,
+            )
+            .range(0.01, 10.0)
+            .soft(0.05, 2.0)
+            .hint("Each tile's size, relative to the layer.");
+            p.add(
+                "output_size",
+                "Output Size",
+                Value::Vec2(DVec2::ONE),
+                Unit::Factor,
+            )
+            .range(0.01, 10.0)
+            .soft(0.1, 4.0)
+            .hint("The tiled area, relative to the layer and centred on it.");
+            p.add("mirror", "Mirror Edges", Value::Bool(false), Unit::None)
+                .hint("Flip every other tile, so neighbouring edges match.");
         },
     )
 }

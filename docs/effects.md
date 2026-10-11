@@ -611,6 +611,26 @@ region too, because one buffer holds every stage of a chain.
 - **Regions:** the rectangle, plus the circle's box when they meet.
   Amount 0 changes nothing.
 
+### Tile (`voxy.distort.tile`, v1)
+
+| Parameter | Type | Range | Default |
+|---|---|---|---|
+| Tile Center (`center`) | point, layer px, on-canvas handle | any | centre of the layer's content |
+| Tile Size (`tile_size`) | 2D factor of the layer's size | 0.01–10 (slider 0.05–2) | (0.5, 0.5) |
+| Output Size (`output_size`) | 2D factor of the layer's size | 0.01–10 (slider 0.1–4) | (1, 1) |
+| Mirror Edges (`mirror`) | bool | — | off |
+
+- **Formula:** each tile shows the whole layer (its own content rectangle,
+  so anything an earlier effect drew outside it is cut off), squeezed to
+  the tile size. With `u = (p − center)/tile + ½`, a pixel reads the
+  layer at `fract(u)`, flipped in every other tile with Mirror Edges.
+  Samples stay half a texel inside the layer so tiles meet without seams.
+  Outside the tiled area (the layer scaled by Output Size around its
+  centre) everything is transparent.
+- **Regions:** RoD = the input and the tiled area, padded by 1 px; ROI =
+  the output and the layer, padded by 1 px. Region rules now receive the
+  layer's own rectangle for this.
+
 ## Blend modes
 
 A layer's blend mode decides how it combines with everything below it in

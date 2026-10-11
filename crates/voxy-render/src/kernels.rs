@@ -351,6 +351,25 @@ fn turns_rad(deg: f64) -> f32 {
     ((deg / 360.0).rem_euclid(1.0) * std::f64::consts::TAU) as f32
 }
 
+fn factor2(fx: &EvaluatedEffect, name: &str, default: f64) -> DVec2 {
+    match fx.param(name) {
+        Some(Value::Vec2(v)) if v.is_finite() => v.clamp(DVec2::splat(0.01), DVec2::splat(10.0)),
+        _ => DVec2::splat(default),
+    }
+}
+
+/// One tile's size in layer pixels.
+fn tile_size(fx: &EvaluatedEffect, layer: Rect) -> DVec2 {
+    (layer.size() * factor2(fx, "tile_size", 0.5)).max(DVec2::splat(1e-3))
+}
+
+/// The tiled area: the layer scaled by Output Size around its centre.
+fn tile_output(fx: &EvaluatedEffect, layer: Rect) -> Rect {
+    let centre = (layer.min + layer.max) / 2.0;
+    let half = layer.size() * factor2(fx, "output_size", 1.0) / 2.0;
+    Rect::new(centre - half, centre + half)
+}
+
 /// Stroke's width in layer pixels.
 fn stroke_width(fx: &EvaluatedEffect) -> f64 {
     scalar(fx, "width", 0.0).clamp(0.0, 500.0)
@@ -431,11 +450,12 @@ pub enum Kernel {
     Wave,
     Ripple,
     Bulge,
+    Tile,
 }
 
 impl Kernel {
     /// Every kernel.
-    pub const ALL: [Kernel; 32] = [
+    pub const ALL: [Kernel; 33] = [
         Kernel::Invert,
         Kernel::GaussianBlur,
         Kernel::BoxBlur,
@@ -468,6 +488,7 @@ impl Kernel {
         Kernel::Wave,
         Kernel::Ripple,
         Kernel::Bulge,
+        Kernel::Tile,
     ];
 
     /// The kernel running `type_id` at `version`, if this build has one.
@@ -545,6 +566,7 @@ impl Kernel {
             Kernel::Wave => ids::WAVE,
             Kernel::Ripple => ids::RIPPLE,
             Kernel::Bulge => ids::BULGE,
+            Kernel::Tile => ids::TILE,
         }
     }
 
@@ -746,6 +768,23 @@ impl Kernel {
                     (radius * s) as f32,
                     libm::exp2(amount) as f32,
                 ];
+                vec![k]
+            }
+            Kernel::Tile => {
+                let layer = Rect::of_size(ctx.layer_size);
+                let (tile, out) = (tile_size(fx, layer), tile_output(fx, layer));
+                let (lo, hi) = (ctx.texel(layer.min), ctx.texel(layer.max));
+                let c = ctx.texel(point(fx, "center"));
+                let (o0, o1) = (ctx.texel(out.min), ctx.texel(out.max));
+                k.p[0] = [lo.x as f32, lo.y as f32, hi.x as f32, hi.y as f32];
+                k.p[1] = [
+                    c.x as f32,
+                    c.y as f32,
+                    (tile.x * s) as f32,
+                    (tile.y * s) as f32,
+                ];
+                k.p[2] = [o0.x as f32, o0.y as f32, o1.x as f32, o1.y as f32];
+                k.i[0] = u32::from(flag(fx, "mirror"));
                 vec![k]
             }
             Kernel::ChromaKey => {
@@ -1078,7 +1117,8 @@ impl Kernel {
             | Kernel::LumaKey
             | Kernel::Transform
             | Kernel::Mirror
-            | Kernel::Bulge => DVec2::ZERO,
+            | Kernel::Bulge
+            | Kernel::Tile => DVec2::ZERO,
             Kernel::Wave | Kernel::Ripple => DVec2::splat(r("amplitude").min(500.0) + 1.0),
             Kernel::Glow => DVec2::splat(r("radius").min(500.0) + 1.0),
             Kernel::Stroke => DVec2::splat(stroke_width(fx) + 1.0),
@@ -1114,8 +1154,9 @@ impl Kernel {
     /// Region of definition: how far the output can reach, given the input
     /// region (layer pixels). It always contains the input region, because
     /// one buffer holds every stage of a chain.
-    pub fn rod(self, fx: &EvaluatedEffect, input: Rect, scale: f64) -> Rect {
-        let _ = scale;
+    /// `layer` is the layer's own content rectangle, for kernels relative
+    /// to it (Tile).
+    pub fn rod(self, fx: &EvaluatedEffect, input: Rect, layer: Rect) -> Rect {
         let c = point(fx, "center");
         match self {
             Kernel::RadialBlur if spin_half(fx) > 0.0 => spun(input, c, spin_half(fx)),
@@ -1152,14 +1193,14 @@ impl Kernel {
             }
             Kernel::Mirror => input.union(&mapped(input, mirror_map(fx))).pad(DVec2::ONE),
             Kernel::Bulge => with_circle(input, fx),
+            Kernel::Tile => input.union(&tile_output(fx, layer).pad(DVec2::ONE)),
             _ if self.repeats_edges(fx) => input,
             _ => input.pad(self.reach(fx)),
         }
     }
 
     /// Region of interest: the input pixels needed to compute `output`.
-    pub fn roi(self, fx: &EvaluatedEffect, output: Rect, scale: f64) -> Rect {
-        let _ = scale;
+    pub fn roi(self, fx: &EvaluatedEffect, output: Rect, layer: Rect) -> Rect {
         let c = point(fx, "center");
         match self {
             Kernel::RadialBlur if spin_half(fx) > 0.0 => spun(output, c, spin_half(fx)),
@@ -1193,6 +1234,8 @@ impl Kernel {
                 .union(&mapped(output, mirror_map(fx)))
                 .pad(DVec2::ONE),
             Kernel::Bulge => with_circle(output, fx),
+            // Every tile shows the whole layer.
+            Kernel::Tile => output.union(&layer.pad(DVec2::ONE)),
             _ => output.pad(self.reach(fx)),
         }
     }
@@ -1200,17 +1243,17 @@ impl Kernel {
 
 /// Region of definition of a whole chain: `source` grown by every effect in
 /// order.
-pub fn chain_rod(effects: &[(Kernel, &EvaluatedEffect)], source: Rect, scale: f64) -> Rect {
+pub fn chain_rod(effects: &[(Kernel, &EvaluatedEffect)], source: Rect, layer: Rect) -> Rect {
     effects
         .iter()
-        .fold(source, |r, (k, fx)| k.rod(fx, r, scale))
+        .fold(source, |r, (k, fx)| k.rod(fx, r, layer))
 }
 
 /// The input region the first effect needs so that `wanted` of the chain's
 /// output is correct: `wanted` pulled back through every effect, last first.
-pub fn chain_roi(effects: &[(Kernel, &EvaluatedEffect)], wanted: Rect, scale: f64) -> Rect {
+pub fn chain_roi(effects: &[(Kernel, &EvaluatedEffect)], wanted: Rect, layer: Rect) -> Rect {
     effects
         .iter()
         .rev()
-        .fold(wanted, |r, (k, fx)| k.roi(fx, r, scale))
+        .fold(wanted, |r, (k, fx)| k.roi(fx, r, layer))
 }

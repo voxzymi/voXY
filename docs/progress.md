@@ -360,7 +360,10 @@ at `743b053` (merge of #3).
       - Found and fixed along the way: a kernel's RoD must contain its
         input region, since one buffer holds every stage of a chain. Now a
         tested invariant for every kernel across the parameter grid.
-   2. Tile (its regions need the layer's size).
+   2. **Done:** Tile (tile size and output area relative to the layer,
+      optional mirrored edges). Region rules now take the layer's own
+      rectangle instead of the unused scale. A seam test on the GPU and
+      two goldens.
    3. Layer inputs for effects (another layer rendered into the chain), and
       Displacement Map on top of them. Transitions in group 6 reuse them.
    Then groups 3 to 6 (group 6 brings adjustment-layer rendering and

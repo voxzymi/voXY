@@ -1412,11 +1412,78 @@ mod distort {
         assert!((127..=129).contains(&faint(15, 10)));
     }
 
+    /// Tiles of a solid meet without seams, and the tiled area can grow
+    /// past the layer.
+    #[test]
+    fn tiles_meet_without_seams() {
+        let Some(gpu) = gpu() else { return };
+        let mut doc = Document::with_comp(
+            "Tile",
+            CompSettings {
+                width: 48,
+                height: 32,
+                background: LinearRgba::new(0.0, 0.0, 0.0, 0.0),
+                ..CompSettings::default()
+            },
+        );
+        let comp = doc.main_comp.unwrap();
+        AddSolidLayer {
+            comp,
+            name: None,
+            color: LinearRgba::WHITE,
+            index: 0,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let l = doc.main().unwrap().layers[0].clone();
+        if let voxy_core::LayerKind::Solid { size, .. } = &l.kind {
+            set(&mut doc, size.id, Value::Vec2(DVec2::new(16.0, 16.0)));
+        }
+        set(&mut doc, l.transform.anchor.id, Value::Vec2(DVec2::ZERO));
+        set(
+            &mut doc,
+            l.transform.position.id,
+            Value::Vec2(DVec2::new(16.0, 8.0)),
+        );
+        let fx = add_effect(&mut doc, l.id, ids::TILE);
+        set_param(
+            &mut doc,
+            l.id,
+            fx,
+            "tile_size",
+            Value::Vec2(DVec2::new(0.3, 0.45)),
+        );
+        set_param(
+            &mut doc,
+            l.id,
+            fx,
+            "output_size",
+            Value::Vec2(DVec2::new(2.0, 1.0)),
+        );
+        let img = render(
+            &gpu,
+            &mut Compositor::new(&gpu.device),
+            &doc,
+            Time::ZERO,
+            1.0,
+        );
+        let alpha = |x: u32, y: u32| img.pixels[((y * img.width + x) * 4 + 3) as usize];
+        // The tiled area: twice the layer's width around its centre,
+        // x 8..40, y 8..24.
+        for y in 8..24 {
+            for x in 8..40 {
+                assert_eq!(alpha(x, y), 255, "seam at ({x}, {y})");
+            }
+        }
+        assert_eq!(alpha(7, 12), 0);
+        assert_eq!(alpha(40, 12), 0);
+    }
+
     #[test]
     fn distort_goldens() {
         let Some(gpu) = gpu() else { return };
         let mut c = Compositor::new(&gpu.device);
-        let cases: [Case<'_>; 5] = [
+        let cases: [Case<'_>; 7] = [
             (
                 "effect_transform",
                 ids::TRANSFORM,
@@ -1446,6 +1513,20 @@ mod distort {
                 vec![
                     ("amplitude", Value::Scalar(2.0)),
                     ("wavelength", Value::Scalar(8.0)),
+                ],
+            ),
+            (
+                "effect_tile",
+                ids::TILE,
+                vec![("tile_size", Value::Vec2(DVec2::new(0.4, 0.5)))],
+            ),
+            (
+                "effect_tile_mirrored_wide",
+                ids::TILE,
+                vec![
+                    ("tile_size", Value::Vec2(DVec2::new(0.3, 0.3))),
+                    ("output_size", Value::Vec2(DVec2::new(1.6, 1.2))),
+                    ("mirror", Value::Bool(true)),
                 ],
             ),
             (

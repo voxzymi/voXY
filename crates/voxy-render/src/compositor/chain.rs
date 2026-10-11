@@ -138,6 +138,7 @@ fn kernel_shader(kernel: Kernel) -> &'static str {
         Kernel::Wave => include_str!("../shaders/effects/wave.wgsl"),
         Kernel::Ripple => include_str!("../shaders/effects/ripple.wgsl"),
         Kernel::Bulge => include_str!("../shaders/effects/bulge.wgsl"),
+        Kernel::Tile => include_str!("../shaders/effects/tile.wgsl"),
     }
 }
 
@@ -239,7 +240,7 @@ impl Compositor {
             .map(|n| (n.kernel, &n.effect))
             .collect();
         let seeds: Vec<u64> = chain.effects.iter().map(|n| n.seed).collect();
-        let rod = chain_rod(&nodes, Rect::of_size(size), chain.scale).round_out();
+        let rod = chain_rod(&nodes, Rect::of_size(size), Rect::of_size(size)).round_out();
         if rod.is_empty() {
             return None;
         }

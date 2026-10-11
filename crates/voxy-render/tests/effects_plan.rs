@@ -216,8 +216,8 @@ fn per_pixel_kernels_keep_regions() {
     let fx = &eval.layers[0].effects[0];
     let r = Rect::of_size(voxy_core::glam::DVec2::new(100.0, 50.0));
     let chain = [(Kernel::Invert, fx), (Kernel::Invert, fx)];
-    assert_eq!(chain_rod(&chain, r, 1.0), r);
-    assert_eq!(chain_roi(&chain, r, 1.0), r);
+    assert_eq!(chain_rod(&chain, r, r), r);
+    assert_eq!(chain_roi(&chain, r, r), r);
 }
 
 mod blur_rules {
@@ -266,8 +266,8 @@ mod blur_rules {
                 &[("angle", Value::Scalar(angle)), ("center", Value::Vec2(c))],
             );
             let half = f64::to_radians(angle) / 2.0;
-            let roi = Kernel::RadialBlur.roi(&effect, area, 1.0);
-            let rod = Kernel::RadialBlur.rod(&effect, area, 1.0);
+            let roi = Kernel::RadialBlur.roi(&effect, area, area);
+            let rod = Kernel::RadialBlur.rod(&effect, area, area);
             for p in &grid {
                 for k in 0..=64 {
                     let a = half * (f64::from(k) / 32.0 - 1.0);
@@ -286,8 +286,8 @@ mod blur_rules {
                     ("center", Value::Vec2(c)),
                 ],
             );
-            let roi = Kernel::ZoomBlur.roi(&effect, area, 1.0);
-            let rod = Kernel::ZoomBlur.rod(&effect, area, 1.0);
+            let roi = Kernel::ZoomBlur.roi(&effect, area, area);
+            let rod = Kernel::ZoomBlur.rod(&effect, area, area);
             for p in &grid {
                 for k in 0..=64 {
                     let t = 1.0 - amount * f64::from(k) / 64.0;
@@ -306,8 +306,8 @@ mod blur_rules {
                     ("center", Value::Vec2(c)),
                 ],
             );
-            let roi = Kernel::ChromaticAberration.roi(&effect, area, 1.0);
-            let rod = Kernel::ChromaticAberration.rod(&effect, area, 1.0);
+            let roi = Kernel::ChromaticAberration.roi(&effect, area, area);
+            let rod = Kernel::ChromaticAberration.rod(&effect, area, area);
             for p in &grid {
                 for scale in [1.0 + amount, 1.0 - amount] {
                     // A pixel reads c + (p − c)/scale; an input point is
@@ -331,8 +331,8 @@ mod blur_rules {
                 id,
                 &[(name, Value::Scalar(0.0)), ("center", Value::Vec2(c))],
             );
-            assert_eq!(kernel.rod(&effect, area, 1.0), area);
-            assert_eq!(kernel.roi(&effect, area, 1.0), area);
+            assert_eq!(kernel.rod(&effect, area, area), area);
+            assert_eq!(kernel.roi(&effect, area, area), area);
             assert_eq!(
                 kernel
                     .passes(
@@ -411,15 +411,15 @@ mod blur_rules {
                     v.x * angle.sin() + v.y * angle.cos(),
                 )
         };
-        let rod = Kernel::Transform.rod(&transform, area, 1.0);
+        let rod = Kernel::Transform.rod(&transform, area, area);
         for p in &grid {
             assert!(inside(&rod, map(*p)), "transform rod misses {}", map(*p));
         }
-        let roi = Kernel::Transform.roi(&transform, area, 1.0);
-        let out = Kernel::Transform.rod(&transform, area, 1.0);
+        let roi = Kernel::Transform.roi(&transform, area, area);
+        let out = Kernel::Transform.rod(&transform, area, area);
         for p in &grid {
             // Pulled back, the mapped grid lands in the ROI of its image.
-            assert!(inside(&Kernel::Transform.roi(&transform, out, 1.0), *p));
+            assert!(inside(&Kernel::Transform.roi(&transform, out, out), *p));
         }
         assert!(roi.size().x > 0.0);
         // Mirror: a reflection, both ways.
@@ -433,14 +433,20 @@ mod blur_rules {
         let normal = DVec2::new(20f64.to_radians().cos(), 20f64.to_radians().sin());
         let reflect = |p: DVec2| p - 2.0 * (p - DVec2::new(5.0, 5.0)).dot(normal) * normal;
         for p in &grid {
-            assert!(inside(&Kernel::Mirror.rod(&mirror, area, 1.0), reflect(*p)));
-            assert!(inside(&Kernel::Mirror.roi(&mirror, area, 1.0), reflect(*p)));
+            assert!(inside(
+                &Kernel::Mirror.rod(&mirror, area, area),
+                reflect(*p)
+            ));
+            assert!(inside(
+                &Kernel::Mirror.roi(&mirror, area, area),
+                reflect(*p)
+            ));
         }
         // Wave and Ripple move pixels by at most their amplitude.
         for (kernel, id) in [(Kernel::Wave, ids::WAVE), (Kernel::Ripple, ids::RIPPLE)] {
             let f = fx(id, &[("amplitude", Value::Scalar(7.0))]);
-            assert_eq!(kernel.rod(&f, area, 1.0), area.pad(DVec2::splat(8.0)));
-            assert_eq!(kernel.roi(&f, area, 1.0), area.pad(DVec2::splat(8.0)));
+            assert_eq!(kernel.rod(&f, area, area), area.pad(DVec2::splat(8.0)));
+            assert_eq!(kernel.roi(&f, area, area), area.pad(DVec2::splat(8.0)));
         }
         // Bulge: inside the circle, pixels read from inside it.
         let b = fx(
@@ -451,7 +457,7 @@ mod blur_rules {
                 ("amount", Value::Scalar(0.5)),
             ],
         );
-        let grown = Kernel::Bulge.rod(&b, area, 1.0);
+        let grown = Kernel::Bulge.rod(&b, area, area);
         assert!(inside(&grown, DVec2::new(76.0, 20.0)), "{grown:?}");
         let far = fx(
             ids::BULGE,
@@ -461,10 +467,22 @@ mod blur_rules {
             ],
         );
         assert_eq!(
-            Kernel::Bulge.rod(&far, area, 1.0),
+            Kernel::Bulge.rod(&far, area, area),
             area,
             "a circle that misses the layer"
         );
+        // Tile: the tiled area around the layer's centre; every tile reads
+        // the whole layer.
+        let layer = Rect::of_size(DVec2::new(20.0, 10.0));
+        let tile = fx(
+            ids::TILE,
+            &[("output_size", Value::Vec2(DVec2::new(3.0, 2.0)))],
+        );
+        let want = Rect::new(DVec2::new(-20.0, -5.0), DVec2::new(40.0, 15.0)).pad(DVec2::ONE);
+        assert_eq!(Kernel::Tile.rod(&tile, layer, layer), want);
+        let small = Rect::new(DVec2::new(30.0, 0.0), DVec2::new(35.0, 3.0));
+        let roi = Kernel::Tile.roi(&tile, small, layer);
+        assert!(inside(&roi, DVec2::ZERO) && inside(&roi, DVec2::new(20.0, 10.0)));
         // Defaults (centred points, identity transform) change nothing.
         let ctx = PassContext::new(1.0, voxy_core::WorkingSpace::Linear);
         let ident = fx(
@@ -479,7 +497,7 @@ mod blur_rules {
             ids::TRANSFORM,
             &[("scale", Value::Vec2(DVec2::new(0.0, 1.0)))],
         );
-        assert_eq!(Kernel::Transform.rod(&flat, area, 1.0), area);
+        assert_eq!(Kernel::Transform.rod(&flat, area, area), area);
     }
 
     /// The shadows reach the moved, blurred copy of their input.
@@ -499,13 +517,13 @@ mod blur_rules {
                 ],
             );
             // 90° is straight down: the shadow is 10 px lower, blurred by 4.
-            let rod = kernel.rod(&f, r, 1.0);
+            let rod = kernel.rod(&f, r, r);
             assert!(
                 (rod.max.y - 35.0).abs() < 1e-9 && (rod.min.x + 5.0).abs() < 1e-9,
                 "{rod:?}"
             );
             assert_eq!(rod.min.y, 0.0);
-            let roi = kernel.roi(&f, r, 1.0);
+            let roi = kernel.roi(&f, r, r);
             assert!((roi.min.y + 15.0).abs() < 1e-9, "{roi:?}");
             // Mask, two blur passes, composite.
             let ctx = PassContext::new(1.0, voxy_core::WorkingSpace::Linear);
@@ -540,10 +558,10 @@ mod blur_rules {
         let f = fx(ids::PIXELATE, &[("cell", Value::Scalar(8.0))]);
         let r = Rect::new(DVec2::new(-3.0, 0.0), DVec2::new(20.0, 17.0));
         let want = Rect::new(DVec2::new(-8.0, 0.0), DVec2::new(24.0, 24.0));
-        assert_eq!(Kernel::Pixelate.rod(&f, r, 1.0), want);
-        assert_eq!(Kernel::Pixelate.roi(&f, r, 1.0), want);
+        assert_eq!(Kernel::Pixelate.rod(&f, r, r), want);
+        assert_eq!(Kernel::Pixelate.roi(&f, r, r), want);
         let one = fx(ids::PIXELATE, &[("cell", Value::Scalar(1.0))]);
-        assert_eq!(Kernel::Pixelate.rod(&one, r, 1.0), r);
+        assert_eq!(Kernel::Pixelate.rod(&one, r, r), r);
         let ctx = PassContext::new(1.0, voxy_core::WorkingSpace::Linear);
         assert_eq!(Kernel::Pixelate.passes(&one, &ctx).len(), 0);
         // Big blocks are subsampled: 16 samples per side at most.
@@ -615,25 +633,25 @@ mod blur_rules {
                 ("repeat_edges", Value::Bool(false)),
             ],
         );
-        let rod = Kernel::GaussianBlur.rod(&g, r, 1.0);
+        let rod = Kernel::GaussianBlur.rod(&g, r, r);
         assert_eq!(rod, r.pad(DVec2::splat(11.0)));
         // Horizontal only grows in x.
         let mut h = g.clone();
         h.params[1].1 = Value::Enum(1);
         assert_eq!(
-            Kernel::GaussianBlur.rod(&h, r, 1.0),
+            Kernel::GaussianBlur.rod(&h, r, r),
             r.pad(DVec2::new(11.0, 0.0))
         );
         // Repeat edge pixels keeps the output inside the input.
         let mut rep = g.clone();
         rep.params[2].1 = Value::Bool(true);
-        assert_eq!(Kernel::GaussianBlur.rod(&rep, r, 1.0), r);
+        assert_eq!(Kernel::GaussianBlur.rod(&rep, r, r), r);
         // Box blur: each pass adds its radius to the reach.
         let b = fx(
             voxy_core::registry::ids::BOX_BLUR,
             &[("radius", Value::Scalar(4.0)), ("passes", Value::Int(3))],
         );
-        assert_eq!(Kernel::BoxBlur.rod(&b, r, 1.0), r.pad(DVec2::splat(13.0)));
+        assert_eq!(Kernel::BoxBlur.rod(&b, r, r), r.pad(DVec2::splat(13.0)));
         assert_eq!(
             Kernel::BoxBlur
                 .passes(&b, &PassContext::new(1.0, voxy_core::WorkingSpace::Linear))
@@ -648,7 +666,7 @@ mod blur_rules {
                 ("length", Value::Scalar(20.0)),
             ],
         );
-        let rod = Kernel::DirectionalBlur.rod(&d, r, 1.0);
+        let rod = Kernel::DirectionalBlur.rod(&d, r, r);
         assert!(
             (rod.min.x - 0.0).abs() < 1e-9 && (rod.min.y + 11.0).abs() < 1e-9,
             "{rod:?}"
@@ -756,7 +774,7 @@ fn kernel_parameters_are_finite_across_the_grid() {
                         );
                     }
                     let r = Rect::of_size(voxy_core::glam::DVec2::new(10.0, 10.0));
-                    let rod = kernel.rod(&fx, r, scale);
+                    let rod = kernel.rod(&fx, r, r);
                     assert!(rod.min.is_finite() && rod.max.is_finite(), "{kernel:?}");
                     // One buffer holds every stage: the region keeps the input.
                     assert_eq!(rod.union(&r), rod, "{kernel:?} {:?}", fx.params);
