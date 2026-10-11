@@ -27,8 +27,8 @@ at `743b053` (merge of #3).
 - **P-0: plugin research.** The shortlist in `docs/ofx-plugins.md` is
   approved (Q1 to Q4). The credits data file is `third_party/credits.toml`,
   and the README and LICENSING.md credit blocks (between the
-  `credits:begin` and `credits:end` markers) are kept in sync by hand until
-  `cargo xtask credits --check` arrives in O-A. `docs/ofx-host.md` is
+  `credits:begin` and `credits:end` markers) are generated from it by
+  `cargo xtask credits` (O-A). `docs/ofx-host.md` is
   started.
 
 ## Next, in order
@@ -425,7 +425,12 @@ at `743b053` (merge of #3).
       platform's rules are tested on every platform; the choices are in
       `docs/ofx-host.md`.
    4. Host suites in the in-process harness.
-   5. `cargo xtask credits --check`.
+   5. **Done (ahead of 4):** `cargo xtask credits [--check]` generates the
+      README and LICENSING.md credit blocks from `third_party/credits.toml`
+      and runs in CI. The check refuses copyleft or non-permissive
+      licenses, unpinned commits, and downloads without a sha256; once
+      `third_party/ofx-fixtures.toml` exists, every fixture must be an
+      approved credit.
 6. O-B to O-D.
 
 ## Approved decisions

@@ -12,6 +12,11 @@
 //! - `bindgen [--check]`: regenerate `crates/voxy-ofx-sys/src/bindings.rs`
 //!   from the vendored OpenFX headers (needs libclang), or fail if the
 //!   checked-in file differs (used by CI).
+//! - `credits [--check]`: regenerate the README and LICENSING.md credit
+//!   blocks from `third_party/credits.toml`, or fail if they are stale or
+//!   the data breaks the plugin license policy (used by CI).
+
+mod credits;
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -25,12 +30,16 @@ fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("licenses") => licenses(args.get(1).is_some_and(|a| a == "--check")),
+        Some("credits") => credits::run(
+            &workspace_root(),
+            args.get(1).is_some_and(|a| a == "--check"),
+        ),
         Some("bindgen") => ofx_bindgen(args.get(1).is_some_and(|a| a == "--check")),
         Some("am-inspect") => am_inspect(&args[1..]),
         Some("am-diff") if args.len() == 3 => am_diff(Path::new(&args[1]), Path::new(&args[2])),
         _ => {
             eprintln!(
-                "usage:\n  cargo xtask licenses [--check]\n  cargo xtask bindgen [--check]\n  cargo xtask am-inspect FILE... [--out REPORT.md]\n  cargo xtask am-diff A B"
+                "usage:\n  cargo xtask licenses [--check]\n  cargo xtask bindgen [--check]\n  cargo xtask credits [--check]\n  cargo xtask am-inspect FILE... [--out REPORT.md]\n  cargo xtask am-diff A B"
             );
             std::process::exit(2);
         }

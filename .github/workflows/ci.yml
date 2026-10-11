@@ -168,3 +168,5 @@ jobs:
         run: cargo deny --log-level warn --manifest-path ./Cargo.toml --all-features check licenses bans sources
       - name: Third-party license list is up to date
         run: cargo xtask licenses --check
+      - name: Credits blocks and plugin license policy
+        run: cargo xtask credits --check

@@ -13,6 +13,8 @@ workspace = true
 anyhow.workspace = true
 voxy-am-compat.workspace = true
 serde_json.workspace = true
+serde.workspace = true
+toml.workspace = true
 # Same version as ffmpeg-sys-next's build dependency. `runtime` loads
 # libclang only when `cargo xtask bindgen` runs, so builds never need it.
 bindgen = { version = "0.72.1", default-features = false, features = ["runtime"] }
