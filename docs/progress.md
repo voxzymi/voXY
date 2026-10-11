@@ -384,7 +384,18 @@ at `743b053` (merge of #3).
       - Tests: inverted below only, background untouched, a layer above
         unaffected, effects off, opacity mix, Multiply against the CPU
         reference, the plan, and a golden.
-   2. Transitions: crossfade, wipe, slide, zoom (progress and auto).
+   2. **Done:** Crossfade, Wipe, Slide and Zoom, with Progress and Auto
+      (`EvaluatedEffect::layer_progress`, from exact flicks; zeroed in the
+      plan unless Auto uses it, so time enters the key only then). The B
+      layer is a hidden layer reference, transparent until Q-E1 is
+      answered. Numeric GPU tests, Auto over the layer's duration, the key
+      rule, three goldens.
+
+   645 workspace tests pass, clippy clean.
+
+   **E-D is complete except Displacement Map and the B layer of the
+   transitions, both waiting on Q-E1.** `docs/effects.md` covers every
+   built-in effect.
    Then groups 3 to 6 (group 6 brings adjustment-layer rendering and
    the transitions).
 5. O-A to O-D.

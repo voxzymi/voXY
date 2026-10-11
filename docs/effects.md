@@ -631,6 +631,37 @@ region too, because one buffer holds every stage of a chain.
   the output and the layer, padded by 1 px. Region rules now receive the
   layer's own rectangle for this.
 
+## Transitions
+
+Every transition (design §5) has:
+
+| Parameter | Type | Range | Default |
+|---|---|---|---|
+| Progress (`progress`) | scalar, normalized | 0–1 | 0 |
+| Auto (`auto`) | bool | — | on |
+| Transition To (`layer_b`) | layer reference, hidden for now | — | none |
+
+- **Progress:** with Auto on, `t = (time − in)/(out − in)` over the layer's
+  own duration (exact flicks, `EvaluatedEffect::layer_progress`); with it
+  off, the Progress parameter (keyframable). Only then does time enter the
+  chain's cache key.
+- **B:** the layer transitioned to is a hidden layer reference until open
+  question Q-E1 (what a layer input reads) is answered. Until then B is
+  transparent: each transition takes its layer away.
+- **Frame:** Slide and Zoom show nothing outside the layer's own rectangle.
+- **Crossfade** (`voxy.transition.crossfade`, v1): `out = A·(1 − t)`.
+- **Wipe** (`voxy.transition.wipe`, v1; Angle, 0° left to right and
+  clockwise; Feather 0–1000 layer px, default 20): the edge moves along the
+  angle's direction `d` across the layer's extent along `d`, widened by the
+  feather, and `out = A·smoothstep(e − f/2, e + f/2, p·d)`.
+- **Slide** (`voxy.transition.slide`, v1; Direction, 0° right and
+  clockwise): A moves along `d` by `t` times the layer's extent along `d`.
+- **Zoom** (`voxy.transition.zoom`, v1; Zoom 1–100, default 4): A is
+  scaled by `1 + t·(zoom − 1)` around the layer's centre and faded by
+  `1 − t`.
+- **Regions:** RoD = the input; ROI = the output (and, for Slide and Zoom,
+  the layer). Progress 0 changes nothing.
+
 ## Adjustment layers
 
 An adjustment layer (design §1.5) applies its effect stack to the

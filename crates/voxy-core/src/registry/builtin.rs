@@ -7,7 +7,9 @@
 
 use std::sync::Arc;
 
-use super::{Category, EffectDef, EffectOrigin, EffectSpace, ParamBuilder, ParamGroup};
+use super::{
+    Category, EffectDef, EffectOrigin, EffectSpace, ParamBuilder, ParamGroup, ParamVisibility,
+};
 use crate::color::LinearRgba;
 use crate::effect::EffectTypeId;
 use crate::property::Unit;
@@ -49,6 +51,10 @@ pub mod ids {
     pub const RIPPLE: &str = "voxy.distort.ripple";
     pub const BULGE: &str = "voxy.distort.bulge";
     pub const TILE: &str = "voxy.distort.tile";
+    pub const CROSSFADE: &str = "voxy.transition.crossfade";
+    pub const WIPE: &str = "voxy.transition.wipe";
+    pub const SLIDE: &str = "voxy.transition.slide";
+    pub const ZOOM: &str = "voxy.transition.zoom";
 }
 
 /// Every built-in definition, in no particular order.
@@ -87,6 +93,10 @@ pub fn builtin_definitions() -> Vec<EffectDef> {
         ripple(),
         bulge(),
         tile(),
+        transition(ids::CROSSFADE),
+        transition(ids::WIPE),
+        transition(ids::SLIDE),
+        transition(ids::ZOOM),
     ]
 }
 
@@ -990,4 +1000,48 @@ fn tile() -> EffectDef {
                 .hint("Flip every other tile, so neighbouring edges match.");
         },
     )
+}
+
+/// The transitions share Progress, Auto and the hidden B layer (design §5).
+fn transition(id: &str) -> EffectDef {
+    let (name, description) = match id {
+        ids::WIPE => ("Wipe", "Wipes the layer away behind a moving edge."),
+        ids::SLIDE => ("Slide", "Slides the layer out of its frame."),
+        ids::ZOOM => ("Zoom", "Zooms into the layer while it fades away."),
+        _ => ("Crossfade", "Fades the layer out."),
+    };
+    def(id, name, Category::Transition, description, |p| {
+        p.add("progress", "Progress", Value::Scalar(0.0), Unit::Normalized)
+            .range(0.0, 1.0)
+            .hint("0 shows the layer, 1 finishes the transition. Used when Auto is off.");
+        p.add("auto", "Auto", Value::Bool(true), Unit::None)
+            .hint("Run the transition over the layer's whole duration.");
+        // The layer transitioned to. Hidden until what a layer input
+        // reads is decided (progress.md, Q-E1); until then it is empty,
+        // a transition to transparency.
+        let b = p.add("layer_b", "Transition To", Value::Layer(None), Unit::None);
+        b.flags.visibility = ParamVisibility::Hidden;
+        match id {
+            ids::WIPE => {
+                p.add("angle", "Angle", Value::Scalar(0.0), Unit::Degrees)
+                    .soft(-180.0, 180.0)
+                    .hint("The direction the edge moves: 0° is left to right, clockwise.");
+                p.add("feather", "Feather", Value::Scalar(20.0), Unit::Pixels)
+                    .range(0.0, 1000.0)
+                    .soft(0.0, 200.0);
+            }
+            ids::SLIDE => {
+                p.add("direction", "Direction", Value::Scalar(0.0), Unit::Degrees)
+                    .soft(-180.0, 180.0)
+                    .hint("Where the layer slides to: 0° is right, clockwise.");
+            }
+            ids::ZOOM => {
+                p.add("zoom", "Zoom", Value::Scalar(4.0), Unit::Factor)
+                    .range(1.0, 100.0)
+                    .soft(1.0, 10.0)
+                    .hint("How much larger the layer is at the end.");
+            }
+            _ => {}
+        }
+    })
 }

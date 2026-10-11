@@ -139,6 +139,10 @@ fn kernel_shader(kernel: Kernel) -> &'static str {
         Kernel::Ripple => include_str!("../shaders/effects/ripple.wgsl"),
         Kernel::Bulge => include_str!("../shaders/effects/bulge.wgsl"),
         Kernel::Tile => include_str!("../shaders/effects/tile.wgsl"),
+        Kernel::Crossfade => include_str!("../shaders/effects/crossfade.wgsl"),
+        Kernel::Wipe => include_str!("../shaders/effects/wipe.wgsl"),
+        Kernel::Slide => include_str!("../shaders/effects/slide.wgsl"),
+        Kernel::Zoom => include_str!("../shaders/effects/zoom_transition.wgsl"),
     }
 }
 

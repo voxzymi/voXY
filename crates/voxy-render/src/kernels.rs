@@ -351,6 +351,20 @@ fn turns_rad(deg: f64) -> f32 {
     ((deg / 360.0).rem_euclid(1.0) * std::f64::consts::TAU) as f32
 }
 
+/// A transition's progress, 0 to 1: the layer's own progress with Auto on.
+fn transition_progress(fx: &EvaluatedEffect) -> f64 {
+    let t = if flag(fx, "auto") {
+        fx.layer_progress
+    } else {
+        scalar(fx, "progress", 0.0)
+    };
+    if t.is_finite() {
+        t.clamp(0.0, 1.0)
+    } else {
+        0.0
+    }
+}
+
 fn factor2(fx: &EvaluatedEffect, name: &str, default: f64) -> DVec2 {
     match fx.param(name) {
         Some(Value::Vec2(v)) if v.is_finite() => v.clamp(DVec2::splat(0.01), DVec2::splat(10.0)),
@@ -451,11 +465,15 @@ pub enum Kernel {
     Ripple,
     Bulge,
     Tile,
+    Crossfade,
+    Wipe,
+    Slide,
+    Zoom,
 }
 
 impl Kernel {
     /// Every kernel.
-    pub const ALL: [Kernel; 33] = [
+    pub const ALL: [Kernel; 37] = [
         Kernel::Invert,
         Kernel::GaussianBlur,
         Kernel::BoxBlur,
@@ -489,6 +507,10 @@ impl Kernel {
         Kernel::Ripple,
         Kernel::Bulge,
         Kernel::Tile,
+        Kernel::Crossfade,
+        Kernel::Wipe,
+        Kernel::Slide,
+        Kernel::Zoom,
     ];
 
     /// The kernel running `type_id` at `version`, if this build has one.
@@ -508,6 +530,20 @@ impl Kernel {
     /// static effects render once.
     pub fn uses_frame(self, fx: &EvaluatedEffect) -> bool {
         self == Kernel::Grain && flag(fx, "animate")
+    }
+
+    /// A transition (design §5): Progress, Auto and a B layer.
+    pub fn is_transition(self) -> bool {
+        matches!(
+            self,
+            Kernel::Crossfade | Kernel::Wipe | Kernel::Slide | Kernel::Zoom
+        )
+    }
+
+    /// Whether the output of `fx` depends on the layer's progress through
+    /// its duration (a transition with Auto on).
+    pub fn uses_layer_progress(self, fx: &EvaluatedEffect) -> bool {
+        self.is_transition() && flag(fx, "auto")
     }
 
     /// Whether the kernel combines its result with its own input, so the
@@ -567,6 +603,10 @@ impl Kernel {
             Kernel::Ripple => ids::RIPPLE,
             Kernel::Bulge => ids::BULGE,
             Kernel::Tile => ids::TILE,
+            Kernel::Crossfade => ids::CROSSFADE,
+            Kernel::Wipe => ids::WIPE,
+            Kernel::Slide => ids::SLIDE,
+            Kernel::Zoom => ids::ZOOM,
         }
     }
 
@@ -768,6 +808,55 @@ impl Kernel {
                     (radius * s) as f32,
                     libm::exp2(amount) as f32,
                 ];
+                vec![k]
+            }
+            Kernel::Crossfade | Kernel::Wipe | Kernel::Slide | Kernel::Zoom => {
+                let progress = transition_progress(fx);
+                if progress == 0.0 {
+                    return Vec::new();
+                }
+                let layer = Rect::of_size(ctx.layer_size);
+                let (lo, hi) = (ctx.texel(layer.min), ctx.texel(layer.max));
+                k.p[1] = [lo.x as f32, lo.y as f32, hi.x as f32, hi.y as f32];
+                match self {
+                    Kernel::Crossfade => k.p[0][0] = (1.0 - progress) as f32,
+                    Kernel::Wipe => {
+                        let angle = scalar(fx, "angle", 0.0).to_radians();
+                        let dir = DVec2::new(libm::cos(angle), libm::sin(angle));
+                        // The layer's extent along d, in texels.
+                        let along = [lo, hi, DVec2::new(lo.x, hi.y), DVec2::new(hi.x, lo.y)]
+                            .map(|c| c.dot(dir));
+                        let first = along.iter().copied().fold(f64::INFINITY, f64::min);
+                        let last = along.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+                        let feather = scalar(fx, "feather", 20.0).clamp(0.0, 1000.0) * s;
+                        let edge = (first - feather / 2.0) + progress * (last - first + feather);
+                        k.p[0] = [
+                            dir.x as f32,
+                            dir.y as f32,
+                            edge as f32,
+                            feather.max(1e-3) as f32,
+                        ];
+                    }
+                    Kernel::Slide => {
+                        let angle = scalar(fx, "direction", 0.0).to_radians();
+                        let dir = DVec2::new(libm::cos(angle), libm::sin(angle));
+                        let size = hi - lo;
+                        let extent = dir.x.abs() * size.x + dir.y.abs() * size.y;
+                        let off = dir * extent * progress;
+                        k.p[0] = [off.x as f32, off.y as f32, 0.0, 0.0];
+                    }
+                    _ => {
+                        let zoom = scalar(fx, "zoom", 4.0).clamp(1.0, 100.0);
+                        let c = (lo + hi) / 2.0;
+                        let scale = 1.0 + progress * (zoom - 1.0);
+                        k.p[0] = [
+                            c.x as f32,
+                            c.y as f32,
+                            scale as f32,
+                            (1.0 - progress) as f32,
+                        ];
+                    }
+                }
                 vec![k]
             }
             Kernel::Tile => {
@@ -1118,7 +1207,11 @@ impl Kernel {
             | Kernel::Transform
             | Kernel::Mirror
             | Kernel::Bulge
-            | Kernel::Tile => DVec2::ZERO,
+            | Kernel::Tile
+            | Kernel::Crossfade
+            | Kernel::Wipe
+            | Kernel::Slide
+            | Kernel::Zoom => DVec2::ZERO,
             Kernel::Wave | Kernel::Ripple => DVec2::splat(r("amplitude").min(500.0) + 1.0),
             Kernel::Glow => DVec2::splat(r("radius").min(500.0) + 1.0),
             Kernel::Stroke => DVec2::splat(stroke_width(fx) + 1.0),
@@ -1234,8 +1327,9 @@ impl Kernel {
                 .union(&mapped(output, mirror_map(fx)))
                 .pad(DVec2::ONE),
             Kernel::Bulge => with_circle(output, fx),
-            // Every tile shows the whole layer.
-            Kernel::Tile => output.union(&layer.pad(DVec2::ONE)),
+            // Every tile shows the whole layer; Slide and Zoom read from
+            // anywhere in the layer's frame.
+            Kernel::Tile | Kernel::Slide | Kernel::Zoom => output.union(&layer.pad(DVec2::ONE)),
             _ => output.pad(self.reach(fx)),
         }
     }

@@ -220,6 +220,7 @@ impl ChainPlan {
             }
             // Zero unless the kernel uses them (see the planner).
             h.u64(fx.frame as u64);
+            h.f64(fx.layer_progress);
             h.u64(node.seed);
         }
         h.f64(self.scale);
@@ -329,6 +330,10 @@ impl Builder<'_> {
                         // or a static chain would never be reused.
                         if !kernel.uses_frame(fx) {
                             effect.frame = 0;
+                        }
+                        // Likewise the layer's progress, used only by Auto.
+                        if !kernel.uses_layer_progress(fx) {
+                            effect.layer_progress = 0.0;
                         }
                         let seed = if kernel.seeded() { l.id.raw() } else { 0 };
                         nodes.push(EffectNode {

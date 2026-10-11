@@ -748,6 +748,7 @@ mod keys {
                     params,
                     matte: None,
                     frame: 0,
+                    layer_progress: 0.0,
                 },
                 seed: 0,
             }],
@@ -785,6 +786,7 @@ mod keys {
                     Value::Bool(b) => Value::Bool(!b),
                     Value::Vec2(v) => Value::Vec2(*v + voxy_core::glam::DVec2::new(0.125, 0.0)),
                     Value::Asset(_) => Value::Asset(Some(voxy_core::AssetId(7))),
+                    Value::Layer(_) => Value::Layer(Some(voxy_core::LayerId(7))),
                     Value::Curve(_) => Value::Curve(Arc::new(
                         voxy_core::Curve::new(vec![
                             voxy_core::glam::DVec2::new(0.0, 0.125),
@@ -1545,6 +1547,137 @@ mod distort {
                 let fx = add_effect(&mut doc, *l, id);
                 for (n, v) in &params {
                     set_param(&mut doc, *l, fx, n, v.clone());
+                }
+            }
+            compare(name, &render(&gpu, &mut c, &doc, Time::ZERO, 1.0));
+        }
+    }
+}
+
+mod transitions {
+    use super::*;
+
+    /// A 20×10 white solid at (10, 5) in a transparent 40×20 composition,
+    /// with transition `id`.
+    fn doc(id: &str, params: &[(&str, Value)]) -> Document {
+        let mut doc = Document::with_comp(
+            "Transition",
+            CompSettings {
+                width: 40,
+                height: 20,
+                background: LinearRgba::new(0.0, 0.0, 0.0, 0.0),
+                ..CompSettings::default()
+            },
+        );
+        let comp = doc.main_comp.unwrap();
+        AddSolidLayer {
+            comp,
+            name: None,
+            color: LinearRgba::WHITE,
+            index: 0,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let l = doc.main().unwrap().layers[0].clone();
+        if let voxy_core::LayerKind::Solid { size, .. } = &l.kind {
+            set(&mut doc, size.id, Value::Vec2(DVec2::new(20.0, 10.0)));
+        }
+        set(&mut doc, l.transform.anchor.id, Value::Vec2(DVec2::ZERO));
+        set(
+            &mut doc,
+            l.transform.position.id,
+            Value::Vec2(DVec2::new(10.0, 5.0)),
+        );
+        let fx = add_effect(&mut doc, l.id, id);
+        for (n, v) in params {
+            set_param(&mut doc, l.id, fx, n, v.clone());
+        }
+        doc
+    }
+
+    fn alpha_row(doc: &Document, t: Time) -> Vec<u8> {
+        let gpu = gpu().unwrap();
+        let img = render(&gpu, &mut Compositor::new(&gpu.device), doc, t, 1.0);
+        (0..img.width)
+            .map(|x| img.pixels[((10 * img.width + x) * 4 + 3) as usize])
+            .collect()
+    }
+
+    fn manual(t: f64) -> Vec<(&'static str, Value)> {
+        vec![("auto", Value::Bool(false)), ("progress", Value::Scalar(t))]
+    }
+
+    #[test]
+    fn transitions_move_from_the_layer_to_nothing() {
+        if gpu().is_none() {
+            return;
+        }
+        // Crossfade at a quarter: three quarters left.
+        let a = alpha_row(&doc(ids::CROSSFADE, &manual(0.25)), Time::ZERO);
+        assert!((190..=192).contains(&a[15]), "{}", a[15]);
+
+        // Wipe halfway, no feather: the left half of the layer is gone.
+        let mut p = manual(0.5);
+        p.push(("feather", Value::Scalar(0.0)));
+        let a = alpha_row(&doc(ids::WIPE, &p), Time::ZERO);
+        assert_eq!((a[12], a[18], a[21], a[28]), (0, 0, 255, 255), "{a:?}");
+
+        // Slide halfway to the right: the layer's right half shows its
+        // left half; nothing leaves the frame.
+        let a = alpha_row(&doc(ids::SLIDE, &manual(0.5)), Time::ZERO);
+        assert_eq!((a[15], a[21], a[29], a[31]), (0, 255, 255, 0), "{a:?}");
+
+        // Zoom at the start changes nothing; halfway it is half faded.
+        let a = alpha_row(&doc(ids::ZOOM, &manual(0.5)), Time::ZERO);
+        assert!((127..=129).contains(&a[20]), "{}", a[20]);
+        assert_eq!(a[5], 0);
+    }
+
+    /// With Auto on, a transition runs over the layer's own duration.
+    #[test]
+    fn auto_follows_the_layer_duration() {
+        if gpu().is_none() {
+            return;
+        }
+        let d = doc(ids::CROSSFADE, &[]);
+        let layer = &d.main().unwrap().layers[0];
+        let (start, end) = (layer.in_point, layer.out_point);
+        let mid = Time::from_flicks(i64::midpoint(start.flicks(), end.flicks()));
+        assert_eq!(alpha_row(&d, start)[20], 255, "start: all there");
+        let half = alpha_row(&d, mid)[20];
+        assert!((126..=129).contains(&half), "middle: {half}");
+        // The plan's key moves with time only while Auto is on.
+        let key = |d: &Document, t: Time| {
+            let eval = voxy_core::evaluate(d, d.main_comp.unwrap(), t).unwrap();
+            voxy_render::RenderPlan::build(&eval, &RenderSettings::default()).content_key()
+        };
+        assert_ne!(key(&d, start), key(&d, mid));
+        let still = doc(ids::CROSSFADE, &manual(0.3));
+        assert_eq!(key(&still, start), key(&still, mid));
+    }
+
+    #[test]
+    fn transition_goldens() {
+        let Some(gpu) = gpu() else { return };
+        let mut c = Compositor::new(&gpu.device);
+        for (name, id, extra) in [
+            (
+                "effect_wipe",
+                ids::WIPE,
+                vec![("angle", Value::Scalar(30.0))],
+            ),
+            (
+                "effect_slide",
+                ids::SLIDE,
+                vec![("direction", Value::Scalar(-90.0))],
+            ),
+            ("effect_zoom_transition", ids::ZOOM, vec![]),
+        ] {
+            let (mut doc, layers) = scene(WorkingSpace::SrgbCompat);
+            for l in &layers {
+                let fx = add_effect(&mut doc, *l, id);
+                for (n, v) in manual(0.4).into_iter().chain(extra.clone()) {
+                    set_param(&mut doc, *l, fx, n, v);
                 }
             }
             compare(name, &render(&gpu, &mut c, &doc, Time::ZERO, 1.0));
