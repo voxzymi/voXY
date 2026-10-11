@@ -360,11 +360,12 @@ mod color {
         img.pixels[i..i + 4].try_into().unwrap()
     }
 
-    const COLOR: [&str; 4] = [
+    const COLOR: [&str; 5] = [
         ids::BRIGHTNESS_CONTRAST,
         ids::EXPOSURE,
         ids::TINT,
         ids::HUE_SATURATION,
+        ids::LEVELS,
     ];
 
     #[test]
@@ -396,7 +397,7 @@ mod color {
     fn color_goldens() {
         let Some(gpu) = gpu() else { return };
         let mut c = Compositor::new(&gpu.device);
-        let cases: [Case<'_>; 5] = [
+        let cases: [Case<'_>; 8] = [
             (
                 "effect_brightness_contrast",
                 ids::BRIGHTNESS_CONTRAST,
@@ -445,6 +446,31 @@ mod color {
                     ("colorize_hue", Value::Scalar(200.0)),
                     ("colorize_saturation", Value::Scalar(0.6)),
                 ],
+            ),
+            (
+                "effect_levels",
+                ids::LEVELS,
+                vec![
+                    ("input_black", Value::Scalar(0.1)),
+                    ("input_white", Value::Scalar(0.8)),
+                    ("gamma", Value::Scalar(1.6)),
+                    ("output_black", Value::Scalar(0.05)),
+                ],
+            ),
+            // One channel only, with the points crossed (an inverting ramp).
+            (
+                "effect_levels_red_inverted",
+                ids::LEVELS,
+                vec![
+                    ("channel", Value::Enum(1)),
+                    ("input_black", Value::Scalar(0.9)),
+                    ("input_white", Value::Scalar(0.1)),
+                ],
+            ),
+            (
+                "effect_posterize",
+                ids::POSTERIZE,
+                vec![("levels", Value::Int(3))],
             ),
         ];
         for (name, id, params) in cases {

@@ -275,7 +275,10 @@ at `743b053` (merge of #3).
         (`Document::content_size`).
       - Two goldens; `docs/effects.md` has the formulas. 613 workspace
         tests pass, clippy clean.
-   2. Levels and Posterize.
+   2. **Done:** Levels (per channel or RGB, crossed points invert, no
+      clipping above white) and Posterize. Three goldens, a CPU test of
+      their parameter edge cases, and Levels joins the
+      defaults-pass-through test.
    3. Curves, with a curve editor in Effect Controls (`Value::Curve`).
    4. Color Balance.
    5. Gradient Map (three colour stops).

@@ -26,6 +26,8 @@ pub mod ids {
     pub const INVERT: &str = "voxy.color.invert";
     pub const TINT: &str = "voxy.color.tint";
     pub const HUE_SATURATION: &str = "voxy.color.hue_saturation";
+    pub const LEVELS: &str = "voxy.color.levels";
+    pub const POSTERIZE: &str = "voxy.color.posterize";
 }
 
 /// Every built-in definition, in no particular order.
@@ -41,6 +43,8 @@ pub fn builtin_definitions() -> Vec<EffectDef> {
         invert(),
         tint(),
         hue_saturation(),
+        levels(),
+        posterize(),
     ]
 }
 
@@ -308,6 +312,68 @@ fn hue_saturation() -> EffectDef {
                 Unit::Normalized,
             )
             .range(0.0, 1.0);
+        },
+    )
+}
+
+fn levels() -> EffectDef {
+    def(
+        ids::LEVELS,
+        "Levels",
+        Category::Color,
+        "Sets the black and white points, then bends the midtones.",
+        |p| {
+            p.add("channel", "Channel", Value::Enum(0), Unit::None)
+                .choices(&["RGB", "Red", "Green", "Blue", "Alpha"]);
+            p.add(
+                "input_black",
+                "Input Black",
+                Value::Scalar(0.0),
+                Unit::Normalized,
+            )
+            .range(0.0, 1.0)
+            .hint("Tones at or below this become the output black.");
+            p.add(
+                "input_white",
+                "Input White",
+                Value::Scalar(1.0),
+                Unit::Normalized,
+            )
+            .range(0.0, 1.0)
+            .hint("Tones at this become the output white; brighter ones keep going.");
+            p.add("gamma", "Gamma", Value::Scalar(1.0), Unit::Factor)
+                .range(0.1, 10.0)
+                .soft(0.2, 5.0)
+                .hint("Above 1 brightens the midtones, below 1 darkens them.");
+            p.add(
+                "output_black",
+                "Output Black",
+                Value::Scalar(0.0),
+                Unit::Normalized,
+            )
+            .range(0.0, 1.0);
+            p.add(
+                "output_white",
+                "Output White",
+                Value::Scalar(1.0),
+                Unit::Normalized,
+            )
+            .range(0.0, 1.0);
+        },
+    )
+}
+
+fn posterize() -> EffectDef {
+    def(
+        ids::POSTERIZE,
+        "Posterize",
+        Category::Color,
+        "Reduces each colour channel to a few flat steps.",
+        |p| {
+            p.add("levels", "Levels", Value::Int(6), Unit::None)
+                .range(2.0, 256.0)
+                .soft(2.0, 32.0)
+                .hint("Steps per channel, black and white included.");
         },
     )
 }

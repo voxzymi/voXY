@@ -213,6 +213,38 @@ at the layer origin.
 - **Defaults** run no pass.
 - **Regions:** same.
 
+### Levels (`voxy.color.levels`, v1)
+
+| Parameter | Type | Range | Default |
+|---|---|---|---|
+| Channel (`channel`) | enum: RGB, Red, Green, Blue, Alpha | — | RGB |
+| Input Black (`input_black`) | scalar, normalized | 0–1 | 0 |
+| Input White (`input_white`) | scalar, normalized | 0–1 | 1 |
+| Gamma (`gamma`) | scalar, factor | 0.1–10 (slider 0.2–5) | 1 |
+| Output Black (`output_black`) | scalar, normalized | 0–1 | 0 |
+| Output White (`output_white`) | scalar, normalized | 0–1 | 1 |
+
+- **Space:** working, on straight colour.
+- **Formula:** for each selected channel `v`,
+  `x = max((v − ib) / (iw − ib), 0)` and
+  `v' = ob + (ow − ob)·x^(1/γ)`. Values above the input white keep going
+  (no clipping), so HDR values survive. Crossed points (`iw < ib`) invert
+  the channel. When `|iw − ib| < 10⁻⁴` the span is taken as `10⁻⁴`, a hard
+  step at that point. The Alpha choice changes alpha only (clamped to
+  `[0, 1]`) and keeps the straight colour.
+- **Regions:** per pixel. The defaults change nothing.
+
+### Posterize (`voxy.color.posterize`, v1)
+
+| Parameter | Type | Range | Default |
+|---|---|---|---|
+| Levels (`levels`) | integer | 2–256 (slider 2–32) | 6 |
+
+- **Space:** working, on straight colour; alpha is kept.
+- **Formula:** with `n` levels, each channel clamped to `[0, 1]` becomes
+  `floor(v·(n − 1) + 0.5) / (n − 1)`.
+- **Regions:** per pixel.
+
 ## Blend modes
 
 A layer's blend mode decides how it combines with everything below it in

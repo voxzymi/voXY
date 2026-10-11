@@ -251,11 +251,13 @@ pub enum Kernel {
     Exposure,
     Tint,
     HueSaturation,
+    Levels,
+    Posterize,
 }
 
 impl Kernel {
     /// Every kernel.
-    pub const ALL: [Kernel; 10] = [
+    pub const ALL: [Kernel; 12] = [
         Kernel::Invert,
         Kernel::GaussianBlur,
         Kernel::BoxBlur,
@@ -266,6 +268,8 @@ impl Kernel {
         Kernel::Exposure,
         Kernel::Tint,
         Kernel::HueSaturation,
+        Kernel::Levels,
+        Kernel::Posterize,
     ];
 
     /// The kernel running `type_id` at `version`, if this build has one.
@@ -294,6 +298,8 @@ impl Kernel {
             Kernel::Exposure => ids::EXPOSURE,
             Kernel::Tint => ids::TINT,
             Kernel::HueSaturation => ids::HUE_SATURATION,
+            Kernel::Levels => ids::LEVELS,
+            Kernel::Posterize => ids::POSTERIZE,
         }
     }
 
@@ -362,6 +368,34 @@ impl Kernel {
                     0.0,
                 ];
                 k.i[0] = u32::from(colorize);
+                vec![k]
+            }
+            Kernel::Levels => {
+                let ib = scalar(fx, "input_black", 0.0).clamp(0.0, 1.0);
+                let iw = scalar(fx, "input_white", 1.0).clamp(0.0, 1.0);
+                let gamma = scalar(fx, "gamma", 1.0).clamp(0.1, 10.0);
+                let ob = scalar(fx, "output_black", 0.0).clamp(0.0, 1.0);
+                let ow = scalar(fx, "output_white", 1.0).clamp(0.0, 1.0);
+                if ib == 0.0 && iw == 1.0 && gamma == 1.0 && ob == 0.0 && ow == 1.0 {
+                    return Vec::new();
+                }
+                // Equal points make a hard step at that point.
+                let span = if (iw - ib).abs() < 1e-4 {
+                    1e-4
+                } else {
+                    iw - ib
+                };
+                k.p[0] = [ib as f32, (1.0 / span) as f32, (1.0 / gamma) as f32, 0.0];
+                k.p[1] = [ob as f32, ow as f32, 0.0, 0.0];
+                k.i[0] = choice(fx, "channel").min(4);
+                vec![k]
+            }
+            Kernel::Posterize => {
+                let levels = match fx.param("levels") {
+                    Some(Value::Int(n)) => (*n).clamp(2, 256) as u32,
+                    _ => 6,
+                };
+                k.i[0] = levels;
                 vec![k]
             }
             Kernel::Invert => {
@@ -451,6 +485,8 @@ impl Kernel {
             | Kernel::Exposure
             | Kernel::Tint
             | Kernel::HueSaturation
+            | Kernel::Levels
+            | Kernel::Posterize
             // Position-dependent: `rod` and `roi` handle them.
             | Kernel::RadialBlur
             | Kernel::ZoomBlur => DVec2::ZERO,

@@ -321,6 +321,35 @@ mod blur_rules {
         }
     }
 
+    #[test]
+    fn levels_and_posterize_parameters() {
+        use voxy_core::registry::ids;
+        let ctx = PassContext::new(1.0, voxy_core::WorkingSpace::Linear);
+        let levels = |ib: f64, iw: f64| {
+            Kernel::Levels.passes(
+                &fx(
+                    ids::LEVELS,
+                    &[
+                        ("input_black", Value::Scalar(ib)),
+                        ("input_white", Value::Scalar(iw)),
+                    ],
+                ),
+                &ctx,
+            )
+        };
+        // The defaults are the identity: no pass at all.
+        assert_eq!(levels(0.0, 1.0).len(), 0);
+        assert_eq!(levels(0.2, 0.7)[0].p[0][1], 2.0);
+        // Crossed points invert; equal points make a hard step.
+        assert_eq!(levels(0.75, 0.25)[0].p[0][1], -2.0);
+        assert_eq!(levels(0.5, 0.5)[0].p[0][1], 10000.0);
+        for (n, want) in [(1, 2), (6, 6), (9999, 256)] {
+            let p =
+                Kernel::Posterize.passes(&fx(ids::POSTERIZE, &[("levels", Value::Int(n))]), &ctx);
+            assert_eq!(p[0].i[0], want);
+        }
+    }
+
     /// The centre reaches the shader in buffer texels.
     #[test]
     fn sweep_centres_are_in_buffer_texels() {
