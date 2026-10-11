@@ -391,7 +391,9 @@ at `743b053` (merge of #3).
       answered. Numeric GPU tests, Auto over the layer's duration, the key
       rule, three goldens.
 
-   645 workspace tests pass, clippy clean.
+   645 workspace tests pass, clippy clean. CI green on all four platforms
+   for groups 4 to 6 (run 38139556171, `7f795b4`, after one re-run of
+   macOS x64; see "Verified only on Linux" for the flake).
 
    **E-D is complete except Displacement Map and the B layer of the
    transitions, both waiting on Q-E1.** `docs/effects.md` covers every
@@ -453,6 +455,15 @@ at `743b053` (merge of #3).
 - CI uses the current stable Rust (1.99 since 2026-09-28), and so does
   local work now. Clippy 1.99 added `assert_is_empty`, and the new tests
   follow it.
+
+## Known flaky tests (outside the effects scope)
+
+- `voxy-media` `audio_decode::clip_on_the_timeline_plays_through_the_engine`
+  failed once on macOS x64 (run 38139556171, a sample came back as
+  silence) and passed on re-run. It drives the audio engine with 2 ms
+  sleeps while a decoder thread fills the buffer, so a slow runner can
+  underrun. Not touched by this work; worth making the test wait for the
+  decoder instead of sleeping, as a separate change.
 
 ## Verified only on Linux
 
