@@ -79,6 +79,11 @@ pub fn c_string(s: &str) -> CString {
     CString::new(&s[..end]).unwrap_or_default()
 }
 
+/// An OpenFX name constant (`b"...\0"`) as text.
+pub fn ofx_str(name: &[u8]) -> &str {
+    std::str::from_utf8(name.strip_suffix(b"\0").unwrap_or(name)).unwrap_or_default()
+}
+
 /// Why a property call failed, as the suite reports it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PropError {
@@ -199,6 +204,32 @@ impl PropSet {
         if let Some(p) = self.lock().props.get_mut(c_string(name).as_c_str()) {
             p.plugin_writable = writable;
         }
+    }
+
+    /// Defines a fixed-dimension property the plugin may set, by its
+    /// OpenFX constant.
+    pub fn rw(&self, name: &[u8], default: Values) {
+        self.define(ofx_str(name), default, Dim::Fixed(0), true);
+    }
+
+    /// Defines a fixed-dimension property only the host sets.
+    pub fn ro(&self, name: &[u8], default: Values) {
+        self.define(ofx_str(name), default, Dim::Fixed(0), false);
+    }
+
+    /// Defines a variable-dimension property the plugin may set.
+    pub fn var(&self, name: &[u8], default: Values) {
+        self.define(ofx_str(name), default, Dim::Variable, true);
+    }
+
+    /// Defines a variable-dimension property only the host sets.
+    pub fn var_ro(&self, name: &[u8], default: Values) {
+        self.define(ofx_str(name), default, Dim::Variable, false);
+    }
+
+    /// Strings from OpenFX constants.
+    pub fn consts(names: &[&[u8]]) -> Values {
+        Values::String(names.iter().map(|n| c_string(ofx_str(n))).collect())
     }
 
     pub fn contains(&self, name: &str) -> bool {

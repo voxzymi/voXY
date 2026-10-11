@@ -547,7 +547,7 @@ const INSTANCE_WRITABLE: &[&[u8]] = &[
 ];
 
 fn key(name: &[u8]) -> &str {
-    std::str::from_utf8(name.strip_suffix(b"\0").unwrap_or(name)).unwrap_or_default()
+    crate::props::ofx_str(name)
 }
 
 /// The descriptor properties of a parameter of type `kind` named `name`,

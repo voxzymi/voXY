@@ -10,6 +10,8 @@
 
 #![allow(unsafe_code)]
 
+mod buffer;
+mod image_effect;
 mod memory;
 mod message;
 mod param;
@@ -19,6 +21,8 @@ mod property;
 mod thread;
 mod timeline;
 
+pub use buffer::PixelBuffer;
+pub use image_effect::{effect_handle, live_images, release_effect_handle};
 pub use memory::live_blocks;
 pub use message::take_unattached_messages;
 pub use param::{
@@ -97,18 +101,6 @@ pub fn release_prop_handle(set: &Arc<PropSet>) {
     PROP_SETS.unregister(set);
 }
 
-/// The `OfxImageEffectHandle` the plugin sees for `fx`, registering it if
-/// needed. The message, progress and time line suites take it (as a
-/// `void *`).
-pub fn effect_handle(fx: &Arc<Effect>) -> ofx::OfxImageEffectHandle {
-    EFFECTS.register(fx) as ofx::OfxImageEffectHandle
-}
-
-/// Withdraws `fx`'s handle.
-pub fn release_effect_handle(fx: &Arc<Effect>) {
-    EFFECTS.unregister(fx);
-}
-
 /// Runs a suite body, turning a panic into `kOfxStatErrUnknown`.
 pub(crate) fn guard(f: impl FnOnce() -> ofx::OfxStatus) -> ofx::OfxStatus {
     catch_unwind(AssertUnwindSafe(f)).unwrap_or(ofx::kOfxStatErrUnknown)
@@ -133,6 +125,7 @@ fn suite(name: &CStr, version: c_int) -> *const c_void {
         (n, 1 | 2) if n == ofx::kOfxMessageSuite => (&raw const message::SUITE).cast(),
         (n, 1) if n == ofx::kOfxProgressSuite => (&raw const progress::SUITE_V1).cast(),
         (n, 2) if n == ofx::kOfxProgressSuite => (&raw const progress::SUITE_V2).cast(),
+        (n, 1) if n == ofx::kOfxImageEffectSuite => (&raw const image_effect::SUITE).cast(),
         (n, 1) if n == ofx::kOfxParameterSuite => (&raw const param::SUITE).cast(),
         (n, 1) if n == ofx::kOfxTimeLineSuite => (&raw const timeline::SUITE).cast(),
         (n, 1) if n == ofx::kOfxMultiThreadSuite => (&raw const thread::SUITE).cast(),

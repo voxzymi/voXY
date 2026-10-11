@@ -441,7 +441,11 @@ at `743b053` (merge of #3).
          groups, over a `ParamValues` store (`LocalValues` in the
          harness). Parametric parameters are refused as unsupported for
          now. Choices in `docs/ofx-host.md`.
-      4. Image effect suite (descriptors, clips, instances, images).
+      4. **Done:** image effect suite: the host property set
+         (`host::host_props`), effect descriptors (general and per
+         context) and instances (`effect::Effect`), clips, images
+         (bottom-up, aligned, with deterministic 8/16-bit conversion),
+         an `ImageSource` trait for clip images, and image memory.
       5. The harness: a Rust test plugin driven through Load, Describe,
          DescribeInContext, CreateInstance and Render.
    5. **Done (ahead of 4):** `cargo xtask credits [--check]` generates the

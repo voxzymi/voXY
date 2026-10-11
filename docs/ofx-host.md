@@ -62,6 +62,23 @@ Checked against OpenFX 1.5.1, "Packaging OFX Plug-ins".
 - Discovery never loads a binary. Loading and Describe happen only in the
   sandbox (design §6.3).
 
+## Host properties (O-A, `voxy_ofx_host::host`)
+
+- API version 1.5, name `org.voxy.voXY`, label `voXY`, version from the
+  crate.
+- Contexts: filter and generator so far; transition and general arrive in
+  O-C. Pixel depths: float, short, byte (float preferred). Components:
+  RGBA, RGB, Alpha.
+- Multi-resolution, tiles and temporal clip access: yes. Overlays: no
+  (interacts arrive in O-D). Multiple clip depths or pixel aspects,
+  settable frame rate or fielding: no. Draft quality: yes.
+- Native origin: bottom-left, as OpenFX images are.
+- No GPU render (`OfxImageEffectPropOpenGLRenderSupported` is `"false"`,
+  D5) and no colour management (`OfxImageEffectColourManagementNone`).
+- Parameters: string, choice, string-choice and boolean animation yes
+  (they hold between keys); custom animation and custom interacts no; no
+  page limit beyond a flat list.
+
 ## Suites (O-A, `voxy_ofx_host::suites`)
 
 - `fetchSuite` returns null for any suite or version not implemented,
@@ -128,6 +145,15 @@ Checked against OpenFX 1.5.1, "Packaging OFX Plug-ins".
   - Group, page and push-button parameters have no value
     (`kOfxStatErrUnsupported`). **Parametric parameters are not supported
     yet**: `paramDefine` gives `kOfxStatErrUnsupported`.
+- **Image effect suite (V1).** `clipDefine` works on descriptors only,
+  and defining a name again returns the existing clip. `clipGetHandle`
+  and `clipGetImage` work on instances only. Instance clip properties are
+  read-only. `clipGetImage` returns the whole image the host has for that
+  time (the region is a hint); no image, or an unconnected clip, gives
+  `kOfxStatFailed`. Images are bottom-up, 64-byte aligned, with
+  `kOfxImagePropData` at the bottom-left pixel. Float to 8 or 16 bits
+  rounds half to even. Image memory may be allocated with a null
+  instance; lock and unlock nest.
 - **Memory suite (V1).** Blocks are 64-byte aligned. Freeing a pointer the
   suite did not hand out, or freeing twice, gives `kOfxStatErrBadHandle`.
 
