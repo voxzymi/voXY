@@ -56,14 +56,14 @@ pub(super) struct ChainEntry {
     pub(super) rod: Rect,
     used: u64,
     complete: bool,
-    /// Which of the two textures holds the result.
+    /// Which texture holds the result.
     result: usize,
-    views: [wgpu::TextureView; 2],
-    /// For sampling the result in the composite pass (image layout).
-    pub(super) draw_groups: [wgpu::BindGroup; 2],
-    /// For reading a texture in an effect pass (effect input layout).
-    input_groups: [wgpu::BindGroup; 2],
-    _textures: [wgpu::Texture; 2],
+    /// Two textures, or three for chains with a kernel that keeps its
+    /// input while its passes run (`Kernel::keeps_input`).
+    views: Vec<wgpu::TextureView>,
+    /// For sampling each texture in the composite pass (image layout).
+    pub(super) draw_groups: Vec<wgpu::BindGroup>,
+    textures: Vec<wgpu::Texture>,
 }
 
 impl ChainEntry {
@@ -72,7 +72,12 @@ impl ChainEntry {
     }
 }
 
-pub(super) fn kernel_shader(kernel: Kernel) -> &'static str {
+/// The shaders of `kernel`'s stages ([`crate::kernels::KernelParams::stage`]).
+pub(super) fn kernel_shaders(kernel: Kernel) -> Vec<&'static str> {
+    vec![kernel_shader(kernel)]
+}
+
+fn kernel_shader(kernel: Kernel) -> &'static str {
     match kernel {
         Kernel::Invert => include_str!("../shaders/effects/invert.wgsl"),
         Kernel::GaussianBlur | Kernel::BoxBlur => {
@@ -330,6 +335,7 @@ impl Compositor {
                 continue;
             }
             let ctx = PassContext { seed: *seed, ..ctx };
+            let mut first = true;
             for mut k in kernel.passes(fx, &ctx) {
                 if let Some(e) = lut.and_then(|a| self.luts.get(&a)) {
                     k.p[1] = [e.domain_min[0], e.domain_min[1], e.domain_min[2], 0.0];
@@ -358,23 +364,40 @@ impl Compositor {
                 let at = bytes.len();
                 bytes.extend_from_slice(bytemuck::bytes_of(&u));
                 bytes.resize(at + stride as usize, 0);
-                passes.push((*kernel, lut));
+                passes.push((*kernel, lut, k.stage, first));
+                first = false;
             }
         }
+        if passes.iter().any(|(k, ..)| k.keeps_input()) {
+            self.grow_chain_target(device, &mut entry, 3);
+        }
         let mut cur = 0;
+        // The texture holding the current kernel's input, while it runs.
+        let mut kept: Option<usize> = None;
         if !bytes.is_empty() {
             self.ensure_effect_uniforms(device, bytes.len() as u64);
-            let (buffer, group, _) = self.effect_uniforms.as_ref().expect("ensured");
-            queue.write_buffer(buffer, 0, &bytes);
-            for (i, (kernel, lut)) in passes.iter().enumerate() {
-                let Some(pipeline) = self.effect_pipelines.get(kernel) else {
+            queue.write_buffer(
+                &self.effect_uniforms.as_ref().expect("ensured").0,
+                0,
+                &bytes,
+            );
+            for (i, (kernel, lut, stage, first)) in passes.iter().enumerate() {
+                if *first {
+                    kept = kernel.keeps_input().then_some(cur);
+                }
+                let Some(pipeline) = self.effect_pipelines.get(&(*kernel, *stage)) else {
                     continue;
                 };
                 let lut_group = lut.and_then(|a| self.luts.get(&a)).map(|e| &e.bind_group);
                 if kernel.uses_lut() && lut_group.is_none() {
                     continue;
                 }
-                let next = 1 - cur;
+                let next = (0..entry.views.len())
+                    .find(|&t| t != cur && Some(t) != kept)
+                    .expect("a free texture");
+                let input =
+                    self.effect_input(device, &entry.views[cur], &entry.views[kept.unwrap_or(cur)]);
+                let (_, group, _) = self.effect_uniforms.as_ref().expect("ensured");
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("voxy-effect"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -390,11 +413,12 @@ impl Compositor {
                 });
                 pass.set_pipeline(pipeline);
                 pass.set_bind_group(0, group, &[(i as u64 * stride) as u32]);
-                pass.set_bind_group(1, &entry.input_groups[cur], &[]);
+                pass.set_bind_group(1, &input, &[]);
                 if let Some(g) = lut_group {
                     pass.set_bind_group(2, g, &[]);
                 }
                 pass.draw(0..3, 0..1);
+                drop(pass);
                 cur = next;
                 self.chain_stats.passes += 1;
             }
@@ -465,12 +489,30 @@ impl Compositor {
         {
             return e;
         }
-        let make = || {
-            device.create_texture(&wgpu::TextureDescriptor {
+        let mut entry = ChainEntry {
+            chain: None,
+            deps: Vec::new(),
+            size,
+            rod: Rect::of_size(DVec2::ONE),
+            used: 0,
+            complete: false,
+            result: 0,
+            views: Vec::new(),
+            draw_groups: Vec::new(),
+            textures: Vec::new(),
+        };
+        self.grow_chain_target(device, &mut entry, 2);
+        entry
+    }
+
+    /// Gives `entry` at least `count` textures of its size.
+    fn grow_chain_target(&self, device: &wgpu::Device, entry: &mut ChainEntry, count: usize) {
+        while entry.textures.len() < count {
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("voxy-chain"),
                 size: wgpu::Extent3d {
-                    width: size.0,
-                    height: size.1,
+                    width: entry.size.0,
+                    height: entry.size.1,
                     depth_or_array_layers: 1,
                 },
                 mip_level_count: 1,
@@ -480,47 +522,40 @@ impl Compositor {
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                     | wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
-            })
-        };
-        let textures = [make(), make()];
-        let views = [
-            textures[0].create_view(&wgpu::TextureViewDescriptor::default()),
-            textures[1].create_view(&wgpu::TextureViewDescriptor::default()),
-        ];
-        let draw_groups = [
-            self.image_bind_group(device, &views[0]),
-            self.image_bind_group(device, &views[1]),
-        ];
-        let input = |view: &wgpu::TextureView| {
-            device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("voxy-effect-input"),
-                layout: &self.effect_input_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::Sampler(&self.sampler),
-                    },
-                ],
-            })
-        };
-        let input_groups = [input(&views[0]), input(&views[1])];
-        ChainEntry {
-            chain: None,
-            deps: Vec::new(),
-            size,
-            rod: Rect::of_size(DVec2::ONE),
-            used: 0,
-            complete: false,
-            result: 0,
-            views,
-            draw_groups,
-            input_groups,
-            _textures: textures,
+            });
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            entry.draw_groups.push(self.image_bind_group(device, &view));
+            entry.views.push(view);
+            entry.textures.push(texture);
         }
+    }
+
+    /// The effect-pass input: `src` (binding 0) and the kernel's own input
+    /// `orig` (binding 2).
+    fn effect_input(
+        &self,
+        device: &wgpu::Device,
+        src: &wgpu::TextureView,
+        orig: &wgpu::TextureView,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("voxy-effect-input"),
+            layout: &self.effect_chain_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(src),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(orig),
+                },
+            ],
+        })
     }
 
     fn ensure_effect_uniforms(&mut self, device: &wgpu::Device, len: u64) {
@@ -556,8 +591,10 @@ impl Compositor {
     /// Drops the least recently drawn chains (never one drawn this frame)
     /// until the cache fits its budget.
     pub(super) fn trim_chains(&mut self) {
-        // Two RGBA16F textures per entry.
-        let bytes = |e: &ChainEntry| u64::from(e.size.0) * u64::from(e.size.1) * 16;
+        // Two or three RGBA16F textures per entry.
+        let bytes = |e: &ChainEntry| {
+            u64::from(e.size.0) * u64::from(e.size.1) * 8 * e.textures.len() as u64
+        };
         let mut total: u64 = self.chains.values().map(bytes).sum();
         while total > CHAIN_BUDGET_BYTES {
             let oldest = self

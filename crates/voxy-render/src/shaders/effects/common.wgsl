@@ -22,6 +22,9 @@ struct EffectUniform {
 @group(0) @binding(0) var<uniform> fx: EffectUniform;
 @group(1) @binding(0) var src: texture_2d<f32>;
 @group(1) @binding(1) var src_sampler: sampler;
+// The kernel's own input, for kernels that combine their result with it
+// (the same texture as `src` for the others).
+@group(1) @binding(2) var orig: texture_2d<f32>;
 
 @vertex
 fn vs_main(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
@@ -99,4 +102,13 @@ fn sample_clear(at: vec2<f32>) -> vec4<f32> {
 fn sweep_count(len: f32) -> u32 {
     let n = min(u32(ceil(max(len, 0.0))) + 1u, fx.i0.y);
     return n | 1u;
+}
+
+// The kernel's own input at integer coordinates; transparent outside.
+fn load_orig(p: vec2<i32>) -> vec4<f32> {
+    let size = vec2<i32>(textureDimensions(orig));
+    if p.x < 0 || p.y < 0 || p.x >= size.x || p.y >= size.y {
+        return vec4<f32>(0.0);
+    }
+    return textureLoad(orig, p, 0);
 }

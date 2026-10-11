@@ -250,7 +250,9 @@ pub struct Compositor {
     /// Rendered effect chains by chain content key.
     chains: HashMap<u64, chain::ChainEntry>,
     chain_stats: ChainStats,
-    effect_pipelines: HashMap<Kernel, wgpu::RenderPipeline>,
+    /// One pipeline per kernel stage (most kernels have one stage).
+    effect_pipelines: HashMap<(Kernel, u8), wgpu::RenderPipeline>,
+    effect_chain_layout: wgpu::BindGroupLayout,
     effect_uniform_layout: wgpu::BindGroupLayout,
     effect_input_layout: wgpu::BindGroupLayout,
     /// LUT assets for the LUT effect, and their bind group layout.
@@ -508,21 +510,40 @@ impl Compositor {
             WORKING_FORMAT,
             None,
         );
+        // Effect passes read the previous image (binding 0, with a sampler)
+        // and the kernel's own input (binding 2, for kernels that combine
+        // their result with it).
+        let effect_chain_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("voxy-effect-chain"),
+                entries: &[
+                    texture_entry(0),
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    texture_entry(2),
+                ],
+            });
         let lut_layout = lut::lut_layout(device);
         let layouts = [
             Some(&effect_uniform_layout),
-            Some(&effect_input_layout),
+            Some(&effect_chain_layout),
             Some(&lut_layout),
         ];
         let effect_pipelines = Kernel::ALL
             .iter()
-            .map(|&k| {
-                let body = format!(
-                    "{}\n{}",
-                    include_str!("shaders/effects/common.wgsl"),
-                    chain::kernel_shader(k)
-                );
-                let label = format!("voxy-effect-{}", k.type_id());
+            .flat_map(|&k| {
+                chain::kernel_shaders(k)
+                    .into_iter()
+                    .enumerate()
+                    .map(move |(stage, body)| (k, stage as u8, body))
+            })
+            .map(|(k, stage, body)| {
+                let body = format!("{}\n{}", include_str!("shaders/effects/common.wgsl"), body);
+                let label = format!("voxy-effect-{}-{stage}", k.type_id());
                 let module = shader(device, &label, &body, true);
                 let p = pipeline(
                     device,
@@ -536,7 +557,7 @@ impl Compositor {
                     WORKING_FORMAT,
                     None,
                 );
-                (k, p)
+                ((k, stage), p)
             })
             .collect();
 
@@ -576,6 +597,7 @@ impl Compositor {
             effect_input_layout,
             luts: HashMap::new(),
             lut_layout,
+            effect_chain_layout,
             effect_uniforms: None,
             effect_stride,
             blend_pipeline,

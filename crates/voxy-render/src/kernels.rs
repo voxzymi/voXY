@@ -32,6 +32,9 @@ pub struct KernelParams {
     /// Convolution weights, centre first, or other tables (Curves); at
     /// most `MAX_TAPS + 1`.
     pub w: Vec<f32>,
+    /// Which of the kernel's shaders runs this pass (0 for one-shader
+    /// kernels).
+    pub stage: u8,
 }
 
 fn scalar(fx: &EvaluatedEffect, name: &str, default: f64) -> f64 {
@@ -372,6 +375,12 @@ impl Kernel {
     /// static effects render once.
     pub fn uses_frame(self, fx: &EvaluatedEffect) -> bool {
         self == Kernel::Grain && flag(fx, "animate")
+    }
+
+    /// Whether the kernel combines its result with its own input, so the
+    /// input is kept (bound as `orig`) while its passes run.
+    pub fn keeps_input(self) -> bool {
+        false
     }
 
     /// Whether the kernel reads a LUT asset (bind group 2).
