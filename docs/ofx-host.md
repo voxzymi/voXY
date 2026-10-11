@@ -157,8 +157,37 @@ Checked against OpenFX 1.5.1, "Packaging OFX Plug-ins".
 - **Memory suite (V1).** Blocks are 64-byte aligned. Freeing a pointer the
   suite did not hand out, or freeing twice, gives `kOfxStatErrBadHandle`.
 
+## Actions (O-A, `voxy_ofx_host::suites::driver`)
+
+The driver runs a plugin's actions. In O-A it runs only in the in-process
+test harness; from O-B it runs inside the sandbox. The editor never calls
+it.
+
+- **Load:** the plugin must report `OfxImageEffectPluginAPI` version 1
+  and have both entry points; then `setHost` and Load.
+- **Describe**, then **DescribeInContext** for each context both the
+  plugin and voXY support (others are skipped silently). A context
+  descriptor starts from the Describe properties.
+- **GetClipPreferences:** the host offers, per clip, the best depth both
+  sides support (float first), RGBA or the clip's first supported layout,
+  the project pixel aspect, premultiplied output, no fielding. The answers
+  update the instance's clips.
+- **GetRegionOfDefinition:** when the plugin replies default, filters
+  get the source's region and generators the project's.
+- **GetRegionsOfInterest:** the default for every input is the requested
+  region.
+- **IsIdentity:** a reply naming a clip means "use that clip at that
+  time".
+- **Render:** with field none, sequential and interactive status 0, full
+  quality. Afterwards the output is made premultiplied (D2):
+  unpremultiplied results are premultiplied, opaque ones get alpha 1.
+- **Begin/EndSequenceRender**, and **InstanceChanged** for user edits,
+  wrapped in Begin/EndInstanceChanged.
+- **DestroyInstance** when an instance is dropped, **Unload** when the
+  plugin is.
+
 ## Still to be written (O-A to O-D)
 
-Supported pixel depths and conversions, render scale, field order, pixel
-aspect, colour management (none advertised), thread-safety levels, the
-supported properties and suites, contexts, timeouts and abort.
+Render scale and multi-resolution, thread-safety levels across
+instances, timeouts and abort through the sandbox (O-B), the transition
+and general contexts (O-C), interacts (O-D), parametric parameters.

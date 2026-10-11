@@ -446,8 +446,12 @@ at `743b053` (merge of #3).
          context) and instances (`effect::Effect`), clips, images
          (bottom-up, aligned, with deterministic 8/16-bit conversion),
          an `ImageSource` trait for clip images, and image memory.
-      5. The harness: a Rust test plugin driven through Load, Describe,
-         DescribeInContext, CreateInstance and Render.
+      5. **Done:** `suites::driver` runs a plugin's actions (Load,
+         Describe, DescribeInContext, CreateInstance, GetClipPreferences,
+         GetRegionOfDefinition, GetRegionsOfInterest, IsIdentity, Render,
+         sequence and instance-changed actions, DestroyInstance, Unload),
+         with the D2 output rule. A Rust test plugin written against the
+         raw C API runs its whole life through it.
    5. **Done (ahead of 4):** `cargo xtask credits [--check]` generates the
       README and LICENSING.md credit blocks from `third_party/credits.toml`
       and runs in CI. The check refuses copyleft or non-permissive

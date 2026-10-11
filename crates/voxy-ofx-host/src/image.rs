@@ -252,6 +252,39 @@ impl Image {
         Some(img)
     }
 
+    /// Overwrites the pixels with `rgba` (bottom-up, four floats per
+    /// pixel), converted to this image's depth and components. Call only
+    /// when no plugin action is writing.
+    pub fn write_rgba(&self, rgba: &[f32]) {
+        if let Some(tmp) =
+            Image::from_rgba(self.bounds, rgba, self.depth, self.components, self.premult)
+        {
+            self.buf.write(&tmp.buf.to_vec());
+        }
+    }
+
+    /// Multiplies colour by alpha (for a plugin that renders
+    /// unpremultiplied, D2).
+    pub fn premultiply(&self) {
+        let mut px = self.to_rgba();
+        for p in px.as_chunks_mut::<4>().0 {
+            let a = p[3];
+            for c in &mut p[..3] {
+                *c *= a;
+            }
+        }
+        self.write_rgba(&px);
+    }
+
+    /// Sets alpha to 1 (for a plugin that renders opaque).
+    pub fn make_opaque(&self) {
+        let mut px = self.to_rgba();
+        for p in px.as_chunks_mut::<4>().0 {
+            p[3] = 1.0;
+        }
+        self.write_rgba(&px);
+    }
+
     /// The pixels as RGBA floats, bottom-up. RGB gets alpha 1; Alpha gets
     /// colour 0. Call only when no plugin action is writing.
     pub fn to_rgba(&self) -> Vec<f32> {

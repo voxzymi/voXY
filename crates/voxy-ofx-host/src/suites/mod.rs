@@ -11,6 +11,7 @@
 #![allow(unsafe_code)]
 
 mod buffer;
+pub mod driver;
 mod image_effect;
 mod memory;
 mod message;
