@@ -414,3 +414,153 @@ fn reset_puts_every_parameter_back_in_one_step() {
     assert!(h.undo());
     assert_eq!(**h.current(), *edited);
 }
+
+/// Point parameters of a new effect start at the centre of the layer's
+/// content; an adjustment layer covers its composition.
+#[test]
+fn new_point_parameters_start_at_the_content_centre() {
+    let mut f = fixture();
+    let centre = |h: &History, layer: LayerId| {
+        h.current().find_layer(layer).expect("layer").1.effects[0].params[1].value_at(Time::ZERO)
+    };
+    add(&mut f.h, f.a, ids::RADIAL_BLUR);
+    let size = f.h.current().content_size(f.a).expect("solid size");
+    assert_eq!(centre(&f.h, f.a), Value::Vec2(size / 2.0));
+
+    f.h.execute(AddAdjustmentLayer {
+        comp: f.comp,
+        name: None,
+        index: 0,
+    })
+    .expect("adjustment");
+    let adj = f.h.current().comp(f.comp).expect("comp").layers[0].id;
+    add(&mut f.h, adj, ids::ZOOM_BLUR);
+    assert_eq!(
+        centre(&f.h, adj),
+        Value::Vec2(voxy_core::glam::DVec2::new(32.0, 18.0))
+    );
+    // The edit is the same single undo step as any added effect.
+    assert!(f.h.undo());
+    assert_eq!(effects(&f.h, adj).len(), 0);
+}
+
+/// LUT assets (format 0.7.0) feed the LUT effect only: they cannot become
+/// layers, and removing one clears every parameter that used it.
+#[test]
+fn luts_are_effect_inputs_not_layer_sources() {
+    use voxy_core::command::{AddSourceLayer, ImportAssets, RemoveItems, RemoveMode};
+    use voxy_core::{Asset, AssetKind, PoolItem, SourceRef};
+    let mut f = fixture();
+    // An unused LUT alone already needs 0.7.0 (older readers do not know
+    // the kind).
+    let report =
+        f.h.execute_reported(ImportAssets {
+            assets: vec![Asset::new(AssetKind::Lut, "Look", "looks/look.cube")],
+            folder: None,
+        })
+        .expect("import");
+    let lut = report.created_assets[0];
+    let mut doc = (**f.h.current()).clone();
+    for l in &mut doc.comp_mut(f.comp).unwrap().layers {
+        std::sync::Arc::make_mut(l).effects.clear();
+    }
+    assert_eq!(persist::required_version(&doc), persist::FORMAT_VERSION);
+
+    let err = f.h.execute(AddSourceLayer {
+        comp: f.comp,
+        source: SourceRef::Asset(lut),
+        index: 0,
+        in_point: Time::ZERO,
+    });
+    assert!(err.is_err(), "a LUT is not a layer source");
+
+    let fx = add(&mut f.h, f.a, ids::LUT);
+    let prop =
+        f.h.current()
+            .find_layer(f.a)
+            .unwrap()
+            .1
+            .effect(fx)
+            .unwrap()
+            .params[0]
+            .id;
+    f.h.execute(voxy_core::command::SetProperty {
+        prop,
+        time: Time::ZERO,
+        value: Value::Asset(Some(lut)),
+    })
+    .expect("point at the LUT");
+    f.h.execute(RemoveItems {
+        items: vec![PoolItem::Asset(lut)],
+        mode: RemoveMode::PlaceholderLayers,
+    })
+    .expect("remove");
+    let value =
+        f.h.current()
+            .find_layer(f.a)
+            .unwrap()
+            .1
+            .effect(fx)
+            .unwrap()
+            .params[0]
+            .value_at(Time::ZERO);
+    assert_eq!(value, Value::Asset(None));
+    // One undo brings the LUT and the reference back.
+    assert!(f.h.undo());
+    let value =
+        f.h.current()
+            .find_layer(f.a)
+            .unwrap()
+            .1
+            .effect(fx)
+            .unwrap()
+            .params[0]
+            .value_at(Time::ZERO);
+    assert_eq!(value, Value::Asset(Some(lut)));
+}
+
+/// Deleting the layer a Displacement Map or a transition reads clears the
+/// reference in the same undo step, and undo brings both back.
+#[test]
+fn deleting_an_input_layer_clears_the_reference_in_one_step() {
+    let mut f = fixture();
+    for (id, name) in [
+        (ids::DISPLACEMENT_MAP, "map_layer"),
+        (ids::CROSSFADE, "layer_b"),
+    ] {
+        let fx = add(&mut f.h, f.a, id);
+        let prop =
+            f.h.current()
+                .find_layer(f.a)
+                .unwrap()
+                .1
+                .effect(fx)
+                .unwrap()
+                .param(name)
+                .unwrap()
+                .id;
+        f.h.execute(voxy_core::command::SetProperty {
+            prop,
+            time: Time::ZERO,
+            value: Value::Layer(Some(f.b)),
+        })
+        .unwrap();
+    }
+    let read = |h: &History, name: &str| {
+        h.current()
+            .find_layer(f.a)
+            .unwrap()
+            .1
+            .effects
+            .iter()
+            .find_map(|e| e.param(name))
+            .unwrap()
+            .value_at(Time::ZERO)
+    };
+    f.h.execute(RemoveLayers { layers: vec![f.b] }).unwrap();
+    assert_eq!(read(&f.h, "map_layer"), Value::Layer(None));
+    assert_eq!(read(&f.h, "layer_b"), Value::Layer(None));
+    assert!(f.h.undo());
+    assert_eq!(read(&f.h, "map_layer"), Value::Layer(Some(f.b)));
+    assert_eq!(read(&f.h, "layer_b"), Value::Layer(Some(f.b)));
+}

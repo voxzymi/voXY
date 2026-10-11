@@ -2,3 +2,5 @@
 * text=auto
 *.png binary
 *.wgsl text eol=lf
+# Vendored files are kept byte for byte, so their VERSION checksums hold everywhere.
+third_party/openfx/** -text

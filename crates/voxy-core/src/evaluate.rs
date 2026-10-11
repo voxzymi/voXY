@@ -62,6 +62,9 @@ pub struct EvaluatedEffect {
     /// The frame of the layer's composition containing this time, for
     /// deterministic seeds (design §3.4): `floor(t × fps)`, exact.
     pub frame: i64,
+    /// Where the time lies between the layer's in and out points, 0 to 1
+    /// (for transitions with Auto on, design §5), from exact flicks.
+    pub layer_progress: f64,
 }
 
 impl EvaluatedEffect {
@@ -185,7 +188,7 @@ fn evaluate_in(
             world: worlds.world(l.id),
             opacity: scalar(&l.transform.opacity, time, 1.0).clamp(0.0, 1.0),
             blend: l.blend_mode,
-            effects: effects(l, time, c.frame_rate.time_to_frame(time)),
+            effects: effects(l, time, c.frame_rate.time_to_frame(time), progress(l, time)),
             missing_effects: l
                 .effects
                 .iter()
@@ -204,7 +207,17 @@ fn evaluate_in(
     })
 }
 
-fn effects(layer: &Layer, time: Time, frame: i64) -> Vec<EvaluatedEffect> {
+/// `(time − in) / (out − in)`, clamped to `0..=1` (0 for an empty layer).
+fn progress(layer: &Layer, time: Time) -> f64 {
+    let span = layer.out_point.flicks() - layer.in_point.flicks();
+    if span <= 0 {
+        return 0.0;
+    }
+    let done = (time.flicks() - layer.in_point.flicks()).clamp(0, span);
+    done as f64 / span as f64
+}
+
+fn effects(layer: &Layer, time: Time, frame: i64, layer_progress: f64) -> Vec<EvaluatedEffect> {
     layer
         .effects
         .iter()
@@ -220,6 +233,7 @@ fn effects(layer: &Layer, time: Time, frame: i64) -> Vec<EvaluatedEffect> {
                 .collect(),
             matte: fx.matte,
             frame,
+            layer_progress,
         })
         .collect()
 }

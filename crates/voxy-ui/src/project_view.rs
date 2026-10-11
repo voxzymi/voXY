@@ -22,6 +22,8 @@ pub enum ItemKind {
     Composition,
     Image,
     Video,
+    /// A colour lookup table for the LUT effect.
+    Lut,
 }
 
 impl ItemKind {
@@ -31,12 +33,18 @@ impl ItemKind {
             ItemKind::Composition => "Composition",
             ItemKind::Image => "Image",
             ItemKind::Video => "Video",
+            ItemKind::Lut => "LUT",
         }
     }
 
     /// Footage is media: images and videos.
     pub fn is_footage(self) -> bool {
         matches!(self, ItemKind::Image | ItemKind::Video)
+    }
+
+    /// Backed by a file that can go missing: footage and LUTs.
+    pub fn is_file(self) -> bool {
+        self.is_footage() || self == ItemKind::Lut
     }
 }
 
@@ -116,7 +124,7 @@ impl TypeFilter {
             TypeFilter::Compositions => kind == ItemKind::Composition,
             TypeFilter::Footage => kind.is_footage(),
             TypeFilter::Folders => kind == ItemKind::Folder,
-            TypeFilter::Missing => kind.is_footage() && missing,
+            TypeFilter::Missing => kind.is_file() && missing,
         }
     }
 }
@@ -283,6 +291,7 @@ pub(crate) fn make_row(
                 kind: match a.kind {
                     AssetKind::Image => ItemKind::Image,
                     AssetKind::Video => ItemKind::Video,
+                    AssetKind::Lut => ItemKind::Lut,
                 },
                 size: a.pixel_size,
                 rate: a.frame_rate,
@@ -342,6 +351,7 @@ fn type_rank(kind: ItemKind) -> u8 {
         ItemKind::Composition => 1,
         ItemKind::Image => 2,
         ItemKind::Video => 3,
+        ItemKind::Lut => 4,
     }
 }
 

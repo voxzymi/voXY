@@ -207,6 +207,20 @@ impl EffectDef {
                 return Err(bad(format!("parameter `{}` is in a missing group", p.name)));
             }
         }
+        // Group IDs are unique, and a parent comes before its children, so
+        // the tree has no cycles.
+        for (i, g) in self.groups.iter().enumerate() {
+            let earlier = &self.groups[..i];
+            if earlier.iter().any(|e| e.id == g.id) {
+                return Err(bad(format!("group {} is repeated", g.id)));
+            }
+            if g.parent.is_some_and(|p| !earlier.iter().any(|e| e.id == p)) {
+                return Err(bad(format!(
+                    "group {} has a parent not listed before it",
+                    g.id
+                )));
+            }
+        }
         Ok(())
     }
 }
@@ -505,8 +519,22 @@ impl EffectParamDef {
         self
     }
 
+    pub(crate) fn in_group(&mut self, group: u32) -> &mut Self {
+        self.group = Some(group);
+        self
+    }
+
     pub(crate) fn hide_alpha(&mut self) -> &mut Self {
         self.flags.hide_alpha = true;
+        self
+    }
+
+    /// An on-canvas point handle (the parameter must be a `Vec2` in layer
+    /// pixels). New instances start at the centre of the layer's content
+    /// (`AddEffect`).
+    pub(crate) fn point(&mut self) -> &mut Self {
+        self.gizmo = Some(GizmoKind::Point);
+        self.desc_mut().spatial = true;
         self
     }
 }

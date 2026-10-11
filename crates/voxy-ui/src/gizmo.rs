@@ -243,7 +243,9 @@ mod tests {
             .and_then(|e| e.layers.into_iter().find(|l| l.id == layer))
             .expect("evaluated")
             .world;
-        assert_eq!(h.comp, world.transform_point2(DVec2::new(10.0, 20.0)));
+        // New point parameters start at the centre of the layer's content.
+        let start = doc.content_size(layer).expect("solid size") / 2.0;
+        assert_eq!(h.comp, world.transform_point2(start));
         assert_eq!(h.label, "Point Test: center");
 
         drag_to(&mut s, &h, h.comp + DVec2::new(5.0, 0.0));
@@ -251,7 +253,7 @@ mod tests {
         let fx = &s.selected_layer_effects()[0];
         let v = fx.params[0].value_at(s.time);
         let Value::Vec2(v) = v else { panic!("{v:?}") };
-        assert!((v - DVec2::new(17.0, 18.0)).length() < 1e-9, "{v}");
+        assert!((v - (start + DVec2::new(7.0, -2.0))).length() < 1e-9, "{v}");
         let doc = s.history.current().clone();
         assert_eq!(
             handles(&s, &doc, comp)[0].comp,
@@ -261,7 +263,7 @@ mod tests {
         // One undo takes back the whole drag, and the effect stays.
         assert!(s.history.undo());
         let v = s.selected_layer_effects()[0].params[0].value_at(s.time);
-        assert_eq!(v, Value::Vec2(DVec2::new(10.0, 20.0)));
+        assert_eq!(v, Value::Vec2(start));
     }
 
     #[test]

@@ -14,8 +14,8 @@ use std::sync::Arc;
 
 use voxy_core::glam::{DAffine2, DVec2};
 use voxy_core::{
-    AssetId, BlendMode, EvaluatedComp, EvaluatedContent, EvaluatedEffect, LinearRgba, Nested, Time,
-    Value, WorkingSpace,
+    AssetId, BlendMode, EvaluatedComp, EvaluatedContent, EvaluatedEffect, EvaluatedLayer,
+    LinearRgba, Nested, Time, Value, WorkingSpace,
 };
 
 use crate::kernels::Kernel;
@@ -93,6 +93,11 @@ pub enum DrawSource {
     /// layer-local space, and the result is drawn through the layer's
     /// transform with `opacity` (design-effects-ofx.md §3.1).
     Chain { chain: Arc<ChainPlan>, opacity: f32 },
+    /// An adjustment layer (design §1.5): `chain`'s effects run on the
+    /// composite of everything drawn before it (its source is a stand-in),
+    /// over the whole composition, and the result replaces what was
+    /// there, mixed by `opacity` and the draw's blend mode.
+    Adjustment { chain: Arc<ChainPlan>, opacity: f32 },
 }
 
 impl DrawSource {
@@ -118,6 +123,10 @@ impl DrawSource {
                 plan: Arc::clone(plan),
                 opacity: opacity * factor,
             },
+            DrawSource::Adjustment { chain, opacity } => DrawSource::Adjustment {
+                chain: Arc::clone(chain),
+                opacity: opacity * factor,
+            },
             DrawSource::Chain { chain, opacity } => DrawSource::Chain {
                 chain: Arc::clone(chain),
                 opacity: opacity * factor,
@@ -132,6 +141,26 @@ impl DrawSource {
 pub struct EffectNode {
     pub kernel: Kernel,
     pub effect: EvaluatedEffect,
+    /// The layer part of a seeded kernel's seed (its layer's ID; design
+    /// §3.4), and 0 for every other kernel, so identical unseeded chains
+    /// on different layers share one rendered result.
+    pub seed: u64,
+    /// The layer the kernel reads (Displacement Map's map, a transition's
+    /// B), when it has one and that layer is active.
+    pub input: Option<Arc<LayerInput>>,
+}
+
+/// Another layer an effect reads (Q-E1, docs/effects.md): its plain
+/// source, without its effects or opacity, placed by its transform
+/// (parents included) in the effect layer's space.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LayerInput {
+    /// Never a chain or an adjustment; opacity 1.
+    pub source: DrawSource,
+    /// As [`DrawOp::local_size`].
+    pub size: Option<DVec2>,
+    /// The input layer's pixels to the effect layer's pixels.
+    pub from_input: DAffine2,
 }
 
 /// A layer's source and effect stack, rendered in layer-local pixels at the
@@ -205,8 +234,21 @@ impl ChainPlan {
                 }
                 None => h.u32(0),
             }
-            // Zero unless the kernel uses it (see the planner).
+            // Zero unless the kernel uses them (see the planner).
             h.u64(fx.frame as u64);
+            h.f64(fx.layer_progress);
+            h.u64(node.seed);
+            match &node.input {
+                Some(input) => {
+                    h.u32(1);
+                    hash_source(&input.source, h);
+                    hash_size(input.size, h);
+                    for v in input.from_input.to_cols_array() {
+                        h.f64(v);
+                    }
+                }
+                None => h.u32(0),
+            }
         }
         h.f64(self.scale);
         h.u32(match self.working_space {
@@ -286,6 +328,115 @@ struct Builder<'a> {
 }
 
 impl Builder<'_> {
+    /// A layer's own content as one draw source with `opacity` (never a
+    /// chain), or `None` when it draws nothing. `count` adds a nested
+    /// plan's statistics to this plan's (not for layer inputs, which are
+    /// drawn again elsewhere).
+    fn plain_source(
+        &mut self,
+        l: &EvaluatedLayer,
+        opacity: f32,
+        count: bool,
+    ) -> Option<(DrawSource, Option<DVec2>)> {
+        let space = self.space;
+        Some(match &l.content {
+            EvaluatedContent::Solid { color, size } => {
+                if size.x <= 0.0 || size.y <= 0.0 {
+                    return None;
+                }
+                let c = working_premultiplied(*color, space).map(|v| v * opacity);
+                (DrawSource::Solid(c), Some(*size))
+            }
+            EvaluatedContent::Image { asset, size } => (
+                DrawSource::Image {
+                    asset: *asset,
+                    opacity,
+                },
+                *size,
+            ),
+            EvaluatedContent::Video {
+                asset,
+                source_time,
+                size,
+            } => (
+                DrawSource::Video {
+                    asset: *asset,
+                    time: *source_time,
+                    opacity,
+                },
+                *size,
+            ),
+            EvaluatedContent::Placeholder { size } => {
+                let size = (*size).filter(|s| s.x > 0.0 && s.y > 0.0)?;
+                let c = working_premultiplied(PLACEHOLDER_COLOR, space).map(|v| v * opacity);
+                (DrawSource::Solid(c), Some(size))
+            }
+            EvaluatedContent::Precomp { size, nested, .. } => match nested {
+                Nested::Shown(child) => {
+                    if size.x <= 0.0 || size.y <= 0.0 {
+                        return None;
+                    }
+                    let at = Arc::as_ptr(child) as usize;
+                    let plan = if let Some(done) = self.memo.get(&at) {
+                        Arc::clone(done)
+                    } else {
+                        let built = Arc::new(RenderPlan::build_with(
+                            child,
+                            self.settings,
+                            [0.0; 4],
+                            self.memo,
+                        ));
+                        self.memo.insert(at, Arc::clone(&built));
+                        built
+                    };
+                    if count {
+                        self.skipped += plan.skipped_precomps;
+                        self.unsupported += plan.unsupported_effects;
+                        self.missing += plan.missing_effects;
+                    }
+                    (DrawSource::Comp { plan, opacity }, Some(*size))
+                }
+                Nested::TooDeep => {
+                    if count {
+                        self.skipped += 1;
+                    }
+                    return None;
+                }
+                Nested::OutsideChild | Nested::Missing => return None,
+            },
+            EvaluatedContent::Adjustment => return None,
+        })
+    }
+
+    /// Fills in the layer inputs of `nodes` (Q-E1): each referenced layer
+    /// of `eval` that is active now, as its plain source placed in the
+    /// effect layer's space (`world` maps that space to `eval`'s pixels).
+    fn resolve_inputs(&mut self, nodes: &mut [EffectNode], eval: &EvaluatedComp, world: DAffine2) {
+        if world.matrix2.determinant().abs() < 1e-12 {
+            return;
+        }
+        let inverse = world.inverse();
+        for node in nodes {
+            let Some(Value::Layer(Some(id))) = node
+                .kernel
+                .layer_input()
+                .and_then(|name| node.effect.param(name))
+            else {
+                continue;
+            };
+            let Some(b) = eval.layers.iter().find(|l| l.id == *id) else {
+                continue;
+            };
+            if let Some((source, size)) = self.plain_source(b, 1.0, false) {
+                node.input = Some(Arc::new(LayerInput {
+                    source,
+                    size,
+                    from_input: inverse * b.world,
+                }));
+            }
+        }
+    }
+
     /// Adds the draws for `eval`'s layers. `base` maps `eval`'s composition
     /// pixels to output pixels; `inherited` is the opacity of collapsed
     /// precomp layers above (1.0 at the top).
@@ -313,10 +464,20 @@ impl Builder<'_> {
                         let mut effect = fx.clone();
                         // A kernel without seeds must not tell frames apart,
                         // or a static chain would never be reused.
-                        if !kernel.uses_frame() {
+                        if !kernel.uses_frame(fx) {
                             effect.frame = 0;
                         }
-                        nodes.push(EffectNode { kernel, effect });
+                        // Likewise the layer's progress, used only by Auto.
+                        if !kernel.uses_layer_progress(fx) {
+                            effect.layer_progress = 0.0;
+                        }
+                        let seed = if kernel.seeded() { l.id.raw() } else { 0 };
+                        nodes.push(EffectNode {
+                            kernel,
+                            effect,
+                            seed,
+                            input: None,
+                        });
                     }
                     None => self.unsupported += 1,
                 }
@@ -327,85 +488,52 @@ impl Builder<'_> {
             let layer_opacity = effective as f32;
             let opacity = if chain { 1.0 } else { layer_opacity };
             let (source, local_size) = match &l.content {
-                EvaluatedContent::Solid { color, size } => {
-                    if size.x <= 0.0 || size.y <= 0.0 {
-                        continue;
-                    }
-                    let c = working_premultiplied(*color, space).map(|v| v * opacity);
-                    (DrawSource::Solid(c), Some(*size))
-                }
-                EvaluatedContent::Image { asset, size } => (
-                    DrawSource::Image {
-                        asset: *asset,
-                        opacity,
-                    },
-                    *size,
-                ),
-                EvaluatedContent::Video {
-                    asset,
-                    source_time,
-                    size,
-                } => (
-                    DrawSource::Video {
-                        asset: *asset,
-                        time: *source_time,
-                        opacity,
-                    },
-                    *size,
-                ),
-                EvaluatedContent::Placeholder { size } => {
-                    let Some(size) = (*size).filter(|s| s.x > 0.0 && s.y > 0.0) else {
-                        continue;
-                    };
-                    let c = working_premultiplied(PLACEHOLDER_COLOR, space).map(|v| v * opacity);
-                    (DrawSource::Solid(c), Some(size))
-                }
+                // Effects need the child as one picture, so a collapsed
+                // precomp with effects renders offscreen like any other.
                 EvaluatedContent::Precomp {
-                    size,
-                    collapse,
-                    nested,
+                    collapse: true,
+                    nested: Nested::Shown(child),
                     ..
-                } => match nested {
-                    // Effects need the child as one picture, so a collapsed
-                    // precomp with effects renders offscreen like any other.
-                    Nested::Shown(child) if *collapse && !chain => {
-                        // The child's layers join this plan, through the
-                        // precomp layer's transform; its background is not
-                        // drawn and content outside its bounds stays visible.
-                        self.layers(child, base * l.world, effective);
+                } if !chain => {
+                    // The child's layers join this plan, through the
+                    // precomp layer's transform; its background is not
+                    // drawn and content outside its bounds stays visible.
+                    self.layers(child, base * l.world, effective);
+                    continue;
+                }
+                // Its effects apply to what is below, over the whole
+                // composition; without effects it does nothing.
+                EvaluatedContent::Adjustment => {
+                    if !chain {
                         continue;
                     }
-                    Nested::Shown(child) => {
-                        if size.x <= 0.0 || size.y <= 0.0 {
-                            continue;
-                        }
-                        let at = Arc::as_ptr(child) as usize;
-                        let plan = if let Some(done) = self.memo.get(&at) {
-                            Arc::clone(done)
-                        } else {
-                            let built = Arc::new(RenderPlan::build_with(
-                                child,
-                                self.settings,
-                                [0.0; 4],
-                                self.memo,
-                            ));
-                            self.memo.insert(at, Arc::clone(&built));
-                            built
-                        };
-                        self.skipped += plan.skipped_precomps;
-                        self.unsupported += plan.unsupported_effects;
-                        self.missing += plan.missing_effects;
-                        (DrawSource::Comp { plan, opacity }, Some(*size))
-                    }
-                    Nested::TooDeep => {
-                        self.skipped += 1;
-                        continue;
-                    }
-                    Nested::OutsideChild | Nested::Missing => continue,
+                    let comp = DVec2::new(f64::from(eval.width), f64::from(eval.height));
+                    self.resolve_inputs(&mut nodes, eval, DAffine2::IDENTITY);
+                    self.draws.push(DrawOp {
+                        source: DrawSource::Adjustment {
+                            chain: Arc::new(ChainPlan::new(
+                                DrawSource::Solid([0.0; 4]),
+                                Some(comp),
+                                nodes,
+                                self.settings.scale,
+                                space,
+                            )),
+                            opacity: layer_opacity,
+                        },
+                        local_size: Some(comp),
+                        blend: l.blend,
+                        output_from_local: base,
+                    });
+                    continue;
+                }
+                _ => match self.plain_source(l, opacity, true) {
+                    Some(s) => s,
+                    None => continue,
                 },
-                // Draws nothing itself; its effects are applied from E-D.
-                EvaluatedContent::Adjustment => continue,
             };
+            if chain {
+                self.resolve_inputs(&mut nodes, eval, l.world);
+            }
             let source = if chain {
                 DrawSource::Chain {
                     chain: Arc::new(ChainPlan::new(
@@ -539,7 +667,7 @@ fn collect_source_assets(source: &DrawSource, out: &mut Vec<AssetId>) {
         DrawSource::Image { asset, .. } | DrawSource::Video { asset, .. } => out.push(*asset),
         DrawSource::Comp { plan, .. } => plan.collect_assets(out),
         DrawSource::Chain { chain, .. } => collect_source_assets(&chain.source, out),
-        DrawSource::Solid(_) => {}
+        DrawSource::Solid(_) | DrawSource::Adjustment { .. } => {}
     }
 }
 
@@ -574,6 +702,11 @@ fn hash_source(source: &DrawSource, h: &mut Fnv) {
         }
         DrawSource::Chain { chain, opacity } => {
             h.u32(5);
+            h.f32(*opacity);
+            h.u64(chain.key);
+        }
+        DrawSource::Adjustment { chain, opacity } => {
+            h.u32(6);
             h.f32(*opacity);
             h.u64(chain.key);
         }

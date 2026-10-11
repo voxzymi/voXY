@@ -89,6 +89,36 @@ fn duplicate_and_invalid_definitions_are_refused() {
     params[0].gizmo = Some(voxy_core::registry::GizmoKind::Point);
     point.params = params.into();
     assert!(reg.register(point).is_err(), "point gizmo on a scalar");
+
+    // Groups: unique IDs, parents listed before their children.
+    let balance = EffectRegistry::with_builtins()
+        .latest(&EffectTypeId::new(ids::COLOR_BALANCE))
+        .unwrap()
+        .as_ref()
+        .clone();
+    assert_eq!(balance.groups.len(), 3);
+    let group = |id, parent| voxy_core::registry::ParamGroup {
+        id,
+        label: "G".into(),
+        parent,
+        open_by_default: true,
+    };
+    for (n, groups) in [
+        vec![group(0, None), group(1, None), group(1, None)],
+        vec![group(1, Some(2)), group(2, None), group(0, None)],
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut bad = balance.clone();
+        bad.version = 10 + n as u32;
+        bad.groups = groups.into();
+        assert!(reg.register(bad).is_err(), "groups case {n}");
+    }
+    let mut nested = balance.clone();
+    nested.version = 20;
+    nested.groups = vec![group(0, None), group(1, Some(0)), group(2, Some(1))].into();
+    reg.register(nested).unwrap();
 }
 
 #[test]

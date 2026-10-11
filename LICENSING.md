@@ -85,24 +85,28 @@ them, so their licenses do not affect voXY's.
 <!-- credits:begin (generated from third_party/credits.toml; do not edit by hand) -->
 **OpenFX (OFX) image-effect API**: <https://github.com/AcademySoftwareFoundation/openfx>,
 tag `OFX_Release_1.5.1`, commit `ab779510b2655b4d11a7e01e5c521f9aa8c88976`.
-License: BSD-3-Clause
-([full text](https://github.com/AcademySoftwareFoundation/openfx/blob/ab779510b2655b4d11a7e01e5c521f9aa8c88976/LICENSE.md)),
+License: BSD-3-Clause ([full text](https://github.com/AcademySoftwareFoundation/openfx/blob/ab779510b2655b4d11a7e01e5c521f9aa8c88976/LICENSE.md)),
 "Copyright (c) 2025, OpenFX and contributors to the OpenFX project". Use:
-voXY's host implements this API. The headers will be vendored in
+voXY's host implements this API. The headers are vendored in
 `third_party/openfx/` with this license file.
 
-**OpenFX example plugins** (`Examples/`) and **OpenFX Support library
-sample plugins** (`Support/Plugins/`): same repository, tag and commit.
-License: BSD-3-Clause
-([`LICENSE.md`](https://github.com/AcademySoftwareFoundation/openfx/blob/ab779510b2655b4d11a7e01e5c521f9aa8c88976/LICENSE.md),
-[`Support/LICENSE`](https://github.com/AcademySoftwareFoundation/openfx/blob/ab779510b2655b4d11a7e01e5c521f9aa8c88976/Support/LICENSE)),
-"Copyright (c) 2025, OpenFX and contributors to the OpenFX project" and
-"Copyright OpenFX and contributors to the OpenFX project". Use: built from
-source in CI as test fixtures only. They are never shipped, uploaded or
-linked into voXY, so no binary-distribution notice obligation arises.
+**OpenFX example plugins (Invert, Basic, Rectangle, ChoiceParams, DepthConverter, Test; Custom in O-D)**: <https://github.com/AcademySoftwareFoundation/openfx/tree/ab779510b2655b4d11a7e01e5c521f9aa8c88976/Examples>,
+tag `OFX_Release_1.5.1`, commit `ab779510b2655b4d11a7e01e5c521f9aa8c88976`.
+License: BSD-3-Clause ([full text](https://github.com/AcademySoftwareFoundation/openfx/blob/ab779510b2655b4d11a7e01e5c521f9aa8c88976/LICENSE.md)),
+"Copyright (c) 2025, OpenFX and contributors to the OpenFX project". Use:
+built from source in CI as test fixtures only. They are never
+shipped, uploaded or linked into voXY, so no binary-distribution
+notice obligation arises.
 
-voXY uses no copyleft (GPL, LGPL, AGPL) plugins anywhere, and offers no
-plugins for download.
+**OpenFX Support library sample plugins (Invert, Generator, Transition, Tester, MultiBundle)**: <https://github.com/AcademySoftwareFoundation/openfx/tree/ab779510b2655b4d11a7e01e5c521f9aa8c88976/Support/Plugins>,
+tag `OFX_Release_1.5.1`, commit `ab779510b2655b4d11a7e01e5c521f9aa8c88976`.
+License: BSD-3-Clause ([full text](https://github.com/AcademySoftwareFoundation/openfx/blob/ab779510b2655b4d11a7e01e5c521f9aa8c88976/Support/LICENSE)),
+"Copyright OpenFX and contributors to the OpenFX project". Use:
+built from source in CI as test fixtures only. They are never
+shipped, uploaded or linked into voXY, so no binary-distribution
+notice obligation arises.
+
+voXY uses no copyleft (GPL, LGPL, AGPL) plugins anywhere. voXY offers no plugins for download.
 <!-- credits:end -->
 
 ## FFmpeg (from Milestone 3)

@@ -7,22 +7,53 @@
 
 use std::sync::Arc;
 
-use super::{Category, EffectDef, EffectOrigin, EffectSpace, ParamBuilder};
+use super::{Category, EffectDef, EffectOrigin, EffectSpace, ParamBuilder, ParamGroup};
 use crate::color::LinearRgba;
 use crate::effect::EffectTypeId;
 use crate::property::Unit;
 use crate::value::Value;
+use glam::DVec2;
 
 /// Type IDs of the built-in effects.
 pub mod ids {
     pub const GAUSSIAN_BLUR: &str = "voxy.blur.gaussian";
     pub const BOX_BLUR: &str = "voxy.blur.box";
     pub const DIRECTIONAL_BLUR: &str = "voxy.blur.directional";
+    pub const RADIAL_BLUR: &str = "voxy.blur.radial";
+    pub const ZOOM_BLUR: &str = "voxy.blur.zoom";
     pub const BRIGHTNESS_CONTRAST: &str = "voxy.color.brightness_contrast";
     pub const EXPOSURE: &str = "voxy.color.exposure";
     pub const INVERT: &str = "voxy.color.invert";
     pub const TINT: &str = "voxy.color.tint";
     pub const HUE_SATURATION: &str = "voxy.color.hue_saturation";
+    pub const LEVELS: &str = "voxy.color.levels";
+    pub const POSTERIZE: &str = "voxy.color.posterize";
+    pub const CURVES: &str = "voxy.color.curves";
+    pub const COLOR_BALANCE: &str = "voxy.color.color_balance";
+    pub const GRADIENT_MAP: &str = "voxy.color.gradient_map";
+    pub const LUT: &str = "voxy.color.lut";
+    pub const VIGNETTE: &str = "voxy.stylize.vignette";
+    pub const PIXELATE: &str = "voxy.stylize.pixelate";
+    pub const GRAIN: &str = "voxy.stylize.grain";
+    pub const CHROMATIC_ABERRATION: &str = "voxy.stylize.chromatic_aberration";
+    pub const DROP_SHADOW: &str = "voxy.stylize.drop_shadow";
+    pub const INNER_SHADOW: &str = "voxy.stylize.inner_shadow";
+    pub const GLOW: &str = "voxy.stylize.glow";
+    pub const STROKE: &str = "voxy.stylize.stroke";
+    pub const CHROMA_KEY: &str = "voxy.keying.chroma_key";
+    pub const LUMA_KEY: &str = "voxy.keying.luma_key";
+    pub const MATTE_CHOKER: &str = "voxy.keying.matte_choker";
+    pub const TRANSFORM: &str = "voxy.distort.transform";
+    pub const MIRROR: &str = "voxy.distort.mirror";
+    pub const WAVE: &str = "voxy.distort.wave";
+    pub const RIPPLE: &str = "voxy.distort.ripple";
+    pub const BULGE: &str = "voxy.distort.bulge";
+    pub const TILE: &str = "voxy.distort.tile";
+    pub const CROSSFADE: &str = "voxy.transition.crossfade";
+    pub const WIPE: &str = "voxy.transition.wipe";
+    pub const SLIDE: &str = "voxy.transition.slide";
+    pub const ZOOM: &str = "voxy.transition.zoom";
+    pub const DISPLACEMENT_MAP: &str = "voxy.distort.displacement_map";
 }
 
 /// Every built-in definition, in no particular order.
@@ -31,11 +62,41 @@ pub fn builtin_definitions() -> Vec<EffectDef> {
         gaussian_blur(),
         box_blur(),
         directional_blur(),
+        radial_blur(),
+        zoom_blur(),
         brightness_contrast(),
         exposure(),
         invert(),
         tint(),
         hue_saturation(),
+        levels(),
+        posterize(),
+        curves(),
+        color_balance(),
+        gradient_map(),
+        lut(),
+        vignette(),
+        pixelate(),
+        grain(),
+        chromatic_aberration(),
+        shadow(ids::DROP_SHADOW),
+        shadow(ids::INNER_SHADOW),
+        glow(),
+        stroke(),
+        chroma_key(),
+        luma_key(),
+        matte_choker(),
+        transform(),
+        mirror(),
+        wave(),
+        ripple(),
+        bulge(),
+        tile(),
+        transition(ids::CROSSFADE),
+        transition(ids::WIPE),
+        transition(ids::SLIDE),
+        transition(ids::ZOOM),
+        displacement_map(),
     ]
 }
 
@@ -126,6 +187,42 @@ fn directional_blur() -> EffectDef {
             p.add("length", "Blur Length", Value::Scalar(10.0), Unit::Pixels)
                 .range(0.0, 2000.0)
                 .soft(0.0, 200.0);
+        },
+    )
+}
+
+fn radial_blur() -> EffectDef {
+    def(
+        ids::RADIAL_BLUR,
+        "Radial Blur",
+        Category::Blur,
+        "Spins the layer around a centre point, like a turning wheel.",
+        |p| {
+            p.add("angle", "Angle", Value::Scalar(10.0), Unit::Degrees)
+                .range(0.0, 360.0)
+                .soft(0.0, 90.0)
+                .hint("How far the blur turns, split evenly both ways.");
+            p.add("center", "Center", Value::Vec2(DVec2::ZERO), Unit::Pixels)
+                .point()
+                .hint("In layer pixels. Drag the handle in the viewer.");
+        },
+    )
+}
+
+fn zoom_blur() -> EffectDef {
+    def(
+        ids::ZOOM_BLUR,
+        "Zoom Blur",
+        Category::Blur,
+        "Streaks the layer out from a centre point, like a fast zoom.",
+        |p| {
+            p.add("amount", "Amount", Value::Scalar(0.2), Unit::Factor)
+                .range(0.0, 0.9)
+                .soft(0.0, 0.5)
+                .hint("How far each streak reaches towards the centre (0.5 = halfway).");
+            p.add("center", "Center", Value::Vec2(DVec2::ZERO), Unit::Pixels)
+                .point()
+                .hint("In layer pixels. Drag the handle in the viewer.");
         },
     )
 }
@@ -267,6 +364,727 @@ fn hue_saturation() -> EffectDef {
                 Unit::Normalized,
             )
             .range(0.0, 1.0);
+        },
+    )
+}
+
+fn levels() -> EffectDef {
+    def(
+        ids::LEVELS,
+        "Levels",
+        Category::Color,
+        "Sets the black and white points, then bends the midtones.",
+        |p| {
+            p.add("channel", "Channel", Value::Enum(0), Unit::None)
+                .choices(&["RGB", "Red", "Green", "Blue", "Alpha"]);
+            p.add(
+                "input_black",
+                "Input Black",
+                Value::Scalar(0.0),
+                Unit::Normalized,
+            )
+            .range(0.0, 1.0)
+            .hint("Tones at or below this become the output black.");
+            p.add(
+                "input_white",
+                "Input White",
+                Value::Scalar(1.0),
+                Unit::Normalized,
+            )
+            .range(0.0, 1.0)
+            .hint("Tones at this become the output white; brighter ones keep going.");
+            p.add("gamma", "Gamma", Value::Scalar(1.0), Unit::Factor)
+                .range(0.1, 10.0)
+                .soft(0.2, 5.0)
+                .hint("Above 1 brightens the midtones, below 1 darkens them.");
+            p.add(
+                "output_black",
+                "Output Black",
+                Value::Scalar(0.0),
+                Unit::Normalized,
+            )
+            .range(0.0, 1.0);
+            p.add(
+                "output_white",
+                "Output White",
+                Value::Scalar(1.0),
+                Unit::Normalized,
+            )
+            .range(0.0, 1.0);
+        },
+    )
+}
+
+fn posterize() -> EffectDef {
+    def(
+        ids::POSTERIZE,
+        "Posterize",
+        Category::Color,
+        "Reduces each colour channel to a few flat steps.",
+        |p| {
+            p.add("levels", "Levels", Value::Int(6), Unit::None)
+                .range(2.0, 256.0)
+                .soft(2.0, 32.0)
+                .hint("Steps per channel, black and white included.");
+        },
+    )
+}
+
+fn curves() -> EffectDef {
+    def(
+        ids::CURVES,
+        "Curves",
+        Category::Color,
+        "Reshapes the tones with a curve per channel.",
+        |p| {
+            let identity = || Value::Curve(Arc::new(crate::value::Curve::identity()));
+            p.add("master", "RGB", identity(), Unit::None)
+                .hint("Applied after the red, green and blue curves.");
+            p.add("red", "Red", identity(), Unit::None);
+            p.add("green", "Green", identity(), Unit::None);
+            p.add("blue", "Blue", identity(), Unit::None);
+            p.add("alpha", "Alpha", identity(), Unit::None);
+        },
+    )
+}
+
+fn color_balance() -> EffectDef {
+    const RANGES: [(&str, &str, u32); 3] = [
+        ("shadow", "Shadows", 0),
+        ("mid", "Midtones", 1),
+        ("high", "Highlights", 2),
+    ];
+    let mut d = def(
+        ids::COLOR_BALANCE,
+        "Color Balance",
+        Category::Color,
+        "Pushes the shadows, midtones and highlights towards a colour.",
+        |p| {
+            for (prefix, _, group) in RANGES {
+                for (axis, label) in [
+                    ("red", "Cyan / Red"),
+                    ("green", "Magenta / Green"),
+                    ("blue", "Yellow / Blue"),
+                ] {
+                    p.add(
+                        &format!("{prefix}_{axis}"),
+                        label,
+                        Value::Scalar(0.0),
+                        Unit::Normalized,
+                    )
+                    .range(-1.0, 1.0)
+                    .soft(-0.5, 0.5)
+                    .in_group(group);
+                }
+            }
+            p.add(
+                "preserve_luminosity",
+                "Preserve Luminosity",
+                Value::Bool(true),
+                Unit::None,
+            )
+            .hint("Keep each pixel's brightness; only its colour moves.");
+        },
+    );
+    d.groups = RANGES
+        .iter()
+        .map(|(_, label, id)| ParamGroup {
+            id: *id,
+            label: (*label).into(),
+            parent: None,
+            open_by_default: true,
+        })
+        .collect();
+    d
+}
+
+fn gradient_map() -> EffectDef {
+    def(
+        ids::GRADIENT_MAP,
+        "Gradient Map",
+        Category::Color,
+        "Replaces each tone with a colour from a three-stop gradient.",
+        |p| {
+            for (name, label, c) in [
+                ("shadow", "Shadows", LinearRgba::from_srgb8(0, 0, 0, 255)),
+                (
+                    "midtone",
+                    "Midtones",
+                    LinearRgba::from_srgb8(128, 128, 128, 255),
+                ),
+                (
+                    "highlight",
+                    "Highlights",
+                    LinearRgba::from_srgb8(255, 255, 255, 255),
+                ),
+            ] {
+                p.add(name, label, Value::Color(c), Unit::None).hide_alpha();
+            }
+            p.add(
+                "midpoint",
+                "Midtone Position",
+                Value::Scalar(0.5),
+                Unit::Normalized,
+            )
+            .range(0.01, 0.99)
+            .hint("The brightness that gets the midtone colour.");
+            p.add("amount", "Amount", Value::Scalar(1.0), Unit::Normalized)
+                .range(0.0, 1.0);
+        },
+    )
+}
+
+fn lut() -> EffectDef {
+    def(
+        ids::LUT,
+        "Apply LUT",
+        Category::Color,
+        "Recolours the layer with a 3D lookup table (.cube file).",
+        |p| {
+            p.add("lut", "LUT", Value::Asset(None), Unit::None)
+                .hint("A LUT from the Project panel, or import one.");
+            p.add("input", "LUT Input", Value::Enum(0), Unit::None)
+                .choices(&["sRGB-encoded", "Linear light"])
+                .hint("What the LUT expects; most creative LUTs expect sRGB-encoded values.");
+            p.add("amount", "Amount", Value::Scalar(1.0), Unit::Normalized)
+                .range(0.0, 1.0);
+        },
+    )
+}
+
+fn vignette() -> EffectDef {
+    def(
+        ids::VIGNETTE,
+        "Vignette",
+        Category::Stylize,
+        "Darkens (or tints) the layer towards its edges.",
+        |p| {
+            p.add("amount", "Amount", Value::Scalar(0.5), Unit::Normalized)
+                .range(0.0, 1.0);
+            p.add("size", "Size", Value::Scalar(0.6), Unit::Normalized)
+                .range(0.0, 1.5)
+                .hint("Where the darkening starts: 1 is the middle of each edge.");
+            p.add("feather", "Feather", Value::Scalar(0.6), Unit::Normalized)
+                .range(0.0, 1.5)
+                .hint("How gradually it fades in.");
+            p.add(
+                "color",
+                "Color",
+                Value::Color(LinearRgba::new(0.0, 0.0, 0.0, 1.0)),
+                Unit::None,
+            )
+            .hide_alpha();
+        },
+    )
+}
+
+fn pixelate() -> EffectDef {
+    def(
+        ids::PIXELATE,
+        "Pixelate",
+        Category::Stylize,
+        "Turns the layer into large square blocks of colour.",
+        |p| {
+            p.add("cell", "Block Size", Value::Scalar(10.0), Unit::Pixels)
+                .range(1.0, 1000.0)
+                .soft(1.0, 100.0)
+                .hint("In layer pixels; the blocks line up with the layer's top-left corner.");
+        },
+    )
+}
+
+fn grain() -> EffectDef {
+    let mut d = def(
+        ids::GRAIN,
+        "Grain",
+        Category::Stylize,
+        "Adds film-like noise that changes every frame.",
+        |p| {
+            p.add("amount", "Amount", Value::Scalar(0.1), Unit::Normalized)
+                .range(0.0, 1.0)
+                .soft(0.0, 0.5);
+            p.add("size", "Grain Size", Value::Scalar(1.0), Unit::Pixels)
+                .range(0.5, 50.0)
+                .soft(0.5, 10.0)
+                .hint("The side of one grain, in layer pixels.");
+            p.add("monochrome", "Monochrome", Value::Bool(true), Unit::None)
+                .hint("The same noise in every channel; off gives coloured grain.");
+            p.add("animate", "Animate", Value::Bool(true), Unit::None)
+                .hint("New noise every frame; off keeps one still pattern.");
+            p.add("seed", "Random Seed", Value::Int(0), Unit::None)
+                .range(0.0, 1_000_000.0)
+                .hint("Another number gives another, equally random pattern.");
+        },
+    );
+    d.seeded = true;
+    d
+}
+
+fn chromatic_aberration() -> EffectDef {
+    def(
+        ids::CHROMATIC_ABERRATION,
+        "Chromatic Aberration",
+        Category::Stylize,
+        "Splits red and blue apart towards the edges, like a cheap lens.",
+        |p| {
+            p.add("amount", "Amount", Value::Scalar(0.01), Unit::Factor)
+                .range(0.0, 0.2)
+                .soft(0.0, 0.05)
+                .hint(
+                    "Red is drawn this much larger and blue this much smaller, around the centre.",
+                );
+            p.add("center", "Center", Value::Vec2(DVec2::ZERO), Unit::Pixels)
+                .point()
+                .hint("In layer pixels. Drag the handle in the viewer.");
+        },
+    )
+}
+
+/// Drop Shadow and Inner Shadow share their parameters.
+fn shadow(id: &str) -> EffectDef {
+    let inner = id == ids::INNER_SHADOW;
+    def(
+        id,
+        if inner { "Inner Shadow" } else { "Drop Shadow" },
+        Category::Stylize,
+        if inner {
+            "Shades the inside of the layer's edges, as if it were cut in."
+        } else {
+            "Casts a soft shadow of the layer behind it."
+        },
+        |p| {
+            p.add(
+                "color",
+                "Shadow Color",
+                Value::Color(LinearRgba::new(0.0, 0.0, 0.0, 1.0)),
+                Unit::None,
+            )
+            .hide_alpha();
+            p.add("opacity", "Opacity", Value::Scalar(0.5), Unit::Normalized)
+                .range(0.0, 1.0);
+            p.add("direction", "Direction", Value::Scalar(45.0), Unit::Degrees)
+                .soft(-180.0, 180.0)
+                .hint("Where the shadow falls: 0° is right, positive angles turn clockwise.");
+            p.add("distance", "Distance", Value::Scalar(5.0), Unit::Pixels)
+                .range(0.0, 1000.0)
+                .soft(0.0, 100.0);
+            p.add("softness", "Softness", Value::Scalar(5.0), Unit::Pixels)
+                .range(0.0, 500.0)
+                .soft(0.0, 50.0)
+                .hint("Blur radius of the shadow, in layer pixels.");
+            if !inner {
+                p.add("shadow_only", "Shadow Only", Value::Bool(false), Unit::None);
+            }
+        },
+    )
+}
+
+fn glow() -> EffectDef {
+    let mut d = def(
+        ids::GLOW,
+        "Glow",
+        Category::Stylize,
+        "Makes bright areas bleed light into their surroundings.",
+        |p| {
+            p.add(
+                "threshold",
+                "Threshold",
+                Value::Scalar(0.5),
+                Unit::Normalized,
+            )
+            .range(0.0, 2.0)
+            .soft(0.0, 1.0)
+            .hint("Only light brighter than this glows (linear light).");
+            p.add("radius", "Radius", Value::Scalar(15.0), Unit::Pixels)
+                .range(0.0, 500.0)
+                .soft(0.0, 100.0);
+            p.add("intensity", "Intensity", Value::Scalar(1.0), Unit::Factor)
+                .range(0.0, 10.0)
+                .soft(0.0, 4.0);
+        },
+    );
+    d.space = EffectSpace::Linear;
+    d
+}
+
+fn stroke() -> EffectDef {
+    def(
+        ids::STROKE,
+        "Stroke",
+        Category::Stylize,
+        "Draws an even outline around the layer's shape.",
+        |p| {
+            p.add(
+                "color",
+                "Color",
+                Value::Color(LinearRgba::new(1.0, 1.0, 1.0, 1.0)),
+                Unit::None,
+            )
+            .hide_alpha();
+            p.add("width", "Width", Value::Scalar(4.0), Unit::Pixels)
+                .range(0.0, 500.0)
+                .soft(0.0, 50.0)
+                .hint("How far the outline reaches out from the shape, in layer pixels.");
+            p.add("opacity", "Opacity", Value::Scalar(1.0), Unit::Normalized)
+                .range(0.0, 1.0);
+            p.add(
+                "outline_only",
+                "Outline Only",
+                Value::Bool(false),
+                Unit::None,
+            )
+            .hint("Show the outline without the layer.");
+        },
+    )
+}
+
+fn chroma_key() -> EffectDef {
+    def(
+        ids::CHROMA_KEY,
+        "Chroma Key",
+        Category::Keying,
+        "Makes one colour (like a green screen) transparent and removes its spill.",
+        |p| {
+            p.add(
+                "key_color",
+                "Key Color",
+                Value::Color(LinearRgba::from_srgb8(0, 177, 64, 255)),
+                Unit::None,
+            )
+            .hide_alpha();
+            p.add(
+                "tolerance",
+                "Tolerance",
+                Value::Scalar(0.15),
+                Unit::Normalized,
+            )
+            .range(0.0, 1.0)
+            .hint("How different a colour may be and still be keyed out.");
+            p.add(
+                "softness",
+                "Edge Softness",
+                Value::Scalar(0.1),
+                Unit::Normalized,
+            )
+            .range(0.0, 1.0);
+            p.add(
+                "spill",
+                "Spill Suppression",
+                Value::Scalar(0.5),
+                Unit::Normalized,
+            )
+            .range(0.0, 1.0)
+            .hint("Removes the key colour's tint from what remains.");
+        },
+    )
+}
+
+fn luma_key() -> EffectDef {
+    def(
+        ids::LUMA_KEY,
+        "Luma Key",
+        Category::Keying,
+        "Makes the dark (or bright) parts of the layer transparent.",
+        |p| {
+            p.add("mode", "Key Out", Value::Enum(0), Unit::None)
+                .choices(&["Darker", "Brighter"]);
+            p.add(
+                "threshold",
+                "Threshold",
+                Value::Scalar(0.1),
+                Unit::Normalized,
+            )
+            .range(0.0, 1.0);
+            p.add(
+                "softness",
+                "Edge Softness",
+                Value::Scalar(0.1),
+                Unit::Normalized,
+            )
+            .range(0.0, 1.0);
+        },
+    )
+}
+
+fn matte_choker() -> EffectDef {
+    def(
+        ids::MATTE_CHOKER,
+        "Matte Choker",
+        Category::Keying,
+        "Shrinks or grows the layer's transparency edges, then softens them.",
+        |p| {
+            p.add("choke", "Choke", Value::Scalar(1.0), Unit::Pixels)
+                .range(-100.0, 100.0)
+                .soft(-20.0, 20.0)
+                .hint("Positive shrinks the matte, negative grows it, in layer pixels.");
+            p.add("softness", "Softness", Value::Scalar(1.0), Unit::Pixels)
+                .range(0.0, 100.0)
+                .soft(0.0, 20.0);
+        },
+    )
+}
+
+const POINT_HINT: &str = "In layer pixels. Drag the handle in the viewer.";
+
+fn transform() -> EffectDef {
+    def(
+        ids::TRANSFORM,
+        "Transform",
+        Category::Distort,
+        "Moves, scales and rotates the layer's pixels inside its effect stack.",
+        |p| {
+            p.add(
+                "anchor",
+                "Anchor Point",
+                Value::Vec2(DVec2::ZERO),
+                Unit::Pixels,
+            )
+            .point()
+            .hint("The point scaling and rotation turn around.");
+            p.add(
+                "position",
+                "Position",
+                Value::Vec2(DVec2::ZERO),
+                Unit::Pixels,
+            )
+            .point()
+            .hint("Where the anchor point ends up.");
+            p.add("scale", "Scale", Value::Vec2(DVec2::ONE), Unit::Factor)
+                .range(-100.0, 100.0)
+                .soft(0.0, 4.0);
+            p.add("rotation", "Rotation", Value::Scalar(0.0), Unit::Degrees)
+                .soft(-180.0, 180.0);
+            p.add("opacity", "Opacity", Value::Scalar(1.0), Unit::Normalized)
+                .range(0.0, 1.0);
+        },
+    )
+}
+
+fn mirror() -> EffectDef {
+    def(
+        ids::MIRROR,
+        "Mirror",
+        Category::Distort,
+        "Reflects one side of the layer onto the other.",
+        |p| {
+            p.add(
+                "center",
+                "Reflection Center",
+                Value::Vec2(DVec2::ZERO),
+                Unit::Pixels,
+            )
+            .point()
+            .hint(POINT_HINT);
+            p.add(
+                "angle",
+                "Reflection Angle",
+                Value::Scalar(0.0),
+                Unit::Degrees,
+            )
+            .soft(-180.0, 180.0)
+            .hint("0° mirrors the left side onto the right; positive angles turn clockwise.");
+        },
+    )
+}
+
+fn wave() -> EffectDef {
+    def(
+        ids::WAVE,
+        "Wave",
+        Category::Distort,
+        "Bends the layer in parallel waves, like a flag.",
+        |p| {
+            p.add("amplitude", "Amplitude", Value::Scalar(10.0), Unit::Pixels)
+                .range(0.0, 500.0)
+                .soft(0.0, 100.0);
+            p.add(
+                "wavelength",
+                "Wavelength",
+                Value::Scalar(60.0),
+                Unit::Pixels,
+            )
+            .range(1.0, 5000.0)
+            .soft(5.0, 500.0);
+            p.add("direction", "Direction", Value::Scalar(0.0), Unit::Degrees)
+                .soft(-180.0, 180.0)
+                .hint("Where the waves travel: 0° is right, positive angles turn clockwise.");
+            p.add("phase", "Phase", Value::Scalar(0.0), Unit::Degrees)
+                .soft(-360.0, 360.0)
+                .hint("Animate this to make the waves move.");
+        },
+    )
+}
+
+fn ripple() -> EffectDef {
+    def(
+        ids::RIPPLE,
+        "Ripple",
+        Category::Distort,
+        "Rings spreading from a centre, like a stone dropped in water.",
+        |p| {
+            p.add("center", "Center", Value::Vec2(DVec2::ZERO), Unit::Pixels)
+                .point()
+                .hint(POINT_HINT);
+            p.add("amplitude", "Amplitude", Value::Scalar(4.0), Unit::Pixels)
+                .range(0.0, 500.0)
+                .soft(0.0, 50.0);
+            p.add(
+                "wavelength",
+                "Wavelength",
+                Value::Scalar(30.0),
+                Unit::Pixels,
+            )
+            .range(1.0, 5000.0)
+            .soft(5.0, 300.0);
+            p.add("phase", "Phase", Value::Scalar(0.0), Unit::Degrees)
+                .soft(-360.0, 360.0)
+                .hint("Animate this to make the rings move outwards.");
+        },
+    )
+}
+
+fn bulge() -> EffectDef {
+    def(
+        ids::BULGE,
+        "Bulge",
+        Category::Distort,
+        "Swells (or pinches) a round area, like a lens.",
+        |p| {
+            p.add("center", "Center", Value::Vec2(DVec2::ZERO), Unit::Pixels)
+                .point()
+                .hint(POINT_HINT);
+            p.add("radius", "Radius", Value::Scalar(100.0), Unit::Pixels)
+                .range(1.0, 10_000.0)
+                .soft(10.0, 1000.0);
+            p.add("amount", "Amount", Value::Scalar(0.5), Unit::Normalized)
+                .range(-1.0, 1.0)
+                .hint("Positive swells the centre, negative pinches it.");
+        },
+    )
+}
+
+fn tile() -> EffectDef {
+    def(
+        ids::TILE,
+        "Tile",
+        Category::Distort,
+        "Repeats the layer in a grid of smaller copies.",
+        |p| {
+            p.add(
+                "center",
+                "Tile Center",
+                Value::Vec2(DVec2::ZERO),
+                Unit::Pixels,
+            )
+            .point()
+            .hint("The centre of one tile. Drag the handle in the viewer.");
+            p.add(
+                "tile_size",
+                "Tile Size",
+                Value::Vec2(DVec2::splat(0.5)),
+                Unit::Factor,
+            )
+            .range(0.01, 10.0)
+            .soft(0.05, 2.0)
+            .hint("Each tile's size, relative to the layer.");
+            p.add(
+                "output_size",
+                "Output Size",
+                Value::Vec2(DVec2::ONE),
+                Unit::Factor,
+            )
+            .range(0.01, 10.0)
+            .soft(0.1, 4.0)
+            .hint("The tiled area, relative to the layer and centred on it.");
+            p.add("mirror", "Mirror Edges", Value::Bool(false), Unit::None)
+                .hint("Flip every other tile, so neighbouring edges match.");
+        },
+    )
+}
+
+/// The transitions share Progress, Auto and the hidden B layer (design §5).
+fn transition(id: &str) -> EffectDef {
+    let (name, description) = match id {
+        ids::WIPE => ("Wipe", "Wipes the layer away behind a moving edge."),
+        ids::SLIDE => ("Slide", "Slides the layer out of its frame."),
+        ids::ZOOM => ("Zoom", "Zooms into the layer while it fades away."),
+        _ => ("Crossfade", "Fades the layer out."),
+    };
+    def(id, name, Category::Transition, description, |p| {
+        p.add("progress", "Progress", Value::Scalar(0.0), Unit::Normalized)
+            .range(0.0, 1.0)
+            .hint("0 shows the layer, 1 finishes the transition. Used when Auto is off.");
+        p.add("auto", "Auto", Value::Bool(true), Unit::None)
+            .hint("Run the transition over the layer's whole duration.");
+        // The layer transitioned to: its plain source, placed by its
+        // transform (Q-E1); none is a transition to transparency.
+        p.add("layer_b", "Transition To", Value::Layer(None), Unit::None)
+            .hint("The layer to show at the end. Its own effects are not used.");
+        match id {
+            ids::WIPE => {
+                p.add("angle", "Angle", Value::Scalar(0.0), Unit::Degrees)
+                    .soft(-180.0, 180.0)
+                    .hint("The direction the edge moves: 0° is left to right, clockwise.");
+                p.add("feather", "Feather", Value::Scalar(20.0), Unit::Pixels)
+                    .range(0.0, 1000.0)
+                    .soft(0.0, 200.0);
+            }
+            ids::SLIDE => {
+                p.add("direction", "Direction", Value::Scalar(0.0), Unit::Degrees)
+                    .soft(-180.0, 180.0)
+                    .hint("Where the layer slides to: 0° is right, clockwise.");
+            }
+            ids::ZOOM => {
+                p.add("zoom", "Zoom", Value::Scalar(4.0), Unit::Factor)
+                    .range(1.0, 100.0)
+                    .soft(1.0, 10.0)
+                    .hint("How much larger the layer is at the end.");
+            }
+            _ => {}
+        }
+    })
+}
+
+fn displacement_map() -> EffectDef {
+    const CHANNELS: &[&str] = &["Red", "Green", "Blue", "Alpha", "Luminance"];
+    def(
+        ids::DISPLACEMENT_MAP,
+        "Displacement Map",
+        Category::Distort,
+        "Shifts pixels by the brightness of another layer.",
+        |p| {
+            p.add(
+                "map_layer",
+                "Displacement Map Layer",
+                Value::Layer(None),
+                Unit::None,
+            )
+            .hint("Its own pixels, placed by its transform; its effects are not used.");
+            p.add(
+                "h_channel",
+                "Use For Horizontal",
+                Value::Enum(0),
+                Unit::None,
+            )
+            .choices(CHANNELS);
+            p.add(
+                "h_amount",
+                "Max Horizontal Displacement",
+                Value::Scalar(10.0),
+                Unit::Pixels,
+            )
+            .range(-1000.0, 1000.0)
+            .soft(-100.0, 100.0);
+            p.add("v_channel", "Use For Vertical", Value::Enum(1), Unit::None)
+                .choices(CHANNELS);
+            p.add(
+                "v_amount",
+                "Max Vertical Displacement",
+                Value::Scalar(10.0),
+                Unit::Pixels,
+            )
+            .range(-1000.0, 1000.0)
+            .soft(-100.0, 100.0);
         },
     )
 }

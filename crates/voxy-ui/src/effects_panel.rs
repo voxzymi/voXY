@@ -498,4 +498,49 @@ mod tests {
         s.new_document();
         assert_eq!(s.effects_preview, crate::state::EffectsPreview::default());
     }
+
+    #[test]
+    fn importing_a_lut_sets_the_parameter_in_one_step() {
+        let (mut s, layer) = state_with_layer();
+        let lut = listing(&s, "apply lut")[0].1[0].clone();
+        apply(&mut s, layer, lut);
+        s.selection = Some(layer);
+        let prop = s.selected_layer_effects()[0].params[0].id;
+        let dir = tempfile::tempdir().expect("dir");
+        let good = dir.path().join("look.cube");
+        let rows: Vec<String> = (0..8)
+            .map(|i| format!("{} {} {}", i & 1, (i >> 1) & 1, i >> 2))
+            .collect();
+        let text = format!("LUT_3D_SIZE 2\n{}\n", rows.join("\n"));
+        std::fs::write(&good, text).expect("write");
+        let bad = dir.path().join("broken.cube");
+        std::fs::write(&bad, "LUT_3D_SIZE 2\n0 0 0\n").expect("write");
+
+        let revision = s.history.revision();
+        s.import_lut_path_for(&bad, prop);
+        assert_eq!(
+            s.history.revision(),
+            revision,
+            "a damaged file changes nothing"
+        );
+
+        s.import_lut_path_for(&good, prop);
+        let doc = s.history.current().clone();
+        let lut = doc
+            .assets
+            .iter()
+            .find(|a| a.kind == voxy_core::AssetKind::Lut)
+            .expect("imported");
+        assert_eq!(
+            s.selected_layer_effects()[0].params[0].value_at(s.time),
+            voxy_core::Value::Asset(Some(lut.id))
+        );
+        // One undo removes both the LUT and the reference.
+        assert!(s.history.undo());
+        assert_eq!(s.history.current().assets.iter().count(), 0);
+        assert_eq!(
+            s.selected_layer_effects()[0].params[0].value_at(s.time),
+            voxy_core::Value::Asset(None)
+        );
+    }
 }

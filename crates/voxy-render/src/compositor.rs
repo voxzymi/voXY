@@ -1,6 +1,7 @@
 //! The wgpu compositor: executes a [`RenderPlan`].
 
 mod chain;
+mod lut;
 
 pub use chain::ChainStats;
 
@@ -182,6 +183,8 @@ enum Bind {
     Video(usize),
     Nested(u64),
     Chain(u64),
+    /// The result of the adjustment layer being drawn.
+    Adjust,
 }
 
 /// One prepared video frame on the GPU.
@@ -232,6 +235,8 @@ pub struct Compositor {
     source_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     blank_image: wgpu::BindGroup,
+    /// A transparent 1×1 texture: the layer input of kernels without one.
+    blank_view: wgpu::TextureView,
     uniform_stride: u64,
     layer_uniforms: Option<(wgpu::Buffer, wgpu::BindGroup, u64)>,
     output_flags: wgpu::Buffer,
@@ -249,13 +254,22 @@ pub struct Compositor {
     /// Rendered effect chains by chain content key.
     chains: HashMap<u64, chain::ChainEntry>,
     chain_stats: ChainStats,
-    effect_pipelines: HashMap<Kernel, wgpu::RenderPipeline>,
+    /// One pipeline per kernel stage (most kernels have one stage).
+    effect_pipelines: HashMap<(Kernel, u8), wgpu::RenderPipeline>,
+    effect_chain_layout: wgpu::BindGroupLayout,
     effect_uniform_layout: wgpu::BindGroupLayout,
     effect_input_layout: wgpu::BindGroupLayout,
+    /// LUT assets for the LUT effect, and their bind group layout.
+    luts: HashMap<AssetId, lut::LutEntry>,
+    lut_layout: wgpu::BindGroupLayout,
     effect_uniforms: Option<(wgpu::Buffer, wgpu::BindGroup, u64)>,
     effect_stride: u64,
     blend_pipeline: wgpu::RenderPipeline,
     backdrop: Option<Backdrop>,
+    /// The textures adjustment layers run their effects in.
+    adjust: Option<chain::ChainEntry>,
+    /// Uniforms for drawing layer inputs, apart from the composite's.
+    input_uniforms: Option<(wgpu::Buffer, wgpu::BindGroup, u64)>,
 }
 
 impl std::fmt::Debug for Compositor {
@@ -446,6 +460,8 @@ impl Compositor {
             usage: wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
+        // Textures start zeroed, so this one is transparent.
+        let blank_view = blank.create_view(&wgpu::TextureViewDescriptor::default());
         let blank_image = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("voxy-blank"),
             layout: &image_layout,
@@ -504,25 +520,55 @@ impl Compositor {
             WORKING_FORMAT,
             None,
         );
+        // Effect passes read the previous image (binding 0, with a sampler)
+        // and the kernel's own input (binding 2, for kernels that combine
+        // their result with it).
+        let effect_chain_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("voxy-effect-chain"),
+                entries: &[
+                    texture_entry(0),
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    texture_entry(2),
+                    texture_entry(3),
+                ],
+            });
+        let lut_layout = lut::lut_layout(device);
+        let layouts = [
+            Some(&effect_uniform_layout),
+            Some(&effect_chain_layout),
+            Some(&lut_layout),
+        ];
         let effect_pipelines = Kernel::ALL
             .iter()
-            .map(|&k| {
-                let body = format!(
-                    "{}\n{}",
-                    include_str!("shaders/effects/common.wgsl"),
-                    chain::kernel_shader(k)
-                );
-                let label = format!("voxy-effect-{}", k.type_id());
+            .flat_map(|&k| {
+                chain::kernel_shaders(k)
+                    .into_iter()
+                    .enumerate()
+                    .map(move |(stage, body)| (k, stage as u8, body))
+            })
+            .map(|(k, stage, body)| {
+                let body = format!("{}\n{}", include_str!("shaders/effects/common.wgsl"), body);
+                let label = format!("voxy-effect-{}-{stage}", k.type_id());
                 let module = shader(device, &label, &body, true);
                 let p = pipeline(
                     device,
                     &label,
                     &module,
-                    &[Some(&effect_uniform_layout), Some(&effect_input_layout)],
+                    if k.uses_lut() {
+                        &layouts[..]
+                    } else {
+                        &layouts[..2]
+                    },
                     WORKING_FORMAT,
                     None,
                 );
-                (k, p)
+                ((k, stage), p)
             })
             .collect();
 
@@ -542,6 +588,7 @@ impl Compositor {
             source_layout,
             sampler,
             blank_image,
+            blank_view,
             uniform_stride,
             layer_uniforms: None,
             output_flags,
@@ -560,10 +607,15 @@ impl Compositor {
             effect_pipelines,
             effect_uniform_layout,
             effect_input_layout,
+            luts: HashMap::new(),
+            lut_layout,
+            effect_chain_layout,
             effect_uniforms: None,
             effect_stride,
             blend_pipeline,
             backdrop: None,
+            adjust: None,
+            input_uniforms: None,
         }
     }
 
@@ -582,6 +634,7 @@ impl Compositor {
             self.asset_root = root;
             self.images.clear();
             self.failed.clear();
+            self.luts.clear();
             self.nested.clear();
             self.chains.clear();
         }
@@ -768,6 +821,24 @@ impl Compositor {
                     nested_keys[i] =
                         self.render_chain(device, queue, assets, video, chain, depth, report);
                 }
+                // Nested compositions an adjustment layer reads are
+                // rendered now: rendering one mid-composite would overwrite
+                // this composite's uniforms.
+                DrawSource::Adjustment { chain, .. } => {
+                    for input in chain.effects.iter().filter_map(|n| n.input.as_ref()) {
+                        if let DrawSource::Comp { plan: child, .. } = &input.source {
+                            self.render_nested(
+                                device,
+                                queue,
+                                assets,
+                                video,
+                                child,
+                                depth + 1,
+                                report,
+                            );
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -793,7 +864,10 @@ impl Compositor {
                         report.pending_video.push(asset);
                     }
                 }
-                DrawSource::Solid(_) | DrawSource::Comp { .. } | DrawSource::Chain { .. } => {}
+                DrawSource::Solid(_)
+                | DrawSource::Comp { .. }
+                | DrawSource::Chain { .. }
+                | DrawSource::Adjustment { .. } => {}
             }
         }
 
@@ -851,6 +925,12 @@ impl Compositor {
                         Some(Bind::Nested(key)),
                     )
                 }
+                DrawSource::Adjustment { opacity, .. } => (
+                    [*opacity, 0.0, 0.0, 0.0],
+                    1,
+                    draw.local_size,
+                    Some(Bind::Adjust),
+                ),
                 DrawSource::Chain { opacity, .. } => {
                     let Some(key) = nested_keys[i] else {
                         continue;
@@ -892,13 +972,54 @@ impl Compositor {
                 col2: [m.translation.x as f32, m.translation.y as f32, 0.0, 0.0],
                 size: [size.x as f32, size.y as f32, 0.0, 0.0],
                 color,
-                mode: [mode, crate::blend::mode_index(draw.blend), 0, 0],
+                mode: [
+                    mode,
+                    crate::blend::mode_index(draw.blend),
+                    u32::from(matches!(draw.source, DrawSource::Adjustment { .. })),
+                    0,
+                ],
             };
             let offset = uniform_bytes.len() as u64;
             uniform_bytes.extend_from_slice(bytemuck::bytes_of(&u));
             uniform_bytes.resize((offset + self.uniform_stride) as usize, 0);
-            draws.push((offset as u32, bind, draw.blend != BlendMode::Normal));
+            let adjust = match &draw.source {
+                DrawSource::Adjustment { chain, .. } => Some(Arc::clone(chain)),
+                _ => None,
+            };
+            // Blend modes and adjustment layers read what is below them.
+            let special = draw.blend != BlendMode::Normal || adjust.is_some();
+            draws.push((offset as u32, bind, special, adjust));
         }
+        // With adjustment layers the composite is built on transparency and
+        // the background goes under it at the end, so effects never touch
+        // the background (as in After Effects, it is not a layer).
+        let adjusted = draws.iter().any(|d| d.3.is_some());
+        let background = (adjusted && plan.clear[3] > 0.0).then(|| {
+            let m = clip_from_output
+                * DAffine2::from_scale(DVec2::new(f64::from(plan.width), f64::from(plan.height)));
+            let u = LayerUniform {
+                col0: [
+                    m.matrix2.x_axis.x as f32,
+                    m.matrix2.x_axis.y as f32,
+                    0.0,
+                    0.0,
+                ],
+                col1: [
+                    m.matrix2.y_axis.x as f32,
+                    m.matrix2.y_axis.y as f32,
+                    0.0,
+                    0.0,
+                ],
+                col2: [m.translation.x as f32, m.translation.y as f32, 0.0, 0.0],
+                size: [1.0, 1.0, 0.0, 0.0],
+                color: plan.clear.map(|v| v as f32),
+                mode: [0, 0, 2, 0],
+            };
+            let offset = uniform_bytes.len() as u64;
+            uniform_bytes.extend_from_slice(bytemuck::bytes_of(&u));
+            uniform_bytes.resize((offset + self.uniform_stride) as usize, 0);
+            offset as u32
+        });
         if !uniform_bytes.is_empty() {
             self.ensure_layer_uniforms(device, uniform_bytes.len() as u64);
             let (buffer, _, _) = self.layer_uniforms.as_ref().expect("ensured");
@@ -909,7 +1030,7 @@ impl Compositor {
         }
         // Normal draws share one pass; each draw with another blend mode
         // copies the target into the backdrop first and gets its own pass.
-        let [r, g, b, a] = plan.clear;
+        let [r, g, b, a] = if adjusted { [0.0; 4] } else { plan.clear };
         let mut load = wgpu::LoadOp::Clear(wgpu::Color { r, g, b, a });
         let mut start = 0;
         loop {
@@ -933,7 +1054,7 @@ impl Compositor {
                 });
                 if let Some((_, uniforms, _)) = &self.layer_uniforms {
                     pass.set_pipeline(&self.layer_pipeline);
-                    for (offset, bind, _) in &draws[start..end] {
+                    for (offset, bind, ..) in &draws[start..end] {
                         pass.set_bind_group(0, uniforms, &[*offset]);
                         pass.set_bind_group(1, self.image_group(*bind), &[]);
                         pass.draw(0..6, 0..1);
@@ -944,9 +1065,8 @@ impl Compositor {
             if end == draws.len() {
                 break;
             }
-            let (offset, bind, _) = draws[end];
-            if let (Some((_, uniforms, _)), Some(backdrop)) = (&self.layer_uniforms, &self.backdrop)
-            {
+            let (offset, bind, _, adjust) = draws[end].clone();
+            if let Some(backdrop) = &self.backdrop {
                 encoder.copy_texture_to_texture(
                     target_texture.as_image_copy(),
                     backdrop.texture.as_image_copy(),
@@ -956,6 +1076,30 @@ impl Compositor {
                         depth_or_array_layers: 1,
                     },
                 );
+            }
+            if let Some(chain) = &adjust {
+                // What is below must be drawn before the effects read it.
+                let done = std::mem::replace(
+                    encoder,
+                    device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("voxy-composite"),
+                    }),
+                );
+                queue.submit([done.finish()]);
+                self.render_adjustment(
+                    device,
+                    queue,
+                    assets,
+                    video,
+                    depth,
+                    chain,
+                    target_texture,
+                    (plan.width, plan.height),
+                    report,
+                );
+            }
+            if let (Some((_, uniforms, _)), Some(backdrop)) = (&self.layer_uniforms, &self.backdrop)
+            {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("voxy-blend"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -975,7 +1119,48 @@ impl Compositor {
                 pass.set_bind_group(2, &backdrop.bind_group, &[]);
                 pass.draw(0..6, 0..1);
             }
+            if adjust.is_some() {
+                // The next adjustment layer reuses the same textures.
+                let done = std::mem::replace(
+                    encoder,
+                    device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("voxy-composite"),
+                    }),
+                );
+                queue.submit([done.finish()]);
+            }
             start = end + 1;
+        }
+        if let (Some(offset), Some((_, uniforms, _)), Some(backdrop)) =
+            (background, &self.layer_uniforms, &self.backdrop)
+        {
+            encoder.copy_texture_to_texture(
+                target_texture.as_image_copy(),
+                backdrop.texture.as_image_copy(),
+                wgpu::Extent3d {
+                    width: plan.width,
+                    height: plan.height,
+                    depth_or_array_layers: 1,
+                },
+            );
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("voxy-background"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: target,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+            pass.set_pipeline(&self.blend_pipeline);
+            pass.set_bind_group(0, uniforms, &[offset]);
+            pass.set_bind_group(1, &self.blank_image, &[]);
+            pass.set_bind_group(2, &backdrop.bind_group, &[]);
+            pass.draw(0..6, 0..1);
         }
     }
 
@@ -994,6 +1179,10 @@ impl Compositor {
             Some(Bind::Chain(key)) => self
                 .chains
                 .get(&key)
+                .map_or(&self.blank_image, chain::ChainEntry::draw_group),
+            Some(Bind::Adjust) => self
+                .adjust
+                .as_ref()
                 .map_or(&self.blank_image, chain::ChainEntry::draw_group),
             None => &self.blank_image,
         }

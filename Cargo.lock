@@ -3760,6 +3760,10 @@ dependencies = [
 [[package]]
 name = "voxy-ofx-host"
 version = "0.1.0"
+dependencies = [
+ "tempfile",
+ "voxy-ofx-sys",
+]
 
 [[package]]
 name = "voxy-ofx-sandbox"
@@ -4667,7 +4671,10 @@ name = "xtask"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bindgen",
+ "serde",
  "serde_json",
+ "toml",
  "voxy-am-compat",
 ]
 

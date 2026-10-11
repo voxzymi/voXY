@@ -27,8 +27,8 @@ at `743b053` (merge of #3).
 - **P-0: plugin research.** The shortlist in `docs/ofx-plugins.md` is
   approved (Q1 to Q4). The credits data file is `third_party/credits.toml`,
   and the README and LICENSING.md credit blocks (between the
-  `credits:begin` and `credits:end` markers) are kept in sync by hand until
-  `cargo xtask credits --check` arrives in O-A. `docs/ofx-host.md` is
+  `credits:begin` and `credits:end` markers) are generated from it by
+  `cargo xtask credits` (O-A). `docs/ofx-host.md` is
   started.
 
 ## Next, in order
@@ -259,9 +259,206 @@ at `743b053` (merge of #3).
         definition. The first built-in users come in E-D.
 
    **E-C complete.** `cargo clippy -D warnings` (Rust 1.99) is clean, and
-   all 610 workspace tests pass on Linux.
-   Stop after E-C if the owner says so.
-4. E-D, then O-A to O-D.
+   all 610 workspace tests pass on Linux. CI green on all four platforms
+   (run 38070338244), and `main` fast-forwarded to `9e3665d`.
+4. E-D (in progress), group by group (design §5), each in small steps:
+   1. **Done:** Radial Blur (spin) and Zoom Blur, the first built-ins with
+      an on-canvas point (their centre).
+      - Kernels get a `PassContext` (texel scale, working space and the
+        buffer's origin in layer pixels), so position-based parameters
+        reach the shader in buffer texels.
+      - Region rules for both are tested on the CPU against sampled
+        geometry: every sample a pixel reads is inside the ROI, and every
+        pixel an input point reaches is inside the RoD.
+      - Core: `AddEffect` starts point parameters at the centre of the
+        layer's content when its size is known
+        (`Document::content_size`).
+      - Two goldens; `docs/effects.md` has the formulas. 613 workspace
+        tests pass, clippy clean.
+   2. **Done:** Levels (per channel or RGB, crossed points invert, no
+      clipping above white) and Posterize. Three goldens, a CPU test of
+      their parameter edge cases, and Levels joins the
+      defaults-pass-through test.
+   3. **Done:** Curves (RGB, red, green, blue and alpha) with a curve
+      editor in Effect Controls (`curve_editor.rs`).
+      - Core: `Curve::eval`, a monotone cubic (Fritsch–Carlson) in `f64`,
+        tested to pass through its points, never overshoot and hold flat
+        past the ends.
+      - The renderer bakes four 256-entry tables (the RGB curve folded into
+        red, green and blue), which fill the uniform's table exactly.
+      - Editor helpers (move within neighbours, insert, remove, limits) are
+        unit-tested; each edit is one `SetProperty`, so one drag is one undo
+        step. A golden, and Curves joins the defaults-pass-through test.
+        617 workspace tests pass, clippy clean.
+   4. **Done:** Color Balance (shadow, midtone and highlight shifts with
+      luma weights, optional preserve-luminosity). Two goldens.
+      - Effect Controls now draws parameter groups as collapsible sections,
+        nested (needed for OpenFX pages and groups too).
+      - Core: the registry checks groups (unique IDs, each parent listed
+        before its children, so no cycles). 617 tests pass, clippy clean.
+   5. **Done:** Gradient Map (shadow, midtone and highlight stops, a
+      midtone position and an amount). One golden.
+   6. **Done:** `AssetKind::Lut` with import, and Apply LUT (`.cube`).
+      - Core: `voxy_core::lut` (tolerant `.cube` parser, never panics, and
+        `CubeLut::apply`, the CPU reference). A LUT asset is never a layer
+        source (refused with the reason), and removing one clears the
+        parameters that used it, in the same undo step.
+      - **Format:** a project with a LUT asset is written as 0.7.0, like
+        effects (docs/voxy-format.md).
+      - Render: LUTs upload as 32-bit float 3D textures, read with
+        `textureLoad` and interpolated by hand (bind group 2 for the LUT
+        kernel only). A chain is re-rendered when a LUT's path changes, and
+        a missing LUT passes through, is reported, and is retried.
+      - UI: a LUT picker for asset parameters with "Import…" (one undo
+        step), LUTs in the Import dialog and Project panel (own icon,
+        Missing filter, relink).
+      - Tests: the parser, the GPU against the CPU reference in both working
+        spaces, the missing-file path, core rules, the import step.
+
+   **E-D group 2 complete.** 624 workspace tests pass, clippy clean.
+
+   Group 3, in steps:
+   1. **Done:** Vignette and Pixelate. Kernels now also get the layer's own
+      size (`PassContext::layer_size`), for effects relative to its edges.
+      Three goldens and a region test for Pixelate's block grid.
+   2. **Done:** Grain, the first seeded effect (design §3.4). The planner
+      gives seeded kernels their layer's ID (`EffectNode::seed`, in the
+      chain key) and keeps the frame only while Animate is on. Tests: same
+      frame bit-identical (also across compositors), next frame different,
+      Animate off still, one seed per layer; two goldens.
+   3. **Done:** Chromatic Aberration (red and blue scaled `1 ± k` around a
+      draggable centre). Region rules tested against sampled geometry; one
+      golden. CI green on all four platforms for group 2 (run 38123139130,
+      `bf3b52c`).
+   4. **Done:** Drop Shadow and Inner Shadow, on new chain machinery:
+      - Kernels can have several stages (shaders), with pipelines keyed by
+        kernel and stage.
+      - A kernel can keep its own input (bound as `orig`) while its passes
+        ping-pong between the other textures; only such chains get a third
+        texture. Landed first as its own commit with every golden
+        unchanged.
+      - Three goldens and a region and stage test.
+   5. **Done:** Glow, in linear light (design §3.5): bright pass, blur,
+      and an additive composite over the kept input. One golden.
+   6. **Done:** Stroke (outside, behind the layer, or the outline alone),
+      by jump flooding. Two goldens and an exact width check on the GPU.
+
+   **E-D group 3 complete.** 630 workspace tests pass, clippy clean.
+
+   Group 4:
+   1. **Done:** Chroma Key (YCbCr chroma distance, spill suppression along
+      the key's chroma), Luma Key (darker or brighter) and Matte Choker
+      (square erode or dilate, then blur). Numeric GPU tests on known
+      colours and edges, and two goldens.
+
+   **E-D group 4 complete.** 634 workspace tests pass, clippy clean.
+
+   Group 5:
+   1. **Done:** Transform, Mirror, Wave, Ripple and Bulge (inverse-mapped
+      bilinear sampling; maps in `f64`). Region rules tested against the
+      maps; Transform checked pixel by pixel on the GPU; five goldens.
+      - Found and fixed along the way: a kernel's RoD must contain its
+        input region, since one buffer holds every stage of a chain. Now a
+        tested invariant for every kernel across the parameter grid.
+   2. **Done:** Tile (tile size and output area relative to the layer,
+      optional mirrored edges). Region rules now take the layer's own
+      rectangle instead of the unused scale. A seam test on the GPU and
+      two goldens.
+   3. **Done** (after group 6): layer inputs and Displacement Map.
+      - Owner decision Q-E1 (a): an effect reading another layer gets its
+        plain source placed by its transform, without its effects, opacity
+        or blend mode (docs/effects.md, "Layer inputs").
+      - The planner resolves the input (`EffectNode::input`) and hashes its
+        source, size and placement into the chain key. The renderer draws
+        it into its own texture (bound as `layer_in`) through a separate
+        uniform buffer, so adjustment layers can read inputs mid-composite;
+        nested compositions an adjustment input needs are rendered before
+        the composite starts.
+      - The transitions' Transition To layer is now visible and used.
+
+   Group 6:
+   1. **Done:** adjustment layers render (design §1.5).
+      - Planned as one draw over the whole composition, after the layers
+        below, holding its effect nodes (none: no draw).
+      - The composite copies the target so far, runs the effects on it at
+        the target's size (sharing `run_effects` with layer chains), and
+        draws the result with "replace" semantics:
+        `mix(below, result, opacity)`, or with another blend mode
+        `mix(below, blend(below, result), opacity)`.
+      - With adjustment layers, the composite is built on transparency and
+        the composition's background goes under it at the end, so effects
+        never touch the background (as in After Effects).
+      - UI: New Adjustment Layer in the Layer menu and the action table.
+      - Tests: inverted below only, background untouched, a layer above
+        unaffected, effects off, opacity mix, Multiply against the CPU
+        reference, the plan, and a golden.
+   2. **Done:** Crossfade, Wipe, Slide and Zoom, with Progress and Auto
+      (`EvaluatedEffect::layer_progress`, from exact flicks; zeroed in the
+      plan unless Auto uses it, so time enters the key only then). The B
+      layer is a hidden layer reference, transparent until Q-E1 is
+      answered. Numeric GPU tests, Auto over the layer's duration, the key
+      rule, three goldens.
+
+   645 workspace tests pass, clippy clean. CI green on all four platforms
+   for groups 4 to 6 (run 38139556171, `7f795b4`, after one re-run of
+   macOS x64; see "Verified only on Linux" for the flake).
+
+   **E-D complete.** Tests for layer inputs: a map shifts by its value, the
+   input layer's own effects and opacity do not leak, its colour and
+   position change the key but its effects and opacity do not, deleting it
+   clears the reference in one undo step; two goldens. 650 workspace tests
+   pass, clippy clean.
+   Then groups 3 to 6 (group 6 brings adjustment-layer rendering and
+   the transitions).
+5. O-A: the OpenFX host, in-process test harness only (design §6). Steps:
+   1. **Done:** OpenFX 1.5.1 headers (`include/*.h`) and `LICENSE.md`
+      vendored into `third_party/openfx/`, with `VERSION` (tag, commit,
+      SHA-256 of each file). `.gitattributes` keeps them byte for byte.
+   2. **Done:** `cargo xtask bindgen [--check]` writes the checked-in
+      `voxy-ofx-sys/src/bindings.rs` (libclang 18, rustfmt'd). GPU and
+      OpenGL headers and `ofxOld.h` are left out; status codes are typed
+      `OfxStatus`; the plugin exports are not declared. A new Linux CI job
+      checks the header checksums and that regeneration gives no diff.
+   3. **Done:** `voxy_ofx_host::discovery`: pure `roots(os, env, extra)`
+      and `bundle_binaries(bundle, os, arch)`, plus a `scan` of the folders
+      (recursive, `@` names skipped, bundles not searched inside). Every
+      platform's rules are tested on every platform; the choices are in
+      `docs/ofx-host.md`.
+   4. Host suites in the in-process harness:
+      1. **Done:** `props::PropSet` (typed, multi-valued, host- or
+         plugin-writable), the live-handle registry, `OfxHost` and
+         `fetchSuite`, and the property and memory suites, tested through
+         `fetchSuite`. `voxy-ofx-host` needs Rust 1.99 (C-variadic
+         functions, for the parameter suite); the rest of the workspace
+         stays at 1.97.
+      2. **Done:** message (V1/V2, with a C99 printf formatter), progress
+         (V1/V2, abort replies no), time line and multi-thread suites
+         (recursive mutexes), on a host-side `effect::Effect` record. The
+         choices are in `docs/ofx-host.md`.
+      3. **Done:** parameter suite: `params::ParamSet` (descriptor and
+         instance), every type's descriptor properties, the variadic value
+         getters and setters, keys, derivative, integral, copy and edit
+         groups, over a `ParamValues` store (`LocalValues` in the
+         harness). Parametric parameters are refused as unsupported for
+         now. Choices in `docs/ofx-host.md`.
+      4. **Done:** image effect suite: the host property set
+         (`host::host_props`), effect descriptors (general and per
+         context) and instances (`effect::Effect`), clips, images
+         (bottom-up, aligned, with deterministic 8/16-bit conversion),
+         an `ImageSource` trait for clip images, and image memory.
+      5. **Done:** `suites::driver` runs a plugin's actions (Load,
+         Describe, DescribeInContext, CreateInstance, GetClipPreferences,
+         GetRegionOfDefinition, GetRegionsOfInterest, IsIdentity, Render,
+         sequence and instance-changed actions, DestroyInstance, Unload),
+         with the D2 output rule. A Rust test plugin written against the
+         raw C API runs its whole life through it.
+   5. **Done (ahead of 4):** `cargo xtask credits [--check]` generates the
+      README and LICENSING.md credit blocks from `third_party/credits.toml`
+      and runs in CI. The check refuses copyleft or non-permissive
+      licenses, unpinned commits, and downloads without a sha256; once
+      `third_party/ofx-fixtures.toml` exists, every fixture must be an
+      approved credit.
+6. O-B to O-D.
 
 ## Approved decisions
 
@@ -285,6 +482,9 @@ at `743b053` (merge of #3).
   - D8: W3C luma weights.
   - Also: OpenFX 1.5.1 headers, the macOS universal folder, and Custom
     parameters as the only plugin state.
+- Q-E1 (E-D): layer inputs read the referenced layer's plain source,
+  placed by its transform, without its effects or opacity (as After
+  Effects); documented in docs/effects.md.
 - P-0 answers:
   - Q1: the 11 BSD-3 OpenFX samples at `ab77951` are CI-only fixtures,
     never shipped.
@@ -304,6 +504,15 @@ at `743b053` (merge of #3).
 - CI uses the current stable Rust (1.99 since 2026-09-28), and so does
   local work now. Clippy 1.99 added `assert_is_empty`, and the new tests
   follow it.
+
+## Known flaky tests (outside the effects scope)
+
+- `voxy-media` `audio_decode::clip_on_the_timeline_plays_through_the_engine`
+  failed once on macOS x64 (run 38139556171, a sample came back as
+  silence) and passed on re-run. It drives the audio engine with 2 ms
+  sleeps while a decoder thread fills the buffer, so a slow runner can
+  underrun. Not touched by this work; worth making the test wait for the
+  decoder instead of sleeping, as a separate change.
 
 ## Verified only on Linux
 

@@ -130,6 +130,26 @@ jobs:
       - name: voxy-core tests, release (includes the pinned easing and legacy tables)
         run: cargo test --release --locked -p voxy-core --no-fail-fast
 
+  # The vendored OpenFX headers must match their recorded checksums, and the
+  # checked-in bindings must be what bindgen makes from them (design §6.1).
+  ofx-bindings:
+    name: OpenFX headers and bindings
+    # The bindings are generated with libclang 18 (Ubuntu 24.04's version).
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Header checksums
+        working-directory: third_party/openfx
+        run: grep -E '^[0-9a-f]{64}  ' VERSION | sha256sum --check --strict
+      - name: Install libclang
+        run: sudo apt-get update && sudo apt-get install -y libclang-18-dev
+      - name: Regenerate and compare
+        run: cargo xtask bindgen --check
+
   licenses:
     name: cargo-deny (licenses, advisories, bans)
     runs-on: ubuntu-22.04
@@ -148,3 +168,5 @@ jobs:
         run: cargo deny --log-level warn --manifest-path ./Cargo.toml --all-features check licenses bans sources
       - name: Third-party license list is up to date
         run: cargo xtask licenses --check
+      - name: Credits blocks and plugin license policy
+        run: cargo xtask credits --check

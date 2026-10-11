@@ -5,9 +5,10 @@
 # generated from (or read directly from) this file. Edit it here, never
 # in those places.
 #
-# Generator and CI check: `cargo xtask credits [--check]` (arrives with
-# O-A). Until then the README and LICENSING.md blocks between the
-# `credits:begin` / `credits:end` markers are kept in sync by hand.
+# Generator and CI check: `cargo xtask credits [--check]` rewrites the
+# README and LICENSING.md blocks between the `credits:begin` /
+# `credits:end` markers. The check also refuses copyleft or non-permissive
+# licenses, unpinned commits and downloads without a sha256.
 #
 # Fields:
 #   id          stable identifier, also used by the CI fixture list
