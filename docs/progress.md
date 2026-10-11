@@ -431,7 +431,10 @@ at `743b053` (merge of #3).
          `fetchSuite`. `voxy-ofx-host` needs Rust 1.99 (C-variadic
          functions, for the parameter suite); the rest of the workspace
          stays at 1.97.
-      2. Message, progress, time line and multi-thread suites.
+      2. **Done:** message (V1/V2, with a C99 printf formatter), progress
+         (V1/V2, abort replies no), time line and multi-thread suites
+         (recursive mutexes), on a host-side `effect::Effect` record. The
+         choices are in `docs/ofx-host.md`.
       3. Parameter suite (descriptors and instance values).
       4. Image effect suite (descriptors, clips, instances, images).
       5. The harness: a Rust test plugin driven through Load, Describe,

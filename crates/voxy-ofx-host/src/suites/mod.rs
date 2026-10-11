@@ -11,9 +11,15 @@
 #![allow(unsafe_code)]
 
 mod memory;
+mod message;
+mod printf;
+mod progress;
 mod property;
+mod thread;
+mod timeline;
 
 pub use memory::live_blocks;
+pub use message::take_unattached_messages;
 
 use std::collections::HashMap;
 use std::ffi::{CStr, c_char, c_int, c_void};
@@ -22,6 +28,7 @@ use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 
 use voxy_ofx_sys as ofx;
 
+use crate::effect::Effect;
 use crate::props::PropSet;
 
 /// Live objects reachable through handles, keyed by address. A handle is
@@ -57,6 +64,13 @@ impl<T> Registry<T> {
             .remove(&(Arc::as_ptr(obj) as usize));
     }
 
+    pub(crate) fn unregister_addr(&self, addr: usize) {
+        self.live
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&addr);
+    }
+
     pub(crate) fn get(&self, addr: usize) -> Option<Arc<T>> {
         self.live
             .lock()
@@ -67,6 +81,7 @@ impl<T> Registry<T> {
 }
 
 pub(crate) static PROP_SETS: LazyLock<Registry<PropSet>> = LazyLock::new(Registry::new);
+pub(crate) static EFFECTS: LazyLock<Registry<Effect>> = LazyLock::new(Registry::new);
 
 /// The handle the plugin sees for `set`, registering it if needed.
 pub fn prop_handle(set: &Arc<PropSet>) -> ofx::OfxPropertySetHandle {
@@ -76,6 +91,18 @@ pub fn prop_handle(set: &Arc<PropSet>) -> ofx::OfxPropertySetHandle {
 /// Withdraws `set`'s handle.
 pub fn release_prop_handle(set: &Arc<PropSet>) {
     PROP_SETS.unregister(set);
+}
+
+/// The `OfxImageEffectHandle` the plugin sees for `fx`, registering it if
+/// needed. The message, progress and time line suites take it (as a
+/// `void *`).
+pub fn effect_handle(fx: &Arc<Effect>) -> ofx::OfxImageEffectHandle {
+    EFFECTS.register(fx) as ofx::OfxImageEffectHandle
+}
+
+/// Withdraws `fx`'s handle.
+pub fn release_effect_handle(fx: &Arc<Effect>) {
+    EFFECTS.unregister(fx);
 }
 
 /// Runs a suite body, turning a panic into `kOfxStatErrUnknown`.
@@ -99,6 +126,11 @@ fn suite(name: &CStr, version: c_int) -> *const c_void {
     let p: *const c_void = match (name, version) {
         (n, 1) if n == ofx::kOfxPropertySuite => (&raw const property::SUITE).cast(),
         (n, 1) if n == ofx::kOfxMemorySuite => (&raw const memory::SUITE).cast(),
+        (n, 1 | 2) if n == ofx::kOfxMessageSuite => (&raw const message::SUITE).cast(),
+        (n, 1) if n == ofx::kOfxProgressSuite => (&raw const progress::SUITE_V1).cast(),
+        (n, 2) if n == ofx::kOfxProgressSuite => (&raw const progress::SUITE_V2).cast(),
+        (n, 1) if n == ofx::kOfxTimeLineSuite => (&raw const timeline::SUITE).cast(),
+        (n, 1) if n == ofx::kOfxMultiThreadSuite => (&raw const thread::SUITE).cast(),
         _ => std::ptr::null(),
     };
     p

@@ -80,6 +80,26 @@ Checked against OpenFX 1.5.1, "Packaging OFX Plug-ins".
   - A null name, value or out pointer gives `kOfxStatErrValue`.
   - A returned string points at the stored value and stays valid until
     that property changes.
+- **Message suite (V1, V2; one struct serves both).** The printf-style
+  arguments are formatted by voXY's own C99 formatter (the Windows runtime
+  exports no `vsnprintf`). `%n` is ignored, never written through.
+  `long double` (`%L…`), `%a` and unknown conversions end the text with
+  `…`, because their argument size is unknown. A null handle is allowed
+  for transient messages. A question gets `kOfxStatFailed`: the sandbox
+  has no user to ask, and the spec makes questions an error outside an
+  interactive session. Persistent messages accept error, warning and
+  message types only.
+- **Progress suite (V1, V2).** An update returns `kOfxStatReplyNo` once
+  the host asks the effect to abort. Fractions are clamped to 0–1.
+- **Time line suite (V1).** The plugin sees the time and bounds the host
+  sets. `gotoTime` gets `kOfxStatFailed`: a plugin in the sandbox cannot
+  move the editor's playhead.
+- **Multi-thread suite (V1).** `multiThread` runs `min(nThreads, CPUs)`
+  threads (all CPUs for 0), each index once, and refuses a call from a
+  spawned thread with `kOfxStatErrExists`. Mutexes are recursive;
+  `mutexCreate` with a lock count of n is held n times by the creating
+  thread; unlocking a mutex the thread does not hold gives
+  `kOfxStatFailed`.
 - **Memory suite (V1).** Blocks are 64-byte aligned. Freeing a pointer the
   suite did not hand out, or freeing twice, gives `kOfxStatErrBadHandle`.
 
