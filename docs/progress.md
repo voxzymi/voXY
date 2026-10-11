@@ -364,9 +364,17 @@ at `743b053` (merge of #3).
       optional mirrored edges). Region rules now take the layer's own
       rectangle instead of the unused scale. A seam test on the GPU and
       two goldens.
-   3. Layer inputs for effects (another layer rendered into the chain), and
-      Displacement Map on top of them. Transitions in group 6 reuse them.
-      **Waiting on Q-E1** (see Open questions); group 6 goes first.
+   3. **Done** (after group 6): layer inputs and Displacement Map.
+      - Owner decision Q-E1 (a): an effect reading another layer gets its
+        plain source placed by its transform, without its effects, opacity
+        or blend mode (docs/effects.md, "Layer inputs").
+      - The planner resolves the input (`EffectNode::input`) and hashes its
+        source, size and placement into the chain key. The renderer draws
+        it into its own texture (bound as `layer_in`) through a separate
+        uniform buffer, so adjustment layers can read inputs mid-composite;
+        nested compositions an adjustment input needs are rendered before
+        the composite starts.
+      - The transitions' Transition To layer is now visible and used.
 
    Group 6:
    1. **Done:** adjustment layers render (design §1.5).
@@ -395,9 +403,11 @@ at `743b053` (merge of #3).
    for groups 4 to 6 (run 38139556171, `7f795b4`, after one re-run of
    macOS x64; see "Verified only on Linux" for the flake).
 
-   **E-D is complete except Displacement Map and the B layer of the
-   transitions, both waiting on Q-E1.** `docs/effects.md` covers every
-   built-in effect.
+   **E-D complete.** Tests for layer inputs: a map shifts by its value, the
+   input layer's own effects and opacity do not leak, its colour and
+   position change the key but its effects and opacity do not, deleting it
+   clears the reference in one undo step; two goldens. 650 workspace tests
+   pass, clippy clean.
    Then groups 3 to 6 (group 6 brings adjustment-layer rendering and
    the transitions).
 5. O-A to O-D.
@@ -424,6 +434,9 @@ at `743b053` (merge of #3).
   - D8: W3C luma weights.
   - Also: OpenFX 1.5.1 headers, the macOS universal folder, and Custom
     parameters as the only plugin state.
+- Q-E1 (E-D): layer inputs read the referenced layer's plain source,
+  placed by its transform, without its effects or opacity (as After
+  Effects); documented in docs/effects.md.
 - P-0 answers:
   - Q1: the 11 BSD-3 OpenFX samples at `ab77951` are CI-only fixtures,
     never shipped.
@@ -436,19 +449,7 @@ at `743b053` (merge of #3).
 
 ## Open questions waiting on the owner
 
-- **Q-E1: what a layer-reference input reads** (Displacement Map's map
-  layer, a transition's B layer, the effect matte, and later OpenFX
-  clips). The design (§1.4) renders the matte "in the effect layer's local
-  space" and mentions cycles, but does not decide what is rendered:
-  - (a, recommended) **The referenced layer's source, placed by its
-    transform** (with parents), without its effects, masks or opacity, as
-    After Effects does. No cycles are possible, it is cheap, and anyone who
-    wants the effects can precompose.
-  - (b) The layer as it appears in the composition, with its effects.
-    Needs cycle detection (a cycle reads as transparent, with a warning)
-    and renders the referenced layer once more per use.
-  Until this is answered, Displacement Map waits, and transitions run with
-  B transparent (a transition to nothing) — both work either way.
+- None.
 
 ## Toolchain
 

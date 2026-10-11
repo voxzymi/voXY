@@ -7,9 +7,7 @@
 
 use std::sync::Arc;
 
-use super::{
-    Category, EffectDef, EffectOrigin, EffectSpace, ParamBuilder, ParamGroup, ParamVisibility,
-};
+use super::{Category, EffectDef, EffectOrigin, EffectSpace, ParamBuilder, ParamGroup};
 use crate::color::LinearRgba;
 use crate::effect::EffectTypeId;
 use crate::property::Unit;
@@ -55,6 +53,7 @@ pub mod ids {
     pub const WIPE: &str = "voxy.transition.wipe";
     pub const SLIDE: &str = "voxy.transition.slide";
     pub const ZOOM: &str = "voxy.transition.zoom";
+    pub const DISPLACEMENT_MAP: &str = "voxy.distort.displacement_map";
 }
 
 /// Every built-in definition, in no particular order.
@@ -97,6 +96,7 @@ pub fn builtin_definitions() -> Vec<EffectDef> {
         transition(ids::WIPE),
         transition(ids::SLIDE),
         transition(ids::ZOOM),
+        displacement_map(),
     ]
 }
 
@@ -1016,11 +1016,10 @@ fn transition(id: &str) -> EffectDef {
             .hint("0 shows the layer, 1 finishes the transition. Used when Auto is off.");
         p.add("auto", "Auto", Value::Bool(true), Unit::None)
             .hint("Run the transition over the layer's whole duration.");
-        // The layer transitioned to. Hidden until what a layer input
-        // reads is decided (progress.md, Q-E1); until then it is empty,
-        // a transition to transparency.
-        let b = p.add("layer_b", "Transition To", Value::Layer(None), Unit::None);
-        b.flags.visibility = ParamVisibility::Hidden;
+        // The layer transitioned to: its plain source, placed by its
+        // transform (Q-E1); none is a transition to transparency.
+        p.add("layer_b", "Transition To", Value::Layer(None), Unit::None)
+            .hint("The layer to show at the end. Its own effects are not used.");
         match id {
             ids::WIPE => {
                 p.add("angle", "Angle", Value::Scalar(0.0), Unit::Degrees)
@@ -1044,4 +1043,48 @@ fn transition(id: &str) -> EffectDef {
             _ => {}
         }
     })
+}
+
+fn displacement_map() -> EffectDef {
+    const CHANNELS: &[&str] = &["Red", "Green", "Blue", "Alpha", "Luminance"];
+    def(
+        ids::DISPLACEMENT_MAP,
+        "Displacement Map",
+        Category::Distort,
+        "Shifts pixels by the brightness of another layer.",
+        |p| {
+            p.add(
+                "map_layer",
+                "Displacement Map Layer",
+                Value::Layer(None),
+                Unit::None,
+            )
+            .hint("Its own pixels, placed by its transform; its effects are not used.");
+            p.add(
+                "h_channel",
+                "Use For Horizontal",
+                Value::Enum(0),
+                Unit::None,
+            )
+            .choices(CHANNELS);
+            p.add(
+                "h_amount",
+                "Max Horizontal Displacement",
+                Value::Scalar(10.0),
+                Unit::Pixels,
+            )
+            .range(-1000.0, 1000.0)
+            .soft(-100.0, 100.0);
+            p.add("v_channel", "Use For Vertical", Value::Enum(1), Unit::None)
+                .choices(CHANNELS);
+            p.add(
+                "v_amount",
+                "Max Vertical Displacement",
+                Value::Scalar(10.0),
+                Unit::Pixels,
+            )
+            .range(-1000.0, 1000.0)
+            .soft(-100.0, 100.0);
+        },
+    )
 }

@@ -751,6 +751,7 @@ mod keys {
                     layer_progress: 0.0,
                 },
                 seed: 0,
+                input: None,
             }],
             scale,
             WorkingSpace::Linear,
@@ -1679,6 +1680,221 @@ mod transitions {
                 for (n, v) in manual(0.4).into_iter().chain(extra.clone()) {
                     set_param(&mut doc, *l, fx, n, v);
                 }
+            }
+            compare(name, &render(&gpu, &mut c, &doc, Time::ZERO, 1.0));
+        }
+    }
+}
+
+/// Effects that read another layer (Q-E1): they get its plain source,
+/// placed by its transform, without its effects or opacity.
+mod layer_inputs {
+    use super::*;
+    use voxy_core::command::SetEffectsEnabled;
+
+    /// A 40×20 transparent composition: A, a 20×10 white solid at (10, 5)
+    /// with effect `id`, and B under it, a 40×20 solid of `b_color` at
+    /// the origin with opacity 0 (hidden, as a map layer usually is).
+    fn doc(id: &str, b_color: [u8; 3]) -> (Document, LayerId, LayerId, usize) {
+        let mut doc = Document::with_comp(
+            "Inputs",
+            CompSettings {
+                width: 40,
+                height: 20,
+                background: LinearRgba::new(0.0, 0.0, 0.0, 0.0),
+                ..CompSettings::default()
+            },
+        );
+        doc.meta.working_space = WorkingSpace::SrgbCompat;
+        let comp = doc.main_comp.unwrap();
+        let mut ids = Vec::new();
+        for (color, size, pos) in [
+            (b_color, DVec2::new(40.0, 20.0), DVec2::ZERO),
+            (
+                [255, 255, 255],
+                DVec2::new(20.0, 10.0),
+                DVec2::new(10.0, 5.0),
+            ),
+        ] {
+            AddSolidLayer {
+                comp,
+                name: None,
+                color: LinearRgba::from_srgb8(color[0], color[1], color[2], 255),
+                index: 0,
+            }
+            .apply(&mut doc)
+            .unwrap();
+            let l = doc.main().unwrap().layers[0].clone();
+            if let voxy_core::LayerKind::Solid { size: s, .. } = &l.kind {
+                set(&mut doc, s.id, Value::Vec2(size));
+            }
+            set(&mut doc, l.transform.anchor.id, Value::Vec2(DVec2::ZERO));
+            set(&mut doc, l.transform.position.id, Value::Vec2(pos));
+            ids.push(l.id);
+        }
+        let (b, a) = (ids[0], ids[1]);
+        let opacity = doc.find_layer(b).unwrap().1.transform.opacity.id;
+        set(&mut doc, opacity, Value::Scalar(0.0));
+        let fx = add_effect(&mut doc, a, id);
+        let name = if id == ids::DISPLACEMENT_MAP {
+            "map_layer"
+        } else {
+            "layer_b"
+        };
+        set_param(&mut doc, a, fx, name, Value::Layer(Some(b)));
+        (doc, a, b, fx)
+    }
+
+    fn px(doc: &Document, x: u32, y: u32) -> [u8; 4] {
+        let gpu = gpu().unwrap();
+        let img = render(
+            &gpu,
+            &mut Compositor::new(&gpu.device),
+            doc,
+            Time::ZERO,
+            1.0,
+        );
+        let i = ((y * img.width + x) * 4) as usize;
+        img.pixels[i..i + 4].try_into().unwrap()
+    }
+
+    /// A red map pushes the horizontal shift to its maximum: A reads 4 px
+    /// to its right, so it appears 4 px further left.
+    #[test]
+    fn displacement_map_shifts_by_the_map() {
+        if gpu().is_none() {
+            return;
+        }
+        let (mut d, a, _, fx) = doc(ids::DISPLACEMENT_MAP, [255, 0, 0]);
+        set_param(&mut d, a, fx, "h_amount", Value::Scalar(4.0));
+        set_param(&mut d, a, fx, "v_amount", Value::Scalar(0.0));
+        // Within a level or two: the map's 16-bit float value makes the
+        // shift a hair under 4 px.
+        assert!(px(&d, 6, 10)[3] >= 250);
+        assert!(px(&d, 5, 10)[3] <= 5);
+        assert!(px(&d, 25, 10)[3] >= 250);
+        assert!(px(&d, 26, 10)[3] <= 5);
+        // With no map layer, nothing moves.
+        set_param(&mut d, a, fx, "map_layer", Value::Layer(None));
+        assert_eq!(px(&d, 6, 10)[3], 0);
+        assert_eq!(px(&d, 10, 10)[3], 255);
+    }
+
+    /// The referenced layer's own effects and opacity do not reach the
+    /// result: a crossfade to B at the end shows B's plain colour, even
+    /// with an Invert on B and B hidden.
+    #[test]
+    fn the_input_layers_own_effects_do_not_leak() {
+        if gpu().is_none() {
+            return;
+        }
+        let (mut d, a, b, fx) = doc(ids::CROSSFADE, [200, 30, 60]);
+        set_param(&mut d, a, fx, "auto", Value::Bool(false));
+        set_param(&mut d, a, fx, "progress", Value::Scalar(1.0));
+        add_effect(&mut d, b, ids::INVERT);
+        assert_eq!(px(&d, 20, 10), [200, 30, 60, 255]);
+        // Halfway: the mix of white and B.
+        set_param(&mut d, a, fx, "progress", Value::Scalar(0.5));
+        let half = px(&d, 20, 10);
+        assert!(
+            half[0].abs_diff(228) <= 2 && half[1].abs_diff(143) <= 2,
+            "{half:?}"
+        );
+        // Outside A's own region, B does not show.
+        assert_eq!(px(&d, 2, 2)[3], 0);
+    }
+
+    /// A's chain key follows B's content and placement, but not B's
+    /// effects or opacity.
+    #[test]
+    fn keys_follow_the_input_layers_content() {
+        let (mut d, a, b, _) = doc(ids::CROSSFADE, [200, 30, 60]);
+        let key = |d: &Document| {
+            let eval = voxy_core::evaluate(d, d.main_comp.unwrap(), Time::ZERO).unwrap();
+            let plan = voxy_render::RenderPlan::build(&eval, &RenderSettings::default());
+            plan.draws
+                .iter()
+                .find_map(|dr| match &dr.source {
+                    voxy_render::DrawSource::Chain { chain, .. } => {
+                        assert!(chain.effects[0].input.is_some());
+                        Some(chain.content_key())
+                    }
+                    _ => None,
+                })
+                .unwrap()
+        };
+        let first = key(&d);
+        let _ = a;
+        // B's effects and opacity are not part of its pixels here.
+        let fx = add_effect(&mut d, b, ids::INVERT);
+        assert_eq!(key(&d), first, "B's effects");
+        d.layer_mut(b).unwrap().effects[fx].enabled = false;
+        let opacity = d.find_layer(b).unwrap().1.transform.opacity.id;
+        set(&mut d, opacity, Value::Scalar(0.7));
+        assert_eq!(key(&d), first, "B's opacity");
+        // Its colour and its position are.
+        let color = match &d.find_layer(b).unwrap().1.kind {
+            voxy_core::LayerKind::Solid { color, .. } => color.id,
+            _ => unreachable!(),
+        };
+        set(
+            &mut d,
+            color,
+            Value::Color(LinearRgba::from_srgb8(10, 200, 30, 255)),
+        );
+        let recoloured = key(&d);
+        assert_ne!(recoloured, first, "B's colour");
+        let position = d.find_layer(b).unwrap().1.transform.position.id;
+        set(&mut d, position, Value::Vec2(DVec2::new(3.0, 0.0)));
+        assert_ne!(key(&d), recoloured, "B's position");
+        let _ = SetEffectsEnabled {
+            layer: b,
+            ids: vec![],
+            enabled: true,
+        };
+    }
+
+    #[test]
+    fn layer_input_goldens() {
+        let Some(gpu) = gpu() else { return };
+        let mut c = Compositor::new(&gpu.device);
+        // The scene's green layer displaces the orange one, and the orange
+        // one wipes to the green one.
+        for (name, id, params) in [
+            (
+                "effect_displacement_map",
+                ids::DISPLACEMENT_MAP,
+                vec![
+                    ("h_channel", Value::Enum(4)),
+                    ("h_amount", Value::Scalar(6.0)),
+                    ("v_amount", Value::Scalar(-4.0)),
+                ],
+            ),
+            (
+                "effect_wipe_to_layer",
+                ids::WIPE,
+                vec![
+                    ("auto", Value::Bool(false)),
+                    ("progress", Value::Scalar(0.5)),
+                ],
+            ),
+        ] {
+            let (mut doc, layers) = scene(WorkingSpace::SrgbCompat);
+            let fx = add_effect(&mut doc, layers[0], id);
+            let input = if id == ids::DISPLACEMENT_MAP {
+                "map_layer"
+            } else {
+                "layer_b"
+            };
+            set_param(
+                &mut doc,
+                layers[0],
+                fx,
+                input,
+                Value::Layer(Some(layers[1])),
+            );
+            for (n, v) in params {
+                set_param(&mut doc, layers[0], fx, n, v);
             }
             compare(name, &render(&gpu, &mut c, &doc, Time::ZERO, 1.0));
         }

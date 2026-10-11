@@ -235,6 +235,8 @@ pub struct Compositor {
     source_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     blank_image: wgpu::BindGroup,
+    /// A transparent 1×1 texture: the layer input of kernels without one.
+    blank_view: wgpu::TextureView,
     uniform_stride: u64,
     layer_uniforms: Option<(wgpu::Buffer, wgpu::BindGroup, u64)>,
     output_flags: wgpu::Buffer,
@@ -266,6 +268,8 @@ pub struct Compositor {
     backdrop: Option<Backdrop>,
     /// The textures adjustment layers run their effects in.
     adjust: Option<chain::ChainEntry>,
+    /// Uniforms for drawing layer inputs, apart from the composite's.
+    input_uniforms: Option<(wgpu::Buffer, wgpu::BindGroup, u64)>,
 }
 
 impl std::fmt::Debug for Compositor {
@@ -456,6 +460,8 @@ impl Compositor {
             usage: wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
+        // Textures start zeroed, so this one is transparent.
+        let blank_view = blank.create_view(&wgpu::TextureViewDescriptor::default());
         let blank_image = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("voxy-blank"),
             layout: &image_layout,
@@ -529,6 +535,7 @@ impl Compositor {
                         count: None,
                     },
                     texture_entry(2),
+                    texture_entry(3),
                 ],
             });
         let lut_layout = lut::lut_layout(device);
@@ -581,6 +588,7 @@ impl Compositor {
             source_layout,
             sampler,
             blank_image,
+            blank_view,
             uniform_stride,
             layer_uniforms: None,
             output_flags,
@@ -607,6 +615,7 @@ impl Compositor {
             blend_pipeline,
             backdrop: None,
             adjust: None,
+            input_uniforms: None,
         }
     }
 
@@ -811,6 +820,24 @@ impl Compositor {
                 DrawSource::Chain { chain, .. } => {
                     nested_keys[i] =
                         self.render_chain(device, queue, assets, video, chain, depth, report);
+                }
+                // Nested compositions an adjustment layer reads are
+                // rendered now: rendering one mid-composite would overwrite
+                // this composite's uniforms.
+                DrawSource::Adjustment { chain, .. } => {
+                    for input in chain.effects.iter().filter_map(|n| n.input.as_ref()) {
+                        if let DrawSource::Comp { plan: child, .. } = &input.source {
+                            self.render_nested(
+                                device,
+                                queue,
+                                assets,
+                                video,
+                                child,
+                                depth + 1,
+                                report,
+                            );
+                        }
+                    }
                 }
                 _ => {}
             }
@@ -1063,6 +1090,8 @@ impl Compositor {
                     device,
                     queue,
                     assets,
+                    video,
+                    depth,
                     chain,
                     target_texture,
                     (plan.width, plan.height),

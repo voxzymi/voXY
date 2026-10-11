@@ -7,6 +7,26 @@ is the specification of the WGSL kernels in
 `crates/voxy-core/src/registry/builtin.rs`. The design is in
 [`design-effects-ofx.md`](design-effects-ofx.md).
 
+## Layer inputs
+
+Some effects read another layer of the same composition: Displacement
+Map's map layer and every transition's Transition To layer (later also
+OpenFX clips). The rule (owner decision Q-E1, as in After Effects):
+
+- An effect gets the referenced layer's **plain source** (its solid,
+  image, video frame or nested composition), **placed by its transform**
+  (parents included) in the effect layer's space.
+- **Not included:** the referenced layer's own effects, its opacity, and
+  its blend mode. A hidden map layer (opacity 0) still works. To use a
+  layer with its effects, precompose it.
+- Only the effect layer's own region is computed: the input shows where
+  that region is, and nowhere else.
+- A layer outside its time range, a deleted layer, or none reads as
+  transparent. Deleting a referenced layer clears the reference in the same
+  undo step.
+- The input's source, size and placement are part of the effect chain's
+  cache key; its effects and opacity are not, since they never reach it.
+
 ## Conventions
 
 - **Buffers** are premultiplied RGBA16F in the project's working space:
@@ -631,6 +651,24 @@ region too, because one buffer holds every stage of a chain.
   the output and the layer, padded by 1 px. Region rules now receive the
   layer's own rectangle for this.
 
+### Displacement Map (`voxy.distort.displacement_map`, v1)
+
+| Parameter | Type | Range | Default |
+|---|---|---|---|
+| Displacement Map Layer (`map_layer`) | layer reference (see Layer inputs) | — | none |
+| Use For Horizontal (`h_channel`) | enum: Red, Green, Blue, Alpha, Luminance | — | Red |
+| Max Horizontal Displacement (`h_amount`) | scalar, layer px | −1000–1000 (slider ±100) | 10 |
+| Use For Vertical (`v_channel`) | enum, as above | — | Green |
+| Max Vertical Displacement (`v_amount`) | scalar, layer px | −1000–1000 (slider ±100) | 10 |
+
+- **Formula:** with `m` the map's pixel at `p` (its straight channel value
+  in `[0, 1]`, or Rec. 709 luma for Luminance, mixed towards the neutral
+  0.5 by the map's coverage), the pixel reads the input at
+  `p + 2·(m − 0.5)·amount` per axis: a bright map pulls pixels from the
+  right (or below), so the image moves left (or up). No map, or a
+  transparent one, changes nothing.
+- **Regions:** padded by the amounts + 1 px.
+
 ## Transitions
 
 Every transition (design §5) has:
@@ -639,26 +677,26 @@ Every transition (design §5) has:
 |---|---|---|---|
 | Progress (`progress`) | scalar, normalized | 0–1 | 0 |
 | Auto (`auto`) | bool | — | on |
-| Transition To (`layer_b`) | layer reference, hidden for now | — | none |
+| Transition To (`layer_b`) | layer reference (see Layer inputs) | — | none |
 
 - **Progress:** with Auto on, `t = (time − in)/(out − in)` over the layer's
   own duration (exact flicks, `EvaluatedEffect::layer_progress`); with it
   off, the Progress parameter (keyframable). Only then does time enter the
   chain's cache key.
-- **B:** the layer transitioned to is a hidden layer reference until open
-  question Q-E1 (what a layer input reads) is answered. Until then B is
-  transparent: each transition takes its layer away.
+- **B:** the Transition To layer, read as described under Layer inputs;
+  none is transparency, so the transition takes its layer away.
 - **Frame:** Slide and Zoom show nothing outside the layer's own rectangle.
-- **Crossfade** (`voxy.transition.crossfade`, v1): `out = A·(1 − t)`.
+- **Crossfade** (`voxy.transition.crossfade`, v1): `out = mix(A, B, t)`.
 - **Wipe** (`voxy.transition.wipe`, v1; Angle, 0° left to right and
   clockwise; Feather 0–1000 layer px, default 20): the edge moves along the
   angle's direction `d` across the layer's extent along `d`, widened by the
-  feather, and `out = A·smoothstep(e − f/2, e + f/2, p·d)`.
+  feather, and `out = mix(B, A, smoothstep(e − f/2, e + f/2, p·d))`.
 - **Slide** (`voxy.transition.slide`, v1; Direction, 0° right and
-  clockwise): A moves along `d` by `t` times the layer's extent along `d`.
+  clockwise): A moves along `d` by `t` times the layer's extent along `d`,
+  and B follows it in from behind, `out = A' + B'·(1 − A'.a)`.
 - **Zoom** (`voxy.transition.zoom`, v1; Zoom 1–100, default 4): A is
-  scaled by `1 + t·(zoom − 1)` around the layer's centre and faded by
-  `1 − t`.
+  scaled by `1 + t·(zoom − 1)` around the layer's centre and mixed into B,
+  `out = mix(B, A', 1 − t)`.
 - **Regions:** RoD = the input; ROI = the output (and, for Slide and Zoom,
   the layer). Progress 0 changes nothing.
 

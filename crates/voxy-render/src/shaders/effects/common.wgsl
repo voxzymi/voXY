@@ -25,6 +25,9 @@ struct EffectUniform {
 // The kernel's own input, for kernels that combine their result with it
 // (the same texture as `src` for the others).
 @group(1) @binding(2) var orig: texture_2d<f32>;
+// The layer the kernel reads (Displacement Map's map, a transition's B),
+// drawn in this buffer's texels; transparent when there is none.
+@group(1) @binding(3) var layer_in: texture_2d<f32>;
 
 @vertex
 fn vs_main(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
@@ -111,4 +114,23 @@ fn load_orig(p: vec2<i32>) -> vec4<f32> {
         return vec4<f32>(0.0);
     }
     return textureLoad(orig, p, 0);
+}
+
+// The layer input at integer coordinates; transparent outside.
+fn load_input(p: vec2<i32>) -> vec4<f32> {
+    let size = vec2<i32>(textureDimensions(layer_in));
+    if p.x < 0 || p.y < 0 || p.x >= size.x || p.y >= size.y {
+        return vec4<f32>(0.0);
+    }
+    return textureLoad(layer_in, p, 0);
+}
+
+// Bilinear sample of the layer input at `at` (texel units); transparent
+// outside it.
+fn sample_input(at: vec2<f32>) -> vec4<f32> {
+    let size = vec2<f32>(textureDimensions(layer_in));
+    if at.x < 0.0 || at.y < 0.0 || at.x > size.x || at.y > size.y {
+        return vec4<f32>(0.0);
+    }
+    return textureSampleLevel(layer_in, src_sampler, at / size, 0.0);
 }

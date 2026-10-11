@@ -518,3 +518,49 @@ fn luts_are_effect_inputs_not_layer_sources() {
             .value_at(Time::ZERO);
     assert_eq!(value, Value::Asset(Some(lut)));
 }
+
+/// Deleting the layer a Displacement Map or a transition reads clears the
+/// reference in the same undo step, and undo brings both back.
+#[test]
+fn deleting_an_input_layer_clears_the_reference_in_one_step() {
+    let mut f = fixture();
+    for (id, name) in [
+        (ids::DISPLACEMENT_MAP, "map_layer"),
+        (ids::CROSSFADE, "layer_b"),
+    ] {
+        let fx = add(&mut f.h, f.a, id);
+        let prop =
+            f.h.current()
+                .find_layer(f.a)
+                .unwrap()
+                .1
+                .effect(fx)
+                .unwrap()
+                .param(name)
+                .unwrap()
+                .id;
+        f.h.execute(voxy_core::command::SetProperty {
+            prop,
+            time: Time::ZERO,
+            value: Value::Layer(Some(f.b)),
+        })
+        .unwrap();
+    }
+    let read = |h: &History, name: &str| {
+        h.current()
+            .find_layer(f.a)
+            .unwrap()
+            .1
+            .effects
+            .iter()
+            .find_map(|e| e.param(name))
+            .unwrap()
+            .value_at(Time::ZERO)
+    };
+    f.h.execute(RemoveLayers { layers: vec![f.b] }).unwrap();
+    assert_eq!(read(&f.h, "map_layer"), Value::Layer(None));
+    assert_eq!(read(&f.h, "layer_b"), Value::Layer(None));
+    assert!(f.h.undo());
+    assert_eq!(read(&f.h, "map_layer"), Value::Layer(Some(f.b)));
+    assert_eq!(read(&f.h, "layer_b"), Value::Layer(Some(f.b)));
+}

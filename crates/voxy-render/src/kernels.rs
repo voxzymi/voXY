@@ -351,6 +351,12 @@ fn turns_rad(deg: f64) -> f32 {
     ((deg / 360.0).rem_euclid(1.0) * std::f64::consts::TAU) as f32
 }
 
+/// Displacement Map's largest horizontal and vertical shifts, layer px.
+fn displacement(fx: &EvaluatedEffect) -> (f64, f64) {
+    let amount = |name: &str| scalar(fx, name, 0.0).clamp(-1000.0, 1000.0);
+    (amount("h_amount"), amount("v_amount"))
+}
+
 /// A transition's progress, 0 to 1: the layer's own progress with Auto on.
 fn transition_progress(fx: &EvaluatedEffect) -> f64 {
     let t = if flag(fx, "auto") {
@@ -469,11 +475,12 @@ pub enum Kernel {
     Wipe,
     Slide,
     Zoom,
+    DisplacementMap,
 }
 
 impl Kernel {
     /// Every kernel.
-    pub const ALL: [Kernel; 37] = [
+    pub const ALL: [Kernel; 38] = [
         Kernel::Invert,
         Kernel::GaussianBlur,
         Kernel::BoxBlur,
@@ -511,6 +518,7 @@ impl Kernel {
         Kernel::Wipe,
         Kernel::Slide,
         Kernel::Zoom,
+        Kernel::DisplacementMap,
     ];
 
     /// The kernel running `type_id` at `version`, if this build has one.
@@ -530,6 +538,15 @@ impl Kernel {
     /// static effects render once.
     pub fn uses_frame(self, fx: &EvaluatedEffect) -> bool {
         self == Kernel::Grain && flag(fx, "animate")
+    }
+
+    /// The layer-reference parameter naming the layer the kernel reads.
+    pub fn layer_input(self) -> Option<&'static str> {
+        match self {
+            Kernel::DisplacementMap => Some("map_layer"),
+            k if k.is_transition() => Some("layer_b"),
+            _ => None,
+        }
     }
 
     /// A transition (design §5): Progress, Auto and a B layer.
@@ -607,6 +624,7 @@ impl Kernel {
             Kernel::Wipe => ids::WIPE,
             Kernel::Slide => ids::SLIDE,
             Kernel::Zoom => ids::ZOOM,
+            Kernel::DisplacementMap => ids::DISPLACEMENT_MAP,
         }
     }
 
@@ -842,8 +860,10 @@ impl Kernel {
                         let dir = DVec2::new(libm::cos(angle), libm::sin(angle));
                         let size = hi - lo;
                         let extent = dir.x.abs() * size.x + dir.y.abs() * size.y;
+                        // A leaves along d; B follows it in from behind.
                         let off = dir * extent * progress;
-                        k.p[0] = [off.x as f32, off.y as f32, 0.0, 0.0];
+                        let rest = dir * extent * (1.0 - progress);
+                        k.p[0] = [off.x as f32, off.y as f32, rest.x as f32, rest.y as f32];
                     }
                     _ => {
                         let zoom = scalar(fx, "zoom", 4.0).clamp(1.0, 100.0);
@@ -857,6 +877,16 @@ impl Kernel {
                         ];
                     }
                 }
+                vec![k]
+            }
+            Kernel::DisplacementMap => {
+                let (h, v) = displacement(fx);
+                if h == 0.0 && v == 0.0 {
+                    return Vec::new();
+                }
+                k.p[0] = [(h * s) as f32, (v * s) as f32, 0.0, 0.0];
+                k.i[0] = choice(fx, "h_channel").min(4);
+                k.i[1] = choice(fx, "v_channel").min(4);
                 vec![k]
             }
             Kernel::Tile => {
@@ -1213,6 +1243,10 @@ impl Kernel {
             | Kernel::Slide
             | Kernel::Zoom => DVec2::ZERO,
             Kernel::Wave | Kernel::Ripple => DVec2::splat(r("amplitude").min(500.0) + 1.0),
+            Kernel::DisplacementMap => {
+                let (h, v) = displacement(fx);
+                DVec2::new(h.abs(), v.abs()) + DVec2::ONE
+            }
             Kernel::Glow => DVec2::splat(r("radius").min(500.0) + 1.0),
             Kernel::Stroke => DVec2::splat(stroke_width(fx) + 1.0),
             // Growing reaches out by the choke; softening by its radius.
