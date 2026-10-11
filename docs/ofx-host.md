@@ -62,6 +62,27 @@ Checked against OpenFX 1.5.1, "Packaging OFX Plug-ins".
 - Discovery never loads a binary. Loading and Describe happen only in the
   sandbox (design §6.3).
 
+## Suites (O-A, `voxy_ofx_host::suites`)
+
+- `fetchSuite` returns null for any suite or version not implemented,
+  including the GPU and OpenGL render suites (D5), and for a host handle
+  that is not the host's.
+- Every handle a plugin passes is checked against the live-handle registry
+  first. A stale, null or made-up handle gets `kOfxStatErrBadHandle`; it
+  is never dereferenced. A panic inside a suite call is caught and
+  reported as `kOfxStatErrUnknown`; it never unwinds into the plugin.
+- **Property suite (V1).** Where the spec does not say:
+  - Getting or setting with the wrong type gives `kOfxStatErrValue`.
+  - Setting a property only the host may set gives `kOfxStatErrValue`.
+  - Setting past the end of a variable-dimension property grows it, and
+    `propSet*N` makes it exactly `count` long. Fixed dimensions refuse
+    indices outside them (`kOfxStatErrBadIndex`).
+  - A null name, value or out pointer gives `kOfxStatErrValue`.
+  - A returned string points at the stored value and stays valid until
+    that property changes.
+- **Memory suite (V1).** Blocks are 64-byte aligned. Freeing a pointer the
+  suite did not hand out, or freeing twice, gives `kOfxStatErrBadHandle`.
+
 ## Still to be written (O-A to O-D)
 
 Supported pixel depths and conversions, render scale, field order, pixel

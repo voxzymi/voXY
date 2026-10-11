@@ -3762,6 +3762,7 @@ name = "voxy-ofx-host"
 version = "0.1.0"
 dependencies = [
  "tempfile",
+ "voxy-ofx-sys",
 ]
 
 [[package]]

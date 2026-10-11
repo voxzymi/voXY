@@ -424,7 +424,18 @@ at `743b053` (merge of #3).
       (recursive, `@` names skipped, bundles not searched inside). Every
       platform's rules are tested on every platform; the choices are in
       `docs/ofx-host.md`.
-   4. Host suites in the in-process harness.
+   4. Host suites in the in-process harness:
+      1. **Done:** `props::PropSet` (typed, multi-valued, host- or
+         plugin-writable), the live-handle registry, `OfxHost` and
+         `fetchSuite`, and the property and memory suites, tested through
+         `fetchSuite`. `voxy-ofx-host` needs Rust 1.99 (C-variadic
+         functions, for the parameter suite); the rest of the workspace
+         stays at 1.97.
+      2. Message, progress, time line and multi-thread suites.
+      3. Parameter suite (descriptors and instance values).
+      4. Image effect suite (descriptors, clips, instances, images).
+      5. The harness: a Rust test plugin driven through Load, Describe,
+         DescribeInContext, CreateInstance and Render.
    5. **Done (ahead of 4):** `cargo xtask credits [--check]` generates the
       README and LICENSING.md credit blocks from `third_party/credits.toml`
       and runs in CI. The check refuses copyleft or non-permissive
