@@ -631,6 +631,19 @@ region too, because one buffer holds every stage of a chain.
   the output and the layer, padded by 1 px. Region rules now receive the
   layer's own rectangle for this.
 
+## Adjustment layers
+
+An adjustment layer (design §1.5) applies its effect stack to the
+composite of every layer below it, between its in and out points, over the
+whole composition (its transform is ignored except opacity). The result
+replaces what was below: `mix(below, result, opacity)` for Normal, and
+`mix(below, B(below, result), opacity)` with another blend mode `B`
+(premultiplied composite as in the blend-modes table). The composition's
+background is not a layer: with adjustment layers the layers are
+composited on transparency, the effects run on that, and the background
+goes under the finished composite. An adjustment layer without enabled
+effects does nothing.
+
 ## Blend modes
 
 A layer's blend mode decides how it combines with everything below it in

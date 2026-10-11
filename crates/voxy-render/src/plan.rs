@@ -93,6 +93,11 @@ pub enum DrawSource {
     /// layer-local space, and the result is drawn through the layer's
     /// transform with `opacity` (design-effects-ofx.md §3.1).
     Chain { chain: Arc<ChainPlan>, opacity: f32 },
+    /// An adjustment layer (design §1.5): `chain`'s effects run on the
+    /// composite of everything drawn before it (its source is a stand-in),
+    /// over the whole composition, and the result replaces what was
+    /// there, mixed by `opacity` and the draw's blend mode.
+    Adjustment { chain: Arc<ChainPlan>, opacity: f32 },
 }
 
 impl DrawSource {
@@ -116,6 +121,10 @@ impl DrawSource {
             },
             DrawSource::Comp { plan, opacity } => DrawSource::Comp {
                 plan: Arc::clone(plan),
+                opacity: opacity * factor,
+            },
+            DrawSource::Adjustment { chain, opacity } => DrawSource::Adjustment {
+                chain: Arc::clone(chain),
                 opacity: opacity * factor,
             },
             DrawSource::Chain { chain, opacity } => DrawSource::Chain {
@@ -413,8 +422,30 @@ impl Builder<'_> {
                     }
                     Nested::OutsideChild | Nested::Missing => continue,
                 },
-                // Draws nothing itself; its effects are applied from E-D.
-                EvaluatedContent::Adjustment => continue,
+                // Its effects apply to what is below, over the whole
+                // composition; without effects it does nothing.
+                EvaluatedContent::Adjustment => {
+                    if !chain {
+                        continue;
+                    }
+                    let comp = DVec2::new(f64::from(eval.width), f64::from(eval.height));
+                    self.draws.push(DrawOp {
+                        source: DrawSource::Adjustment {
+                            chain: Arc::new(ChainPlan::new(
+                                DrawSource::Solid([0.0; 4]),
+                                Some(comp),
+                                nodes,
+                                self.settings.scale,
+                                space,
+                            )),
+                            opacity: layer_opacity,
+                        },
+                        local_size: Some(comp),
+                        blend: l.blend,
+                        output_from_local: base,
+                    });
+                    continue;
+                }
             };
             let source = if chain {
                 DrawSource::Chain {
@@ -549,7 +580,7 @@ fn collect_source_assets(source: &DrawSource, out: &mut Vec<AssetId>) {
         DrawSource::Image { asset, .. } | DrawSource::Video { asset, .. } => out.push(*asset),
         DrawSource::Comp { plan, .. } => plan.collect_assets(out),
         DrawSource::Chain { chain, .. } => collect_source_assets(&chain.source, out),
-        DrawSource::Solid(_) => {}
+        DrawSource::Solid(_) | DrawSource::Adjustment { .. } => {}
     }
 }
 
@@ -584,6 +615,11 @@ fn hash_source(source: &DrawSource, h: &mut Fnv) {
         }
         DrawSource::Chain { chain, opacity } => {
             h.u32(5);
+            h.f32(*opacity);
+            h.u64(chain.key);
+        }
+        DrawSource::Adjustment { chain, opacity } => {
+            h.u32(6);
             h.f32(*opacity);
             h.u64(chain.key);
         }

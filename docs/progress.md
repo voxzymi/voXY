@@ -366,6 +366,25 @@ at `743b053` (merge of #3).
       two goldens.
    3. Layer inputs for effects (another layer rendered into the chain), and
       Displacement Map on top of them. Transitions in group 6 reuse them.
+      **Waiting on Q-E1** (see Open questions); group 6 goes first.
+
+   Group 6:
+   1. **Done:** adjustment layers render (design §1.5).
+      - Planned as one draw over the whole composition, after the layers
+        below, holding its effect nodes (none: no draw).
+      - The composite copies the target so far, runs the effects on it at
+        the target's size (sharing `run_effects` with layer chains), and
+        draws the result with "replace" semantics:
+        `mix(below, result, opacity)`, or with another blend mode
+        `mix(below, blend(below, result), opacity)`.
+      - With adjustment layers, the composite is built on transparency and
+        the composition's background goes under it at the end, so effects
+        never touch the background (as in After Effects).
+      - UI: New Adjustment Layer in the Layer menu and the action table.
+      - Tests: inverted below only, background untouched, a layer above
+        unaffected, effects off, opacity mix, Multiply against the CPU
+        reference, the plan, and a golden.
+   2. Transitions: crossfade, wipe, slide, zoom (progress and auto).
    Then groups 3 to 6 (group 6 brings adjustment-layer rendering and
    the transitions).
 5. O-A to O-D.
@@ -404,7 +423,19 @@ at `743b053` (merge of #3).
 
 ## Open questions waiting on the owner
 
-- None.
+- **Q-E1: what a layer-reference input reads** (Displacement Map's map
+  layer, a transition's B layer, the effect matte, and later OpenFX
+  clips). The design (§1.4) renders the matte "in the effect layer's local
+  space" and mentions cycles, but does not decide what is rendered:
+  - (a, recommended) **The referenced layer's source, placed by its
+    transform** (with parents), without its effects, masks or opacity, as
+    After Effects does. No cycles are possible, it is cheap, and anyone who
+    wants the effects can precompose.
+  - (b) The layer as it appears in the composition, with its effects.
+    Needs cycle detection (a cycle reads as transparent, with a warning)
+    and renders the referenced layer once more per use.
+  Until this is answered, Displacement Map waits, and transitions run with
+  B transparent (a transition to nothing) — both work either way.
 
 ## Toolchain
 

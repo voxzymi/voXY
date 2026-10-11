@@ -229,8 +229,9 @@ impl Compositor {
                     1,
                 )
             }
-            // The planner never nests chains.
-            DrawSource::Chain { .. } => return None,
+            // The planner never nests chains, and adjustment layers are
+            // rendered by `render_adjustment`.
+            DrawSource::Chain { .. } | DrawSource::Adjustment { .. } => return None,
         };
         let size = size.filter(|s| s.x > 0.0 && s.y > 0.0)?;
 
@@ -239,7 +240,6 @@ impl Compositor {
             .iter()
             .map(|n| (n.kernel, &n.effect))
             .collect();
-        let seeds: Vec<u64> = chain.effects.iter().map(|n| n.seed).collect();
         let rod = chain_rod(&nodes, Rect::of_size(size), Rect::of_size(size)).round_out();
         if rod.is_empty() {
             return None;
@@ -344,12 +344,6 @@ impl Compositor {
             pass.draw(0..6, 0..1);
         }
 
-        // The effects, ping-ponging between the two textures; a kernel may
-        // take several passes (a separable blur takes one per axis).
-        let stride = self.effect_stride;
-        let mut bytes = Vec::new();
-        let mut passes = Vec::new();
-        let mut lut_missing = false;
         let ctx = PassContext {
             texel_scale: s,
             space,
@@ -357,7 +351,109 @@ impl Compositor {
             layer_size: size,
             seed: 0,
         };
-        for ((kernel, fx), seed) in nodes.iter().zip(&seeds) {
+        let (cur, lut_missing) = self.run_effects(
+            device,
+            queue,
+            &mut encoder,
+            &mut entry,
+            &chain.effects,
+            ctx,
+            texels,
+            assets,
+            report,
+        );
+        queue.submit([encoder.finish()]);
+        self.chain_stats.renders += 1;
+        entry.result = cur;
+        entry.used = self.frame_counter;
+        entry.chain = Some(Arc::clone(chain));
+        entry.deps = deps;
+        // Drawn without a LUT it could not load: try again next frame.
+        entry.complete = !lut_missing;
+        self.chains.insert(key, entry);
+        Some(key)
+    }
+
+    /// Runs an adjustment layer's effects on `below`, the composite drawn so
+    /// far (`size` texels, the whole composition), and leaves the result in
+    /// `self.adjust` for the draw that mixes it back (design §1.5).
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn render_adjustment(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        assets: &AssetTable,
+        chain: &ChainPlan,
+        below: &wgpu::Texture,
+        size: (u32, u32),
+        report: &mut RenderReport,
+    ) {
+        let mut entry = match self.adjust.take() {
+            Some(e) if e.size == size => e,
+            _ => self.new_chain_target(device, size),
+        };
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("voxy-adjustment"),
+        });
+        encoder.copy_texture_to_texture(
+            below.as_image_copy(),
+            entry.textures[0].as_image_copy(),
+            wgpu::Extent3d {
+                width: size.0,
+                height: size.1,
+                depth_or_array_layers: 1,
+            },
+        );
+        let comp = chain.source_size.unwrap_or(DVec2::ONE);
+        let ctx = PassContext {
+            texel_scale: f64::from(size.0) / comp.x.max(1.0),
+            space: chain.working_space,
+            origin: DVec2::ZERO,
+            layer_size: comp,
+            seed: 0,
+        };
+        let (cur, _) = self.run_effects(
+            device,
+            queue,
+            &mut encoder,
+            &mut entry,
+            &chain.effects,
+            ctx,
+            size,
+            assets,
+            report,
+        );
+        queue.submit([encoder.finish()]);
+        entry.result = cur;
+        self.adjust = Some(entry);
+    }
+
+    /// Runs `effects` on `entry`, whose texture 0 holds their input, and
+    /// returns the texture holding the result and whether a LUT was missing
+    /// (design §3.1). Passes ping-pong between the textures; a kernel may
+    /// take several passes and keep its input while they run.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn run_effects(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        entry: &mut ChainEntry,
+        effects: &[crate::plan::EffectNode],
+        ctx: PassContext,
+        texels: (u32, u32),
+        assets: &AssetTable,
+        report: &mut RenderReport,
+    ) -> (usize, bool) {
+        // The effects, ping-ponging between the two textures; a kernel may
+        // take several passes (a separable blur takes one per axis).
+        let stride = self.effect_stride;
+        let mut bytes = Vec::new();
+        let mut passes = Vec::new();
+        let mut lut_missing = false;
+        let (s, space) = (ctx.texel_scale, ctx.space);
+        for node in effects {
+            let (kernel, fx, seed) = (&node.kernel, &node.effect, &node.seed);
             // A LUT that cannot be loaded passes the image through.
             let lut = kernel.asset(fx);
             if let Some(a) = lut
@@ -404,7 +500,7 @@ impl Compositor {
             }
         }
         if passes.iter().any(|(k, ..)| k.keeps_input()) {
-            self.grow_chain_target(device, &mut entry, 3);
+            self.grow_chain_target(device, entry, 3);
         }
         let mut cur = 0;
         // The texture holding the current kernel's input, while it runs.
@@ -458,16 +554,7 @@ impl Compositor {
                 self.chain_stats.passes += 1;
             }
         }
-        queue.submit([encoder.finish()]);
-        self.chain_stats.renders += 1;
-        entry.result = cur;
-        entry.used = self.frame_counter;
-        entry.chain = Some(Arc::clone(chain));
-        entry.deps = deps;
-        // Drawn without a LUT it could not load: try again next frame.
-        entry.complete = !lut_missing;
-        self.chains.insert(key, entry);
-        Some(key)
+        (cur, lut_missing)
     }
 
     fn chain_asset_paths(
@@ -479,7 +566,7 @@ impl Compositor {
         match &chain.source {
             DrawSource::Image { asset, .. } | DrawSource::Video { asset, .. } => ids.push(*asset),
             DrawSource::Comp { plan, .. } => ids = plan.assets(),
-            DrawSource::Solid(_) | DrawSource::Chain { .. } => {}
+            DrawSource::Solid(_) | DrawSource::Chain { .. } | DrawSource::Adjustment { .. } => {}
         }
         ids.extend(
             chain
@@ -524,6 +611,11 @@ impl Compositor {
         {
             return e;
         }
+        self.new_chain_target(device, size)
+    }
+
+    /// Two fresh textures of `size`.
+    fn new_chain_target(&self, device: &wgpu::Device, size: (u32, u32)) -> ChainEntry {
         let mut entry = ChainEntry {
             chain: None,
             deps: Vec::new(),
@@ -554,8 +646,10 @@ impl Compositor {
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: WORKING_FORMAT,
+                // COPY_DST: an adjustment layer's input is copied in.
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                    | wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             });
             let view = texture.create_view(&wgpu::TextureViewDescriptor::default());

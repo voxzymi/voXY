@@ -815,6 +815,19 @@ impl EditorState {
         self.select_top_layer();
     }
 
+    /// Adds an adjustment layer on top of the stack and selects it.
+    pub fn add_adjustment(&mut self) {
+        let Some(comp) = self.require_comp() else {
+            return;
+        };
+        self.execute(voxy_core::command::AddAdjustmentLayer {
+            comp,
+            name: None,
+            index: 0,
+        });
+        self.select_top_layer();
+    }
+
     pub fn import_image_dialog(&mut self) {
         let Some(path) = self.dialogs.pick_image() else {
             return;
@@ -1760,6 +1773,7 @@ impl EditorState {
                 }
             }
             Action::LayerNewSolid => self.add_solid(),
+            Action::LayerNewAdjustment => self.add_adjustment(),
             Action::LayerImportImage => self.import_image_dialog(),
             Action::LayerImportVideo => self.import_video_dialog(),
             Action::LayerDelete => self.delete_selection(),

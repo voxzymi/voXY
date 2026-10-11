@@ -221,6 +221,7 @@ impl VoxyApp {
             });
             ui.menu_button("Layer", |ui| {
                 self.item(ui, Action::LayerNewSolid);
+                self.item(ui, Action::LayerNewAdjustment);
                 self.item(ui, Action::LayerImportImage);
                 self.item(ui, Action::LayerImportVideo);
                 ui.separator();

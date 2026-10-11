@@ -783,3 +783,42 @@ fn kernel_parameters_are_finite_across_the_grid() {
         }
     }
 }
+
+/// An adjustment layer with effects plans as one draw over the whole
+/// composition, after the layers below it; without effects it plans none.
+#[test]
+fn adjustment_layers_plan_over_the_whole_composition() {
+    use voxy_core::command::AddAdjustmentLayer;
+    let (mut doc, comp, _) = doc();
+    AddAdjustmentLayer {
+        comp,
+        name: None,
+        index: 0,
+    }
+    .apply(&mut doc)
+    .unwrap();
+    let adj = doc.main().unwrap().layers[0].id;
+    assert_eq!(
+        plan(&doc, comp, Time::ZERO, 1.0).draws.len(),
+        1,
+        "no effects: no draw"
+    );
+    add(&mut doc, adj, ids::INVERT);
+    let p = plan(&doc, comp, Time::ZERO, 0.5);
+    assert_eq!(p.draws.len(), 2);
+    let last = &p.draws[1];
+    let DrawSource::Adjustment { chain, opacity } = &last.source else {
+        panic!("{:?}", last.source);
+    };
+    assert_eq!(*opacity, 1.0);
+    assert_eq!(chain.effects[0].kernel, Kernel::Invert);
+    assert_eq!(
+        last.local_size,
+        Some(voxy_core::glam::DVec2::new(100.0, 50.0))
+    );
+    // Composition pixels to output pixels at half resolution.
+    assert_eq!(
+        last.output_from_local,
+        voxy_core::glam::DAffine2::from_scale(voxy_core::glam::DVec2::splat(0.5))
+    );
+}

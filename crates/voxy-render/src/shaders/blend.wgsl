@@ -11,7 +11,10 @@ struct LayerUniform {
     col2: vec4<f32>,
     size: vec4<f32>,
     color: vec4<f32>,
-    // x: 0 = solid, 1 = image; y: blend mode (BlendMode::ALL order).
+    // x: 0 = solid, 1 = image; y: blend mode (BlendMode::ALL order); z: 1 =
+    // an adjustment layer's result, which replaces the backdrop (mixed by
+    // the opacity in color.x) instead of going over it; 2 = the background
+    // colour (color) goes under the backdrop.
     mode: vec4<u32>,
 };
 
@@ -163,6 +166,32 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     }
     let dst = textureLoad(backdrop, vec2<i32>(in.position.xy), 0);
     let mode = layer.mode.y;
+    if layer.mode.z == 2u {
+        return dst + layer.color * (1.0 - dst.a);
+    }
+    if layer.mode.z == 1u {
+        // Adjustment layer (design §1.5): the effects' result replaces
+        // what is below, or is blended with it, then mixed by opacity.
+        let fx = textureLoad(image, vec2<i32>(in.position.xy), 0);
+        var res = fx;
+        if mode != 0u {
+            res = composite(mode, dst, fx);
+        }
+        return mix(dst, res, layer.color.x);
+    }
+    var cb = straight(dst);
+    var cs = straight(src);
+    if clamps_inputs(mode) {
+        cb = clamp(cb, vec3<f32>(0.0), vec3<f32>(1.0));
+        cs = clamp(cs, vec3<f32>(0.0), vec3<f32>(1.0));
+    }
+    let b = blend_rgb(mode, cb, cs);
+    let rgb = src.rgb * (1.0 - dst.a) + dst.rgb * (1.0 - src.a) + src.a * dst.a * b;
+    return vec4<f32>(rgb, src.a + dst.a * (1.0 - src.a));
+}
+
+// Premultiplied `src` over `dst` with blend `mode` (as fs_main).
+fn composite(mode: u32, dst: vec4<f32>, src: vec4<f32>) -> vec4<f32> {
     var cb = straight(dst);
     var cs = straight(src);
     if clamps_inputs(mode) {
