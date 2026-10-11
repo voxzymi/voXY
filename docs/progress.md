@@ -410,7 +410,15 @@ at `743b053` (merge of #3).
    pass, clippy clean.
    Then groups 3 to 6 (group 6 brings adjustment-layer rendering and
    the transitions).
-5. O-A to O-D.
+5. O-A: the OpenFX host, in-process test harness only (design §6). Steps:
+   1. **Done:** OpenFX 1.5.1 headers (`include/*.h`) and `LICENSE.md`
+      vendored into `third_party/openfx/`, with `VERSION` (tag, commit,
+      SHA-256 of each file). `.gitattributes` keeps them byte for byte.
+   2. `cargo xtask bindgen` and the checked-in `voxy-ofx-sys` bindings.
+   3. `roots(os, env, prefs)` discovery paths and bundle layout.
+   4. Host suites in the in-process harness.
+   5. `cargo xtask credits --check`.
+6. O-B to O-D.
 
 ## Approved decisions
 

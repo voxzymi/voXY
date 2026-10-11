@@ -1,0 +1,29 @@
+# OpenFX headers vendored for voXY (design §6.1). Do not edit these files.
+# Only include/*.h and LICENSE.md are copied; BSD-3-Clause allows it.
+repository = https://github.com/AcademySoftwareFoundation/openfx
+tag = OFX_Release_1.5.1
+commit = ab779510b2655b4d11a7e01e5c521f9aa8c88976
+license = BSD-3-Clause
+
+# sha256  path
+63b0f0533a90223e7dbe5dd50b94821b069672f91797ac03dbbad496b4ca7d9b  LICENSE.md
+299f3d471b57889ddf5f50299bc74cb09f710d55a7def1406a49d5b5437e87c0  include/ofx-native-v1.5_aces-v1.3_ocio-v2.3.h
+136fa093735918a68e7e399b5626222eedb9a97caf9cff0ee7db2e87c0c67802  include/ofxColour.h
+ab6a64c157596bcf775cc79e480596cdd4f54cef4f6a2e7cab24b03455fe3847  include/ofxCore.h
+40e1244d066b12ccd59cb7688667dd77a6b20ed7e8a4ba48f573e804389e9c3f  include/ofxDialog.h
+4954665cb8c7015e30d52b24a6796addb98f02334bd35b2ad91b05c04ef0fddf  include/ofxDrawSuite.h
+2758c10422fc12621142cef798271e09f7a40613fc7f03ff72f97faf5351850e  include/ofxGPURender.h
+686f55e36527ac6f67861bd13ab1126a252b54ad80675f65d10f2979c38d9d5a  include/ofxImageEffect.h
+8480c758805c052589a0d2895e0aa4c18b88c735f0f01063517de15176df4b7b  include/ofxInteract.h
+9a47813d39bb9667f4a28d8dbbc9bf33ec050a50e112ea8b8e87a4a0e838b1df  include/ofxKeySyms.h
+52ba2b7ee3fcb88a04b8ce80e5af3485b1ad25743c58b31b32457a13ea41e871  include/ofxMemory.h
+6cdf7598431fdd58c5efc0144cea585083d03aa151d2cda601198136ae860963  include/ofxMessage.h
+d59a6816e3b17e2de7639ace9fc03c9a81d58587d64368553d9bcac6473733ba  include/ofxMultiThread.h
+b0827f39171c5ece4d7b04399fa96a6e8cb4031de949696e58b050902fa04652  include/ofxOld.h
+8d427d3635773f30d71ce8eb32dc993da5d0dfd550012507f56cf9e7ebac4722  include/ofxOpenGLRender.h
+0d65dc907b714da41d38cd1c64e0c837eaee98343878bdd066b7506853a724fc  include/ofxParam.h
+b06cd279b978a519a5bfdd8f3764457a96f0e5aaf67eb0abd5886a13cc5a222f  include/ofxParametricParam.h
+b86e4256d2392394f977c570e6ce14d0f836840ecab4c0cca98a1553cd9dde5b  include/ofxPixels.h
+2d57ce3a4201add43d8dbbd9a926d95bd0fa3839e5357927e1b01831c81f4c22  include/ofxProgress.h
+b3340b71499571ff55ec05260209dab3311b30b4adc7a04e82df9f2c913e0929  include/ofxProperty.h
+c36cded0c96c26797092e1574808806af4428b3560b589e6edc54eae2562182a  include/ofxTimeLine.h
