@@ -344,6 +344,14 @@ at `743b053` (merge of #3).
       by jump flooding. Two goldens and an exact width check on the GPU.
 
    **E-D group 3 complete.** 630 workspace tests pass, clippy clean.
+
+   Group 4:
+   1. **Done:** Chroma Key (YCbCr chroma distance, spill suppression along
+      the key's chroma), Luma Key (darker or brighter) and Matte Choker
+      (square erode or dilate, then blur). Numeric GPU tests on known
+      colours and edges, and two goldens.
+
+   **E-D group 4 complete.** 634 workspace tests pass, clippy clean.
    Then groups 3 to 6 (group 6 brings adjustment-layer rendering and
    the transitions).
 5. O-A to O-D.

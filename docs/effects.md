@@ -480,6 +480,58 @@ at the layer origin.
 - **Regions:** RoD and ROI = padded by Width + 1 px. Width 0 changes
   nothing.
 
+## Keying
+
+### Chroma Key (`voxy.keying.chroma_key`, v1)
+
+| Parameter | Type | Range | Default |
+|---|---|---|---|
+| Key Color (`key_color`) | colour, no alpha | — | sRGB (0, 177, 64) |
+| Tolerance (`tolerance`) | scalar, normalized | 0–1 | 0.15 |
+| Edge Softness (`softness`) | scalar, normalized | 0–1 | 0.1 |
+| Spill Suppression (`spill`) | scalar, normalized | 0–1 | 0.5 |
+
+- **Space:** working, on straight colour.
+- **Formula:** colours are compared in the Rec. 709 YCbCr chroma plane,
+  `cc = ((B − Y)/1.8556, (R − Y)/1.5748)`, so brightness alone never keys a
+  pixel out. With `d = |cc − cc_key|`, alpha is multiplied by
+  `smoothstep(tol, tol + max(soft, 10⁻⁴), d)`. Spill: the component of
+  `cc` along the key's chroma direction, where positive, is reduced by the
+  spill amount; the colour is rebuilt from the original luma and the new
+  chroma, clamped at 0.
+- **Regions:** per pixel.
+
+### Luma Key (`voxy.keying.luma_key`, v1)
+
+| Parameter | Type | Range | Default |
+|---|---|---|---|
+| Key Out (`mode`) | enum: Darker, Brighter | — | Darker |
+| Threshold (`threshold`) | scalar, normalized | 0–1 | 0.1 |
+| Edge Softness (`softness`) | scalar, normalized | 0–1 | 0.1 |
+
+- **Space:** working; Rec. 709 luma `L` of the straight colour.
+- **Formula:** Darker keeps `smoothstep(t, t + s, L)`, Brighter keeps
+  `1 − smoothstep(t − s, t, L)` (with `s ≥ 10⁻⁴`); the premultiplied
+  pixel is scaled by it.
+- **Regions:** per pixel.
+
+### Matte Choker (`voxy.keying.matte_choker`, v1)
+
+| Parameter | Type | Range | Default |
+|---|---|---|---|
+| Choke (`choke`) | scalar, layer px | −100–100 (slider ±20) | 1 |
+| Softness (`softness`) | scalar, layer px | 0–100 (slider 0–20) | 1 |
+
+- **Space:** working, premultiplied.
+- **Passes:** a square erosion (positive choke) or dilation (negative), one
+  pass per axis with `round(|choke|·s)` taps each side: shrinking scales
+  each pixel by the smallest alpha around it (keeping its own colour);
+  growing takes the largest of each premultiplied channel (new edge pixels
+  take their neighbours' colour). Then a Gaussian blur with radius
+  Softness (skipped at 0). The square shape gives square grown corners.
+- **Regions:** RoD and ROI = padded by the growth (negative choke) plus
+  Softness + 1 px.
+
 ## Blend modes
 
 A layer's blend mode decides how it combines with everything below it in

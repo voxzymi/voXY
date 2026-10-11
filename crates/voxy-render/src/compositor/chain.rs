@@ -80,6 +80,10 @@ pub(super) fn kernel_shaders(kernel: Kernel) -> Vec<&'static str> {
             include_str!("../shaders/effects/convolve.wgsl"),
             include_str!("../shaders/effects/shadow.wgsl"),
         ],
+        Kernel::MatteChoker => vec![
+            include_str!("../shaders/effects/morphology.wgsl"),
+            include_str!("../shaders/effects/convolve.wgsl"),
+        ],
         Kernel::Stroke => vec![
             include_str!("../shaders/effects/stroke_seed.wgsl"),
             include_str!("../shaders/effects/stroke_flood.wgsl"),
@@ -126,6 +130,9 @@ fn kernel_shader(kernel: Kernel) -> &'static str {
         }
         Kernel::Glow => include_str!("../shaders/effects/glow.wgsl"),
         Kernel::Stroke => include_str!("../shaders/effects/stroke.wgsl"),
+        Kernel::ChromaKey => include_str!("../shaders/effects/chroma_key.wgsl"),
+        Kernel::LumaKey => include_str!("../shaders/effects/luma_key.wgsl"),
+        Kernel::MatteChoker => include_str!("../shaders/effects/morphology.wgsl"),
     }
 }
 

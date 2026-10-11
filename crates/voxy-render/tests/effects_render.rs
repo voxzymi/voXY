@@ -1164,3 +1164,180 @@ mod stylize {
         }
     }
 }
+
+mod keying {
+    use super::*;
+
+    /// One `w`×`h` solid of `color` at the origin of a transparent
+    /// composition, with effect `id`.
+    fn keyed(color: [u8; 3], size: (f64, f64), id: &str, params: &[(&str, Value)]) -> RgbaImage {
+        let gpu = gpu().unwrap();
+        let mut doc = Document::with_comp(
+            "Key",
+            CompSettings {
+                width: 32,
+                height: 16,
+                background: LinearRgba::new(0.0, 0.0, 0.0, 0.0),
+                ..CompSettings::default()
+            },
+        );
+        doc.meta.working_space = WorkingSpace::SrgbCompat;
+        let comp = doc.main_comp.unwrap();
+        AddSolidLayer {
+            comp,
+            name: None,
+            color: LinearRgba::from_srgb8(color[0], color[1], color[2], 255),
+            index: 0,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let l = doc.main().unwrap().layers[0].clone();
+        if let voxy_core::LayerKind::Solid { size: s, .. } = &l.kind {
+            set(&mut doc, s.id, Value::Vec2(DVec2::new(size.0, size.1)));
+        }
+        set(&mut doc, l.transform.anchor.id, Value::Vec2(DVec2::ZERO));
+        set(
+            &mut doc,
+            l.transform.position.id,
+            Value::Vec2(DVec2::new(8.0, 4.0)),
+        );
+        let fx = add_effect(&mut doc, l.id, id);
+        for (n, v) in params {
+            set_param(&mut doc, l.id, fx, n, v.clone());
+        }
+        render(
+            &gpu,
+            &mut Compositor::new(&gpu.device),
+            &doc,
+            Time::ZERO,
+            1.0,
+        )
+    }
+
+    fn px(img: &RgbaImage, x: u32, y: u32) -> [u8; 4] {
+        let i = ((y * img.width + x) * 4) as usize;
+        img.pixels[i..i + 4].try_into().unwrap()
+    }
+
+    #[test]
+    fn chroma_key_removes_the_key_and_its_spill() {
+        if gpu().is_none() {
+            return;
+        }
+        let full = (16.0, 8.0);
+        // The key colour itself, and a close one, go; orange stays.
+        assert_eq!(
+            px(&keyed([0, 177, 64], full, ids::CHROMA_KEY, &[]), 12, 8)[3],
+            0
+        );
+        assert_eq!(
+            px(&keyed([10, 170, 70], full, ids::CHROMA_KEY, &[]), 12, 8)[3],
+            0
+        );
+        let orange = px(&keyed([230, 120, 40], full, ids::CHROMA_KEY, &[]), 12, 8);
+        assert_eq!(orange[3], 255);
+        // A greenish grey keeps its alpha but loses the green tint.
+        let p = &[
+            ("spill", Value::Scalar(1.0)),
+            ("tolerance", Value::Scalar(0.0)),
+            ("softness", Value::Scalar(0.01)),
+        ];
+        let grey = px(&keyed([120, 160, 120], full, ids::CHROMA_KEY, p), 12, 8);
+        assert_eq!(grey[3], 255);
+        assert!(grey[1] < 150 && grey[0] > 120, "{grey:?}");
+    }
+
+    #[test]
+    fn luma_key_keys_by_brightness() {
+        if gpu().is_none() {
+            return;
+        }
+        let full = (16.0, 8.0);
+        let dark = [("threshold", Value::Scalar(0.2))];
+        assert_eq!(
+            px(&keyed([20, 20, 20], full, ids::LUMA_KEY, &dark), 12, 8)[3],
+            0
+        );
+        assert_eq!(
+            px(&keyed([200, 200, 200], full, ids::LUMA_KEY, &dark), 12, 8)[3],
+            255
+        );
+        let bright = [("mode", Value::Enum(1)), ("threshold", Value::Scalar(0.6))];
+        assert_eq!(
+            px(&keyed([230, 230, 230], full, ids::LUMA_KEY, &bright), 12, 8)[3],
+            0
+        );
+        assert_eq!(
+            px(&keyed([40, 40, 40], full, ids::LUMA_KEY, &bright), 12, 8)[3],
+            255
+        );
+    }
+
+    /// The solid spans x 8..24; choking by 2 moves each edge in by 2 px,
+    /// a negative choke moves it out.
+    #[test]
+    fn matte_choker_moves_the_edges() {
+        if gpu().is_none() {
+            return;
+        }
+        let none = [("softness", Value::Scalar(0.0))];
+        let choke = |c: f64| {
+            let mut p = none.to_vec();
+            p.push(("choke", Value::Scalar(c)));
+            keyed([230, 120, 40], (16.0, 8.0), ids::MATTE_CHOKER, &p)
+        };
+        let shrunk = choke(2.0);
+        assert_eq!(px(&shrunk, 9, 8)[3], 0);
+        assert_eq!(px(&shrunk, 10, 8)[3], 255);
+        assert_eq!(px(&shrunk, 21, 8)[3], 255);
+        assert_eq!(px(&shrunk, 22, 8)[3], 0);
+        // Shrinking keeps each pixel's own colour.
+        assert_eq!(&px(&shrunk, 12, 8)[..3], &[230, 120, 40]);
+        let grown = choke(-2.0);
+        assert_eq!(px(&grown, 6, 8)[3], 255);
+        assert_eq!(px(&grown, 5, 8)[3], 0);
+        assert_eq!(
+            &px(&grown, 6, 8)[..3],
+            &[230, 120, 40],
+            "grown edges take their neighbours' colour"
+        );
+    }
+
+    #[test]
+    fn keying_goldens() {
+        let Some(gpu) = gpu() else { return };
+        let mut c = Compositor::new(&gpu.device);
+        let cases: [Case<'_>; 2] = [
+            // Keys out the scene's green layer, and softens the orange edge.
+            (
+                "effect_chroma_key",
+                ids::CHROMA_KEY,
+                vec![
+                    (
+                        "key_color",
+                        Value::Color(LinearRgba::from_srgb8(40, 200, 120, 255)),
+                    ),
+                    ("tolerance", Value::Scalar(0.05)),
+                ],
+            ),
+            (
+                "effect_matte_choker",
+                ids::MATTE_CHOKER,
+                vec![
+                    ("choke", Value::Scalar(4.0)),
+                    ("softness", Value::Scalar(3.0)),
+                ],
+            ),
+        ];
+        for (name, id, params) in cases {
+            let (mut doc, layers) = scene(WorkingSpace::SrgbCompat);
+            for l in &layers {
+                let fx = add_effect(&mut doc, *l, id);
+                for (n, v) in &params {
+                    set_param(&mut doc, *l, fx, n, v.clone());
+                }
+            }
+            compare(name, &render(&gpu, &mut c, &doc, Time::ZERO, 1.0));
+        }
+    }
+}

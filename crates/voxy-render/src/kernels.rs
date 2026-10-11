@@ -353,11 +353,14 @@ pub enum Kernel {
     InnerShadow,
     Glow,
     Stroke,
+    ChromaKey,
+    LumaKey,
+    MatteChoker,
 }
 
 impl Kernel {
     /// Every kernel.
-    pub const ALL: [Kernel; 24] = [
+    pub const ALL: [Kernel; 27] = [
         Kernel::Invert,
         Kernel::GaussianBlur,
         Kernel::BoxBlur,
@@ -382,6 +385,9 @@ impl Kernel {
         Kernel::InnerShadow,
         Kernel::Glow,
         Kernel::Stroke,
+        Kernel::ChromaKey,
+        Kernel::LumaKey,
+        Kernel::MatteChoker,
     ];
 
     /// The kernel running `type_id` at `version`, if this build has one.
@@ -451,6 +457,9 @@ impl Kernel {
             Kernel::InnerShadow => ids::INNER_SHADOW,
             Kernel::Glow => ids::GLOW,
             Kernel::Stroke => ids::STROKE,
+            Kernel::ChromaKey => ids::CHROMA_KEY,
+            Kernel::LumaKey => ids::LUMA_KEY,
+            Kernel::MatteChoker => ids::MATTE_CHOKER,
         }
     }
 
@@ -570,6 +579,52 @@ impl Kernel {
                 ];
                 k.p[2] = working_rgb(color(fx, "color", LinearRgba::BLACK), space);
                 vec![k]
+            }
+            Kernel::ChromaKey => {
+                k.p[0] = working_rgb(
+                    color(fx, "key_color", LinearRgba::from_srgb8(0, 177, 64, 255)),
+                    space,
+                );
+                k.p[1] = [
+                    scalar(fx, "tolerance", 0.15).clamp(0.0, 1.0) as f32,
+                    scalar(fx, "softness", 0.1).clamp(0.0, 1.0) as f32,
+                    scalar(fx, "spill", 0.5).clamp(0.0, 1.0) as f32,
+                    0.0,
+                ];
+                vec![k]
+            }
+            Kernel::LumaKey => {
+                k.p[0] = [
+                    scalar(fx, "threshold", 0.1).clamp(0.0, 1.0) as f32,
+                    scalar(fx, "softness", 0.1).clamp(0.0, 1.0) as f32,
+                    0.0,
+                    0.0,
+                ];
+                k.i[0] = choice(fx, "mode").min(1);
+                vec![k]
+            }
+            Kernel::MatteChoker => {
+                let choke = scalar(fx, "choke", 0.0).clamp(-100.0, 100.0);
+                let taps = (choke.abs() * s).round() as usize;
+                let mut out = Vec::new();
+                if taps > 0 {
+                    for axis in [0, 1] {
+                        out.push(KernelParams {
+                            i: [axis, taps.min(MAX_TAPS) as u32, u32::from(choke < 0.0), 0],
+                            ..KernelParams::default()
+                        });
+                    }
+                }
+                let w = gaussian_weights(scalar(fx, "softness", 0.0).clamp(0.0, 100.0) * s);
+                if w.len() > 1 {
+                    for axis in [0, 1] {
+                        out.push(KernelParams {
+                            stage: 1,
+                            ..convolve(axis, false, w.clone())
+                        });
+                    }
+                }
+                out
             }
             Kernel::Stroke => {
                 let width = stroke_width(fx) * s;
@@ -850,9 +905,16 @@ impl Kernel {
             | Kernel::Pixelate
             | Kernel::ChromaticAberration
             | Kernel::DropShadow
-            | Kernel::InnerShadow => DVec2::ZERO,
+            | Kernel::InnerShadow
+            | Kernel::ChromaKey
+            | Kernel::LumaKey => DVec2::ZERO,
             Kernel::Glow => DVec2::splat(r("radius").min(500.0) + 1.0),
             Kernel::Stroke => DVec2::splat(stroke_width(fx) + 1.0),
+            // Growing reaches out by the choke; softening by its radius.
+            Kernel::MatteChoker => {
+                let grow = (-scalar(fx, "choke", 0.0)).clamp(0.0, 100.0);
+                DVec2::splat(grow + r("softness").min(100.0) + 1.0)
+            }
             Kernel::GaussianBlur | Kernel::BoxBlur => {
                 let passes = if self == Kernel::BoxBlur {
                     scalar(fx, "passes", 1.0).clamp(1.0, 5.0)

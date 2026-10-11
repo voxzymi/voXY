@@ -40,6 +40,9 @@ pub mod ids {
     pub const INNER_SHADOW: &str = "voxy.stylize.inner_shadow";
     pub const GLOW: &str = "voxy.stylize.glow";
     pub const STROKE: &str = "voxy.stylize.stroke";
+    pub const CHROMA_KEY: &str = "voxy.keying.chroma_key";
+    pub const LUMA_KEY: &str = "voxy.keying.luma_key";
+    pub const MATTE_CHOKER: &str = "voxy.keying.matte_choker";
 }
 
 /// Every built-in definition, in no particular order.
@@ -69,6 +72,9 @@ pub fn builtin_definitions() -> Vec<EffectDef> {
         shadow(ids::INNER_SHADOW),
         glow(),
         stroke(),
+        chroma_key(),
+        luma_key(),
+        matte_choker(),
     ]
 }
 
@@ -706,6 +712,92 @@ fn stroke() -> EffectDef {
                 Unit::None,
             )
             .hint("Show the outline without the layer.");
+        },
+    )
+}
+
+fn chroma_key() -> EffectDef {
+    def(
+        ids::CHROMA_KEY,
+        "Chroma Key",
+        Category::Keying,
+        "Makes one colour (like a green screen) transparent and removes its spill.",
+        |p| {
+            p.add(
+                "key_color",
+                "Key Color",
+                Value::Color(LinearRgba::from_srgb8(0, 177, 64, 255)),
+                Unit::None,
+            )
+            .hide_alpha();
+            p.add(
+                "tolerance",
+                "Tolerance",
+                Value::Scalar(0.15),
+                Unit::Normalized,
+            )
+            .range(0.0, 1.0)
+            .hint("How different a colour may be and still be keyed out.");
+            p.add(
+                "softness",
+                "Edge Softness",
+                Value::Scalar(0.1),
+                Unit::Normalized,
+            )
+            .range(0.0, 1.0);
+            p.add(
+                "spill",
+                "Spill Suppression",
+                Value::Scalar(0.5),
+                Unit::Normalized,
+            )
+            .range(0.0, 1.0)
+            .hint("Removes the key colour's tint from what remains.");
+        },
+    )
+}
+
+fn luma_key() -> EffectDef {
+    def(
+        ids::LUMA_KEY,
+        "Luma Key",
+        Category::Keying,
+        "Makes the dark (or bright) parts of the layer transparent.",
+        |p| {
+            p.add("mode", "Key Out", Value::Enum(0), Unit::None)
+                .choices(&["Darker", "Brighter"]);
+            p.add(
+                "threshold",
+                "Threshold",
+                Value::Scalar(0.1),
+                Unit::Normalized,
+            )
+            .range(0.0, 1.0);
+            p.add(
+                "softness",
+                "Edge Softness",
+                Value::Scalar(0.1),
+                Unit::Normalized,
+            )
+            .range(0.0, 1.0);
+        },
+    )
+}
+
+fn matte_choker() -> EffectDef {
+    def(
+        ids::MATTE_CHOKER,
+        "Matte Choker",
+        Category::Keying,
+        "Shrinks or grows the layer's transparency edges, then softens them.",
+        |p| {
+            p.add("choke", "Choke", Value::Scalar(1.0), Unit::Pixels)
+                .range(-100.0, 100.0)
+                .soft(-20.0, 20.0)
+                .hint("Positive shrinks the matte, negative grows it, in layer pixels.");
+            p.add("softness", "Softness", Value::Scalar(1.0), Unit::Pixels)
+                .range(0.0, 100.0)
+                .soft(0.0, 20.0);
         },
     )
 }
