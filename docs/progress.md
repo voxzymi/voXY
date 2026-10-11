@@ -338,7 +338,8 @@ at `743b053` (merge of #3).
         texture. Landed first as its own commit with every golden
         unchanged.
       - Three goldens and a region and stage test.
-   5. Glow.
+   5. **Done:** Glow, in linear light (design §3.5): bright pass, blur,
+      and an additive composite over the kept input. One golden.
    6. Stroke.
    Then groups 3 to 6 (group 6 brings adjustment-layer rendering and
    the transitions).

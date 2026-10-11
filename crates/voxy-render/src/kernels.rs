@@ -346,11 +346,12 @@ pub enum Kernel {
     ChromaticAberration,
     DropShadow,
     InnerShadow,
+    Glow,
 }
 
 impl Kernel {
     /// Every kernel.
-    pub const ALL: [Kernel; 22] = [
+    pub const ALL: [Kernel; 23] = [
         Kernel::Invert,
         Kernel::GaussianBlur,
         Kernel::BoxBlur,
@@ -373,6 +374,7 @@ impl Kernel {
         Kernel::ChromaticAberration,
         Kernel::DropShadow,
         Kernel::InnerShadow,
+        Kernel::Glow,
     ];
 
     /// The kernel running `type_id` at `version`, if this build has one.
@@ -397,7 +399,10 @@ impl Kernel {
     /// Whether the kernel combines its result with its own input, so the
     /// input is kept (bound as `orig`) while its passes run.
     pub fn keeps_input(self) -> bool {
-        matches!(self, Kernel::DropShadow | Kernel::InnerShadow)
+        matches!(
+            self,
+            Kernel::DropShadow | Kernel::InnerShadow | Kernel::Glow
+        )
     }
 
     /// Whether the kernel reads a LUT asset (bind group 2).
@@ -437,6 +442,7 @@ impl Kernel {
             Kernel::ChromaticAberration => ids::CHROMATIC_ABERRATION,
             Kernel::DropShadow => ids::DROP_SHADOW,
             Kernel::InnerShadow => ids::INNER_SHADOW,
+            Kernel::Glow => ids::GLOW,
         }
     }
 
@@ -556,6 +562,31 @@ impl Kernel {
                 ];
                 k.p[2] = working_rgb(color(fx, "color", LinearRgba::BLACK), space);
                 vec![k]
+            }
+            Kernel::Glow => {
+                let intensity = scalar(fx, "intensity", 1.0).clamp(0.0, 10.0);
+                if intensity == 0.0 {
+                    return Vec::new();
+                }
+                // Stage 0: the light above the threshold, in linear light.
+                let mut bright = KernelParams::default();
+                bright.p[0][0] = scalar(fx, "threshold", 0.5).clamp(0.0, 2.0) as f32;
+                let mut out = vec![bright];
+                // Stage 1: blurred.
+                let w = gaussian_weights(scalar(fx, "radius", 0.0).clamp(0.0, 500.0) * s);
+                if w.len() > 1 {
+                    for axis in [0, 1] {
+                        out.push(KernelParams {
+                            stage: 1,
+                            ..convolve(axis, false, w.clone())
+                        });
+                    }
+                }
+                // Stage 2: added to the input.
+                k.stage = 2;
+                k.p[0][0] = intensity as f32;
+                out.push(k);
+                out
             }
             Kernel::DropShadow | Kernel::InnerShadow => {
                 let opacity = scalar(fx, "opacity", 0.5).clamp(0.0, 1.0);
@@ -783,6 +814,7 @@ impl Kernel {
             | Kernel::ChromaticAberration
             | Kernel::DropShadow
             | Kernel::InnerShadow => DVec2::ZERO,
+            Kernel::Glow => DVec2::splat(r("radius").min(500.0) + 1.0),
             Kernel::GaussianBlur | Kernel::BoxBlur => {
                 let passes = if self == Kernel::BoxBlur {
                     scalar(fx, "passes", 1.0).clamp(1.0, 5.0)

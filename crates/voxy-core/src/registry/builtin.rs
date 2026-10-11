@@ -38,6 +38,7 @@ pub mod ids {
     pub const CHROMATIC_ABERRATION: &str = "voxy.stylize.chromatic_aberration";
     pub const DROP_SHADOW: &str = "voxy.stylize.drop_shadow";
     pub const INNER_SHADOW: &str = "voxy.stylize.inner_shadow";
+    pub const GLOW: &str = "voxy.stylize.glow";
 }
 
 /// Every built-in definition, in no particular order.
@@ -65,6 +66,7 @@ pub fn builtin_definitions() -> Vec<EffectDef> {
         chromatic_aberration(),
         shadow(ids::DROP_SHADOW),
         shadow(ids::INNER_SHADOW),
+        glow(),
     ]
 }
 
@@ -645,4 +647,32 @@ fn shadow(id: &str) -> EffectDef {
             }
         },
     )
+}
+
+fn glow() -> EffectDef {
+    let mut d = def(
+        ids::GLOW,
+        "Glow",
+        Category::Stylize,
+        "Makes bright areas bleed light into their surroundings.",
+        |p| {
+            p.add(
+                "threshold",
+                "Threshold",
+                Value::Scalar(0.5),
+                Unit::Normalized,
+            )
+            .range(0.0, 2.0)
+            .soft(0.0, 1.0)
+            .hint("Only light brighter than this glows (linear light).");
+            p.add("radius", "Radius", Value::Scalar(15.0), Unit::Pixels)
+                .range(0.0, 500.0)
+                .soft(0.0, 100.0);
+            p.add("intensity", "Intensity", Value::Scalar(1.0), Unit::Factor)
+                .range(0.0, 10.0)
+                .soft(0.0, 4.0);
+        },
+    );
+    d.space = EffectSpace::Linear;
+    d
 }

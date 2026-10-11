@@ -436,6 +436,26 @@ at the layer origin.
   ROI = the output and the output moved back, padded the same. Opacity 0
   changes nothing (unless Shadow Only is on).
 
+### Glow (`voxy.stylize.glow`, v1)
+
+| Parameter | Type | Range | Default |
+|---|---|---|---|
+| Threshold (`threshold`) | scalar, linear light | 0–2 (slider 0–1) | 0.5 |
+| Radius (`radius`) | scalar, layer px | 0–500 (slider 0–100) | 15 |
+| Intensity (`intensity`) | scalar, factor | 0–10 (slider 0–4) | 1 |
+
+- **Space:** linear light in both working-space modes (decoded before,
+  re-encoded after), so it means the same thing in both.
+- **Passes:** (1) the light above the threshold: with `lin` the linear
+  straight colour and `L` its Rec. 709 luma,
+  `g = lin·max(L − t, 0)/L·a` (keeps each colour's hue); (2) blurred like
+  Gaussian Blur with the radius (skipped at 0); (3) added to the effect's
+  kept input: `c = in_lin + intensity·g` (premultiplied linear). Outside
+  the layer the light brings its own coverage,
+  `a = in.a + min(max(g·intensity), 1)·(1 − in.a)`.
+- **Regions:** RoD and ROI = padded by Radius + 1 px. Intensity 0 changes
+  nothing.
+
 ## Blend modes
 
 A layer's blend mode decides how it combines with everything below it in

@@ -929,7 +929,7 @@ mod stylize {
     fn stylize_goldens() {
         let Some(gpu) = gpu() else { return };
         let mut c = Compositor::new(&gpu.device);
-        let cases: [Case<'_>; 9] = [
+        let cases: [Case<'_>; 10] = [
             (
                 "effect_vignette",
                 ids::VIGNETTE,
@@ -983,6 +983,15 @@ mod stylize {
                         "color",
                         Value::Color(LinearRgba::from_srgb8(200, 30, 120, 255)),
                     ),
+                ],
+            ),
+            (
+                "effect_glow",
+                ids::GLOW,
+                vec![
+                    ("threshold", Value::Scalar(0.15)),
+                    ("radius", Value::Scalar(10.0)),
+                    ("intensity", Value::Scalar(1.5)),
                 ],
             ),
             (

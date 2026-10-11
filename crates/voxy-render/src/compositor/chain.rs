@@ -80,6 +80,11 @@ pub(super) fn kernel_shaders(kernel: Kernel) -> Vec<&'static str> {
             include_str!("../shaders/effects/convolve.wgsl"),
             include_str!("../shaders/effects/shadow.wgsl"),
         ],
+        Kernel::Glow => vec![
+            include_str!("../shaders/effects/glow_bright.wgsl"),
+            include_str!("../shaders/effects/convolve.wgsl"),
+            include_str!("../shaders/effects/glow.wgsl"),
+        ],
         _ => vec![kernel_shader(kernel)],
     }
 }
@@ -114,6 +119,7 @@ fn kernel_shader(kernel: Kernel) -> &'static str {
         Kernel::DropShadow | Kernel::InnerShadow => {
             include_str!("../shaders/effects/shadow.wgsl")
         }
+        Kernel::Glow => include_str!("../shaders/effects/glow.wgsl"),
     }
 }
 
