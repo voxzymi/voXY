@@ -419,7 +419,11 @@ at `743b053` (merge of #3).
       OpenGL headers and `ofxOld.h` are left out; status codes are typed
       `OfxStatus`; the plugin exports are not declared. A new Linux CI job
       checks the header checksums and that regeneration gives no diff.
-   3. `roots(os, env, prefs)` discovery paths and bundle layout.
+   3. **Done:** `voxy_ofx_host::discovery`: pure `roots(os, env, extra)`
+      and `bundle_binaries(bundle, os, arch)`, plus a `scan` of the folders
+      (recursive, `@` names skipped, bundles not searched inside). Every
+      platform's rules are tested on every platform; the choices are in
+      `docs/ofx-host.md`.
    4. Host suites in the in-process harness.
    5. `cargo xtask credits --check`.
 6. O-B to O-D.

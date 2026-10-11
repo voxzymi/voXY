@@ -33,6 +33,35 @@ the values of **Custom and Bytes parameters**:
   type resets only that parameter to its default, with a warning. Nothing
   panics.
 
+## Discovery (O-A, `voxy_ofx_host::discovery`)
+
+Checked against OpenFX 1.5.1, "Packaging OFX Plug-ins".
+
+- **Search order:** `OFX_PLUGIN_PATH` (split on `;` on Windows and macOS,
+  `:` elsewhere), then the standard folder, then the user's folders from
+  Preferences.
+  - Windows: `%CommonProgramFiles%\OFX\Plugins` (the folder
+    `CSIDL_PROGRAM_FILES_COMMON` names), then the deprecated
+    `C:\Program Files\Common Files\OFX\Plugins`.
+  - macOS: `/Library/OFX/Plugins`. Linux: `/usr/OFX/Plugins`.
+- **Host choices:**
+  - Empty list entries are ignored.
+  - A folder listed twice is searched once, at its first place.
+    Comparison ignores case on Windows and macOS, and a trailing separator.
+  - The scan goes at most 16 folders deep, visits each real folder once
+    (links cannot loop), and sorts names so the order is stable.
+  - A bundle inside a bundle belongs to the outer one and is not a plugin.
+  - A bundle with no binary for this platform is listed without one, so
+    the UI can say why it is missing.
+- **Skipped:** any folder or bundle whose name starts with `@`.
+- **Binary:** `NAME.ofx.bundle/Contents/<arch>/NAME.ofx`, with `<arch>`
+  `Win64`, `Linux-x86-64` or `MacOS` (universal; OpenFX 1.5 has no arm64
+  folder). Intel Macs fall back to the deprecated `MacOS-x86-64`. For arm64
+  Windows and Linux the host uses the spec's informational names,
+  `Win-arm64` and `Linux-aarch64`; voXY does not build for them yet.
+- Discovery never loads a binary. Loading and Describe happen only in the
+  sandbox (design §6.3).
+
 ## Still to be written (O-A to O-D)
 
 Supported pixel depths and conversions, render scale, field order, pixel
