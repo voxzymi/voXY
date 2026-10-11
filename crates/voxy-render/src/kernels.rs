@@ -10,7 +10,7 @@
 //! scale; pixel parameters are multiplied by it, so the look does not change
 //! at reduced resolution (§3.6).
 
-use voxy_core::glam::DVec2;
+use voxy_core::glam::{DAffine2, DMat2, DVec2};
 use voxy_core::registry::ids;
 use voxy_core::{Curve, EffectTypeId, EvaluatedEffect, LinearRgba, Value, WorkingSpace};
 
@@ -281,6 +281,76 @@ fn shadow_offset(fx: &EvaluatedEffect) -> DVec2 {
     DVec2::new(libm::cos(a), libm::sin(a)) * d
 }
 
+/// Transform's map in layer pixels: `position + R·S·(p − anchor)`.
+fn transform_map(fx: &EvaluatedEffect) -> DAffine2 {
+    let scale = match fx.param("scale") {
+        Some(Value::Vec2(v)) if v.is_finite() => v.clamp(DVec2::splat(-100.0), DVec2::splat(100.0)),
+        _ => DVec2::ONE,
+    };
+    let a = scalar(fx, "rotation", 0.0).to_radians();
+    let (sin, cos) = (libm::sin(a), libm::cos(a));
+    let rotate = DMat2::from_cols(DVec2::new(cos, sin), DVec2::new(-sin, cos));
+    DAffine2::from_translation(point(fx, "position"))
+        * DAffine2::from_mat2(rotate * DMat2::from_diagonal(scale))
+        * DAffine2::from_translation(-point(fx, "anchor"))
+}
+
+/// The bounding box of `r` mapped by `m`.
+fn mapped(r: Rect, m: DAffine2) -> Rect {
+    let corners = [
+        r.min,
+        r.max,
+        DVec2::new(r.min.x, r.max.y),
+        DVec2::new(r.max.x, r.min.y),
+    ]
+    .map(|p| m.transform_point2(p));
+    corners
+        .iter()
+        .skip(1)
+        .fold(Rect::new(corners[0], corners[0]), |acc, p| {
+            Rect::new(acc.min.min(*p), acc.max.max(*p))
+        })
+}
+
+/// Mirror's normal: pixels on its side are replaced by their reflection.
+fn mirror_normal(fx: &EvaluatedEffect) -> DVec2 {
+    let a = scalar(fx, "angle", 0.0).to_radians();
+    DVec2::new(libm::cos(a), libm::sin(a))
+}
+
+/// The reflection across Mirror's line.
+fn mirror_map(fx: &EvaluatedEffect) -> DAffine2 {
+    let n = mirror_normal(fx);
+    let c = point(fx, "center");
+    let householder = DMat2::IDENTITY - 2.0 * DMat2::from_cols(n * n.x, n * n.y);
+    DAffine2::from_mat2_translation(householder, c - householder * c)
+}
+
+fn bulge_radius(fx: &EvaluatedEffect) -> f64 {
+    scalar(fx, "radius", 100.0).clamp(1.0, 10_000.0)
+}
+
+/// `r` and, when they meet, Bulge's circle: pixels inside it come from
+/// inside it.
+fn with_circle(r: Rect, fx: &EvaluatedEffect) -> Rect {
+    if scalar(fx, "amount", 0.0) == 0.0 {
+        return r;
+    }
+    let c = point(fx, "center");
+    let circle = Rect::new(c, c).pad(DVec2::splat(bulge_radius(fx) + 1.0));
+    if r.intersect(&circle).is_empty() {
+        r
+    } else {
+        r.union(&circle)
+    }
+}
+
+/// Degrees as radians in `[0, 2π)`, reduced in `f64` so large phases stay
+/// precise in `f32`.
+fn turns_rad(deg: f64) -> f32 {
+    ((deg / 360.0).rem_euclid(1.0) * std::f64::consts::TAU) as f32
+}
+
 /// Stroke's width in layer pixels.
 fn stroke_width(fx: &EvaluatedEffect) -> f64 {
     scalar(fx, "width", 0.0).clamp(0.0, 500.0)
@@ -356,11 +426,16 @@ pub enum Kernel {
     ChromaKey,
     LumaKey,
     MatteChoker,
+    Transform,
+    Mirror,
+    Wave,
+    Ripple,
+    Bulge,
 }
 
 impl Kernel {
     /// Every kernel.
-    pub const ALL: [Kernel; 27] = [
+    pub const ALL: [Kernel; 32] = [
         Kernel::Invert,
         Kernel::GaussianBlur,
         Kernel::BoxBlur,
@@ -388,6 +463,11 @@ impl Kernel {
         Kernel::ChromaKey,
         Kernel::LumaKey,
         Kernel::MatteChoker,
+        Kernel::Transform,
+        Kernel::Mirror,
+        Kernel::Wave,
+        Kernel::Ripple,
+        Kernel::Bulge,
     ];
 
     /// The kernel running `type_id` at `version`, if this build has one.
@@ -460,6 +540,11 @@ impl Kernel {
             Kernel::ChromaKey => ids::CHROMA_KEY,
             Kernel::LumaKey => ids::LUMA_KEY,
             Kernel::MatteChoker => ids::MATTE_CHOKER,
+            Kernel::Transform => ids::TRANSFORM,
+            Kernel::Mirror => ids::MIRROR,
+            Kernel::Wave => ids::WAVE,
+            Kernel::Ripple => ids::RIPPLE,
+            Kernel::Bulge => ids::BULGE,
         }
     }
 
@@ -578,6 +663,89 @@ impl Kernel {
                     0.0,
                 ];
                 k.p[2] = working_rgb(color(fx, "color", LinearRgba::BLACK), space);
+                vec![k]
+            }
+            Kernel::Transform => {
+                let opacity = scalar(fx, "opacity", 1.0).clamp(0.0, 1.0);
+                let map = transform_map(fx);
+                if map == DAffine2::IDENTITY && opacity == 1.0 {
+                    return Vec::new();
+                }
+                // Output texel to input texel: through layer pixels.
+                let texel =
+                    DAffine2::from_scale(DVec2::splat(s)) * DAffine2::from_translation(-ctx.origin);
+                let (inv, opacity) = if map.matrix2.determinant().abs() < 1e-12 {
+                    (DAffine2::IDENTITY, 0.0)
+                } else {
+                    (texel * map.inverse() * texel.inverse(), opacity)
+                };
+                let (col0, col1) = (inv.matrix2.x_axis, inv.matrix2.y_axis);
+                k.p[0] = [col0.x as f32, col0.y as f32, col1.x as f32, col1.y as f32];
+                k.p[1] = [
+                    inv.translation.x as f32,
+                    inv.translation.y as f32,
+                    opacity as f32,
+                    0.0,
+                ];
+                vec![k]
+            }
+            Kernel::Mirror => {
+                let c = ctx.texel(point(fx, "center"));
+                let n = mirror_normal(fx);
+                k.p[0] = [c.x as f32, c.y as f32, n.x as f32, n.y as f32];
+                vec![k]
+            }
+            Kernel::Wave => {
+                let amp = scalar(fx, "amplitude", 0.0).clamp(0.0, 500.0);
+                if amp == 0.0 {
+                    return Vec::new();
+                }
+                let o = ctx.texel(DVec2::ZERO);
+                let length = scalar(fx, "wavelength", 60.0).clamp(1.0, 5000.0);
+                let a = scalar(fx, "direction", 0.0).to_radians();
+                k.p[0] = [
+                    o.x as f32,
+                    o.y as f32,
+                    (length * s) as f32,
+                    (amp * s) as f32,
+                ];
+                k.p[1] = [
+                    libm::cos(a) as f32,
+                    libm::sin(a) as f32,
+                    turns_rad(scalar(fx, "phase", 0.0)),
+                    0.0,
+                ];
+                vec![k]
+            }
+            Kernel::Ripple => {
+                let amp = scalar(fx, "amplitude", 0.0).clamp(0.0, 500.0);
+                if amp == 0.0 {
+                    return Vec::new();
+                }
+                let c = ctx.texel(point(fx, "center"));
+                let length = scalar(fx, "wavelength", 30.0).clamp(1.0, 5000.0);
+                k.p[0] = [
+                    c.x as f32,
+                    c.y as f32,
+                    (length * s) as f32,
+                    (amp * s) as f32,
+                ];
+                k.p[1][0] = turns_rad(scalar(fx, "phase", 0.0));
+                vec![k]
+            }
+            Kernel::Bulge => {
+                let amount = scalar(fx, "amount", 0.0).clamp(-1.0, 1.0);
+                if amount == 0.0 {
+                    return Vec::new();
+                }
+                let c = ctx.texel(point(fx, "center"));
+                let radius = bulge_radius(fx);
+                k.p[0] = [
+                    c.x as f32,
+                    c.y as f32,
+                    (radius * s) as f32,
+                    libm::exp2(amount) as f32,
+                ];
                 vec![k]
             }
             Kernel::ChromaKey => {
@@ -907,7 +1075,11 @@ impl Kernel {
             | Kernel::DropShadow
             | Kernel::InnerShadow
             | Kernel::ChromaKey
-            | Kernel::LumaKey => DVec2::ZERO,
+            | Kernel::LumaKey
+            | Kernel::Transform
+            | Kernel::Mirror
+            | Kernel::Bulge => DVec2::ZERO,
+            Kernel::Wave | Kernel::Ripple => DVec2::splat(r("amplitude").min(500.0) + 1.0),
             Kernel::Glow => DVec2::splat(r("radius").min(500.0) + 1.0),
             Kernel::Stroke => DVec2::splat(stroke_width(fx) + 1.0),
             // Growing reaches out by the choke; softening by its radius.
@@ -940,7 +1112,8 @@ impl Kernel {
     }
 
     /// Region of definition: how far the output can reach, given the input
-    /// region (layer pixels).
+    /// region (layer pixels). It always contains the input region, because
+    /// one buffer holds every stage of a chain.
     pub fn rod(self, fx: &EvaluatedEffect, input: Rect, scale: f64) -> Rect {
         let _ = scale;
         let c = point(fx, "center");
@@ -966,6 +1139,19 @@ impl Kernel {
                 &Rect::new(input.min + shadow_offset(fx), input.max + shadow_offset(fx))
                     .pad(DVec2::splat(shadow_reach(fx))),
             ),
+            // The chain's buffer holds every stage, so a region always
+            // keeps the input too (scaled to nothing, the pass draws
+            // transparency).
+            Kernel::Transform => {
+                let m = transform_map(fx);
+                if m.matrix2.determinant().abs() < 1e-12 {
+                    input
+                } else {
+                    input.union(&mapped(input, m).pad(DVec2::ONE))
+                }
+            }
+            Kernel::Mirror => input.union(&mapped(input, mirror_map(fx))).pad(DVec2::ONE),
+            Kernel::Bulge => with_circle(input, fx),
             _ if self.repeats_edges(fx) => input,
             _ => input.pad(self.reach(fx)),
         }
@@ -995,6 +1181,18 @@ impl Kernel {
                 )
                 .pad(DVec2::splat(shadow_reach(fx))),
             ),
+            Kernel::Transform => {
+                let m = transform_map(fx);
+                if m.matrix2.determinant().abs() < 1e-12 {
+                    output
+                } else {
+                    mapped(output, m.inverse()).pad(DVec2::ONE)
+                }
+            }
+            Kernel::Mirror => output
+                .union(&mapped(output, mirror_map(fx)))
+                .pad(DVec2::ONE),
+            Kernel::Bulge => with_circle(output, fx),
             _ => output.pad(self.reach(fx)),
         }
     }

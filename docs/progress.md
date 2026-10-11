@@ -352,6 +352,17 @@ at `743b053` (merge of #3).
       colours and edges, and two goldens.
 
    **E-D group 4 complete.** 634 workspace tests pass, clippy clean.
+
+   Group 5:
+   1. **Done:** Transform, Mirror, Wave, Ripple and Bulge (inverse-mapped
+      bilinear sampling; maps in `f64`). Region rules tested against the
+      maps; Transform checked pixel by pixel on the GPU; five goldens.
+      - Found and fixed along the way: a kernel's RoD must contain its
+        input region, since one buffer holds every stage of a chain. Now a
+        tested invariant for every kernel across the parameter grid.
+   2. Tile (its regions need the layer's size).
+   3. Layer inputs for effects (another layer rendered into the chain), and
+      Displacement Map on top of them. Transitions in group 6 reuse them.
    Then groups 3 to 6 (group 6 brings adjustment-layer rendering and
    the transitions).
 5. O-A to O-D.

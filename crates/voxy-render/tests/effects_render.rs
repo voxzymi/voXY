@@ -1341,3 +1341,132 @@ mod keying {
         }
     }
 }
+
+mod distort {
+    use super::*;
+
+    /// Transform moves, flips and removes pixels exactly as its map says.
+    #[test]
+    fn transform_maps_pixels() {
+        let Some(gpu) = gpu() else { return };
+        let one = |params: &[(&str, Value)]| {
+            let mut doc = Document::with_comp(
+                "Transform",
+                CompSettings {
+                    width: 40,
+                    height: 20,
+                    background: LinearRgba::new(0.0, 0.0, 0.0, 0.0),
+                    ..CompSettings::default()
+                },
+            );
+            let comp = doc.main_comp.unwrap();
+            AddSolidLayer {
+                comp,
+                name: None,
+                color: LinearRgba::WHITE,
+                index: 0,
+            }
+            .apply(&mut doc)
+            .unwrap();
+            let l = doc.main().unwrap().layers[0].clone();
+            if let voxy_core::LayerKind::Solid { size, .. } = &l.kind {
+                set(&mut doc, size.id, Value::Vec2(DVec2::new(10.0, 10.0)));
+            }
+            set(&mut doc, l.transform.anchor.id, Value::Vec2(DVec2::ZERO));
+            set(
+                &mut doc,
+                l.transform.position.id,
+                Value::Vec2(DVec2::new(10.0, 5.0)),
+            );
+            let fx = add_effect(&mut doc, l.id, ids::TRANSFORM);
+            for (n, v) in params {
+                set_param(&mut doc, l.id, fx, n, v.clone());
+            }
+            let img = render(
+                &gpu,
+                &mut Compositor::new(&gpu.device),
+                &doc,
+                Time::ZERO,
+                1.0,
+            );
+            move |x: u32, y: u32| img.pixels[((y * img.width + x) * 4 + 3) as usize]
+        };
+        // The solid covers x 10..20, y 5..15; anchor and position start at
+        // its centre, (5, 5) in layer pixels. Position (7, 5) moves it 2 px
+        // right.
+        let moved = one(&[("position", Value::Vec2(DVec2::new(7.0, 5.0)))]);
+        assert_eq!(moved(10, 10), 0);
+        assert_eq!(moved(12, 10), 255);
+        assert_eq!(moved(21, 10), 255);
+        assert_eq!(moved(22, 10), 0);
+        // Half width, around the centre: x 12.5..17.5.
+        let narrow = one(&[("scale", Value::Vec2(DVec2::new(0.5, 1.0)))]);
+        assert_eq!(narrow(11, 10), 0);
+        assert_eq!(narrow(15, 10), 255);
+        assert_eq!(narrow(18, 10), 0);
+        // Scaled to nothing: nothing is drawn.
+        let gone = one(&[("scale", Value::Vec2(DVec2::new(0.0, 1.0)))]);
+        assert_eq!(gone(15, 10), 0);
+        // Opacity applies to the transformed pixels.
+        let faint = one(&[("opacity", Value::Scalar(0.5))]);
+        assert!((127..=129).contains(&faint(15, 10)));
+    }
+
+    #[test]
+    fn distort_goldens() {
+        let Some(gpu) = gpu() else { return };
+        let mut c = Compositor::new(&gpu.device);
+        let cases: [Case<'_>; 5] = [
+            (
+                "effect_transform",
+                ids::TRANSFORM,
+                vec![
+                    ("rotation", Value::Scalar(20.0)),
+                    ("scale", Value::Vec2(DVec2::new(0.8, 1.1))),
+                    ("opacity", Value::Scalar(0.9)),
+                ],
+            ),
+            (
+                "effect_mirror",
+                ids::MIRROR,
+                vec![("angle", Value::Scalar(30.0))],
+            ),
+            (
+                "effect_wave",
+                ids::WAVE,
+                vec![
+                    ("amplitude", Value::Scalar(3.0)),
+                    ("wavelength", Value::Scalar(16.0)),
+                    ("direction", Value::Scalar(90.0)),
+                ],
+            ),
+            (
+                "effect_ripple",
+                ids::RIPPLE,
+                vec![
+                    ("amplitude", Value::Scalar(2.0)),
+                    ("wavelength", Value::Scalar(8.0)),
+                ],
+            ),
+            (
+                // Large enough to cross the solids' edges, where it shows.
+                "effect_bulge",
+                ids::BULGE,
+                vec![
+                    ("radius", Value::Scalar(26.0)),
+                    ("amount", Value::Scalar(0.8)),
+                ],
+            ),
+        ];
+        for (name, id, params) in cases {
+            let (mut doc, layers) = scene(WorkingSpace::SrgbCompat);
+            for l in &layers {
+                let fx = add_effect(&mut doc, *l, id);
+                for (n, v) in &params {
+                    set_param(&mut doc, *l, fx, n, v.clone());
+                }
+            }
+            compare(name, &render(&gpu, &mut c, &doc, Time::ZERO, 1.0));
+        }
+    }
+}

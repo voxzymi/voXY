@@ -532,6 +532,85 @@ at the layer origin.
 - **Regions:** RoD and ROI = padded by the growth (negative choke) plus
   Softness + 1 px.
 
+## Distort
+
+All distortions sample the input bilinearly at a mapped position
+(transparent outside the buffer). Their regions always contain the input
+region too, because one buffer holds every stage of a chain.
+
+### Transform (`voxy.distort.transform`, v1)
+
+| Parameter | Type | Range | Default |
+|---|---|---|---|
+| Anchor Point (`anchor`) | point, layer px, on-canvas handle | any | centre of the layer's content |
+| Position (`position`) | point, layer px, on-canvas handle | any | centre of the layer's content |
+| Scale (`scale`) | 2D factor | −100–100 (slider 0–4) | (1, 1) |
+| Rotation (`rotation`) | angle, degrees | any | 0 |
+| Opacity (`opacity`) | scalar, normalized | 0–1 | 1 |
+
+- **Formula:** the map `M(p) = position + R(rotation)·S(scale)·(p − anchor)`
+  (computed in `f64`); each output pixel reads the input at `M⁻¹(p)`,
+  times the opacity. A scale of 0 on either axis draws nothing.
+- **Regions:** RoD = the input and the box of `M(input)`, padded by 1 px;
+  ROI = the box of `M⁻¹(output)`, padded by 1 px. The defaults change
+  nothing.
+
+### Mirror (`voxy.distort.mirror`, v1)
+
+| Parameter | Type | Range | Default |
+|---|---|---|---|
+| Reflection Center (`center`) | point, layer px, on-canvas handle | any | centre of the layer's content |
+| Reflection Angle (`angle`) | angle, degrees | any | 0 |
+
+- **Formula:** with `n = (cos θ, sin θ)`, pixels with `(p − c)·n > 0` show
+  the reflection `p − 2((p − c)·n)n`; the others stay. 0° mirrors the
+  left side onto the right.
+- **Regions:** the rectangle and its reflection, padded by 1 px.
+
+### Wave (`voxy.distort.wave`, v1)
+
+| Parameter | Type | Range | Default |
+|---|---|---|---|
+| Amplitude (`amplitude`) | scalar, layer px | 0–500 (slider 0–100) | 10 |
+| Wavelength (`wavelength`) | scalar, layer px | 1–5000 (slider 5–500) | 60 |
+| Direction (`direction`) | angle, degrees | any | 0 |
+| Phase (`phase`) | angle, degrees | any | 0 |
+
+- **Formula:** with `d` the direction and `u` the distance along it from
+  the layer's origin, a pixel reads the input at
+  `p − A·sin(2π·u/λ + φ)·d⊥` (`d⊥` = `d` turned 90°). The phase is reduced
+  modulo 360° in `f64` before reaching the GPU.
+- **Regions:** padded by Amplitude + 1 px. Amplitude 0 changes nothing.
+
+### Ripple (`voxy.distort.ripple`, v1)
+
+| Parameter | Type | Range | Default |
+|---|---|---|---|
+| Center (`center`) | point, layer px, on-canvas handle | any | centre of the layer's content |
+| Amplitude (`amplitude`) | scalar, layer px | 0–500 (slider 0–50) | 4 |
+| Wavelength (`wavelength`) | scalar, layer px | 1–5000 (slider 5–300) | 30 |
+| Phase (`phase`) | angle, degrees | any | 0 |
+
+- **Formula:** with `r = |p − c|`, a pixel reads the input at
+  `p − A·sin(2π·r/λ − φ)·(p − c)/r`; increasing the phase moves the rings
+  outwards.
+- **Regions:** padded by Amplitude + 1 px. Amplitude 0 changes nothing.
+
+### Bulge (`voxy.distort.bulge`, v1)
+
+| Parameter | Type | Range | Default |
+|---|---|---|---|
+| Center (`center`) | point, layer px, on-canvas handle | any | centre of the layer's content |
+| Radius (`radius`) | scalar, layer px | 1–10 000 (slider 10–1000) | 100 |
+| Amount (`amount`) | scalar, normalized | −1–1 | 0.5 |
+
+- **Formula:** with `e = 2^amount` and `t = |p − c|/R < 1`, a pixel reads
+  the input at `c + (p − c)·t^(e − 1)`, i.e. at distance `R·t^e`: positive
+  amounts swell the centre, negative ones pinch it, and the circle's edge
+  does not move.
+- **Regions:** the rectangle, plus the circle's box when they meet.
+  Amount 0 changes nothing.
+
 ## Blend modes
 
 A layer's blend mode decides how it combines with everything below it in

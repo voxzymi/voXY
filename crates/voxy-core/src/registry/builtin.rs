@@ -43,6 +43,11 @@ pub mod ids {
     pub const CHROMA_KEY: &str = "voxy.keying.chroma_key";
     pub const LUMA_KEY: &str = "voxy.keying.luma_key";
     pub const MATTE_CHOKER: &str = "voxy.keying.matte_choker";
+    pub const TRANSFORM: &str = "voxy.distort.transform";
+    pub const MIRROR: &str = "voxy.distort.mirror";
+    pub const WAVE: &str = "voxy.distort.wave";
+    pub const RIPPLE: &str = "voxy.distort.ripple";
+    pub const BULGE: &str = "voxy.distort.bulge";
 }
 
 /// Every built-in definition, in no particular order.
@@ -75,6 +80,11 @@ pub fn builtin_definitions() -> Vec<EffectDef> {
         chroma_key(),
         luma_key(),
         matte_choker(),
+        transform(),
+        mirror(),
+        wave(),
+        ripple(),
+        bulge(),
     ]
 }
 
@@ -798,6 +808,145 @@ fn matte_choker() -> EffectDef {
             p.add("softness", "Softness", Value::Scalar(1.0), Unit::Pixels)
                 .range(0.0, 100.0)
                 .soft(0.0, 20.0);
+        },
+    )
+}
+
+const POINT_HINT: &str = "In layer pixels. Drag the handle in the viewer.";
+
+fn transform() -> EffectDef {
+    def(
+        ids::TRANSFORM,
+        "Transform",
+        Category::Distort,
+        "Moves, scales and rotates the layer's pixels inside its effect stack.",
+        |p| {
+            p.add(
+                "anchor",
+                "Anchor Point",
+                Value::Vec2(DVec2::ZERO),
+                Unit::Pixels,
+            )
+            .point()
+            .hint("The point scaling and rotation turn around.");
+            p.add(
+                "position",
+                "Position",
+                Value::Vec2(DVec2::ZERO),
+                Unit::Pixels,
+            )
+            .point()
+            .hint("Where the anchor point ends up.");
+            p.add("scale", "Scale", Value::Vec2(DVec2::ONE), Unit::Factor)
+                .range(-100.0, 100.0)
+                .soft(0.0, 4.0);
+            p.add("rotation", "Rotation", Value::Scalar(0.0), Unit::Degrees)
+                .soft(-180.0, 180.0);
+            p.add("opacity", "Opacity", Value::Scalar(1.0), Unit::Normalized)
+                .range(0.0, 1.0);
+        },
+    )
+}
+
+fn mirror() -> EffectDef {
+    def(
+        ids::MIRROR,
+        "Mirror",
+        Category::Distort,
+        "Reflects one side of the layer onto the other.",
+        |p| {
+            p.add(
+                "center",
+                "Reflection Center",
+                Value::Vec2(DVec2::ZERO),
+                Unit::Pixels,
+            )
+            .point()
+            .hint(POINT_HINT);
+            p.add(
+                "angle",
+                "Reflection Angle",
+                Value::Scalar(0.0),
+                Unit::Degrees,
+            )
+            .soft(-180.0, 180.0)
+            .hint("0° mirrors the left side onto the right; positive angles turn clockwise.");
+        },
+    )
+}
+
+fn wave() -> EffectDef {
+    def(
+        ids::WAVE,
+        "Wave",
+        Category::Distort,
+        "Bends the layer in parallel waves, like a flag.",
+        |p| {
+            p.add("amplitude", "Amplitude", Value::Scalar(10.0), Unit::Pixels)
+                .range(0.0, 500.0)
+                .soft(0.0, 100.0);
+            p.add(
+                "wavelength",
+                "Wavelength",
+                Value::Scalar(60.0),
+                Unit::Pixels,
+            )
+            .range(1.0, 5000.0)
+            .soft(5.0, 500.0);
+            p.add("direction", "Direction", Value::Scalar(0.0), Unit::Degrees)
+                .soft(-180.0, 180.0)
+                .hint("Where the waves travel: 0° is right, positive angles turn clockwise.");
+            p.add("phase", "Phase", Value::Scalar(0.0), Unit::Degrees)
+                .soft(-360.0, 360.0)
+                .hint("Animate this to make the waves move.");
+        },
+    )
+}
+
+fn ripple() -> EffectDef {
+    def(
+        ids::RIPPLE,
+        "Ripple",
+        Category::Distort,
+        "Rings spreading from a centre, like a stone dropped in water.",
+        |p| {
+            p.add("center", "Center", Value::Vec2(DVec2::ZERO), Unit::Pixels)
+                .point()
+                .hint(POINT_HINT);
+            p.add("amplitude", "Amplitude", Value::Scalar(4.0), Unit::Pixels)
+                .range(0.0, 500.0)
+                .soft(0.0, 50.0);
+            p.add(
+                "wavelength",
+                "Wavelength",
+                Value::Scalar(30.0),
+                Unit::Pixels,
+            )
+            .range(1.0, 5000.0)
+            .soft(5.0, 300.0);
+            p.add("phase", "Phase", Value::Scalar(0.0), Unit::Degrees)
+                .soft(-360.0, 360.0)
+                .hint("Animate this to make the rings move outwards.");
+        },
+    )
+}
+
+fn bulge() -> EffectDef {
+    def(
+        ids::BULGE,
+        "Bulge",
+        Category::Distort,
+        "Swells (or pinches) a round area, like a lens.",
+        |p| {
+            p.add("center", "Center", Value::Vec2(DVec2::ZERO), Unit::Pixels)
+                .point()
+                .hint(POINT_HINT);
+            p.add("radius", "Radius", Value::Scalar(100.0), Unit::Pixels)
+                .range(1.0, 10_000.0)
+                .soft(10.0, 1000.0);
+            p.add("amount", "Amount", Value::Scalar(0.5), Unit::Normalized)
+                .range(-1.0, 1.0)
+                .hint("Positive swells the centre, negative pinches it.");
         },
     )
 }

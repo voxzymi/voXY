@@ -374,6 +374,114 @@ mod blur_rules {
         }
     }
 
+    /// The distortions: every point a pixel reads is in the ROI, and every
+    /// pixel an input point reaches is in the region of definition.
+    #[test]
+    fn distortion_regions_cover_their_maps() {
+        use voxy_core::registry::ids;
+        let area = Rect::new(DVec2::new(-10.0, 5.0), DVec2::new(50.0, 30.0));
+        let inside = |rect: &Rect, p: DVec2| {
+            p.x >= rect.min.x - 1e-9
+                && p.y >= rect.min.y - 1e-9
+                && p.x <= rect.max.x + 1e-9
+                && p.y <= rect.max.y + 1e-9
+        };
+        let grid: Vec<DVec2> = (0..=12)
+            .flat_map(|i| {
+                (0..=5)
+                    .map(move |j| DVec2::new(-10.0 + f64::from(i) * 5.0, 5.0 + f64::from(j) * 5.0))
+            })
+            .collect();
+        // Transform: p ↦ position + R·S·(p − anchor).
+        let transform = fx(
+            ids::TRANSFORM,
+            &[
+                ("anchor", Value::Vec2(DVec2::new(20.0, 15.0))),
+                ("position", Value::Vec2(DVec2::new(40.0, 0.0))),
+                ("scale", Value::Vec2(DVec2::new(1.5, -0.5))),
+                ("rotation", Value::Scalar(30.0)),
+            ],
+        );
+        let angle = 30f64.to_radians();
+        let map = |p: DVec2| {
+            let v = (p - DVec2::new(20.0, 15.0)) * DVec2::new(1.5, -0.5);
+            DVec2::new(40.0, 0.0)
+                + DVec2::new(
+                    v.x * angle.cos() - v.y * angle.sin(),
+                    v.x * angle.sin() + v.y * angle.cos(),
+                )
+        };
+        let rod = Kernel::Transform.rod(&transform, area, 1.0);
+        for p in &grid {
+            assert!(inside(&rod, map(*p)), "transform rod misses {}", map(*p));
+        }
+        let roi = Kernel::Transform.roi(&transform, area, 1.0);
+        let out = Kernel::Transform.rod(&transform, area, 1.0);
+        for p in &grid {
+            // Pulled back, the mapped grid lands in the ROI of its image.
+            assert!(inside(&Kernel::Transform.roi(&transform, out, 1.0), *p));
+        }
+        assert!(roi.size().x > 0.0);
+        // Mirror: a reflection, both ways.
+        let mirror = fx(
+            ids::MIRROR,
+            &[
+                ("center", Value::Vec2(DVec2::new(5.0, 5.0))),
+                ("angle", Value::Scalar(20.0)),
+            ],
+        );
+        let normal = DVec2::new(20f64.to_radians().cos(), 20f64.to_radians().sin());
+        let reflect = |p: DVec2| p - 2.0 * (p - DVec2::new(5.0, 5.0)).dot(normal) * normal;
+        for p in &grid {
+            assert!(inside(&Kernel::Mirror.rod(&mirror, area, 1.0), reflect(*p)));
+            assert!(inside(&Kernel::Mirror.roi(&mirror, area, 1.0), reflect(*p)));
+        }
+        // Wave and Ripple move pixels by at most their amplitude.
+        for (kernel, id) in [(Kernel::Wave, ids::WAVE), (Kernel::Ripple, ids::RIPPLE)] {
+            let f = fx(id, &[("amplitude", Value::Scalar(7.0))]);
+            assert_eq!(kernel.rod(&f, area, 1.0), area.pad(DVec2::splat(8.0)));
+            assert_eq!(kernel.roi(&f, area, 1.0), area.pad(DVec2::splat(8.0)));
+        }
+        // Bulge: inside the circle, pixels read from inside it.
+        let b = fx(
+            ids::BULGE,
+            &[
+                ("center", Value::Vec2(DVec2::new(60.0, 20.0))),
+                ("radius", Value::Scalar(15.0)),
+                ("amount", Value::Scalar(0.5)),
+            ],
+        );
+        let grown = Kernel::Bulge.rod(&b, area, 1.0);
+        assert!(inside(&grown, DVec2::new(76.0, 20.0)), "{grown:?}");
+        let far = fx(
+            ids::BULGE,
+            &[
+                ("center", Value::Vec2(DVec2::new(500.0, 20.0))),
+                ("amount", Value::Scalar(0.5)),
+            ],
+        );
+        assert_eq!(
+            Kernel::Bulge.rod(&far, area, 1.0),
+            area,
+            "a circle that misses the layer"
+        );
+        // Defaults (centred points, identity transform) change nothing.
+        let ctx = PassContext::new(1.0, voxy_core::WorkingSpace::Linear);
+        let ident = fx(
+            ids::TRANSFORM,
+            &[
+                ("anchor", Value::Vec2(DVec2::new(3.0, 4.0))),
+                ("position", Value::Vec2(DVec2::new(3.0, 4.0))),
+            ],
+        );
+        assert_eq!(Kernel::Transform.passes(&ident, &ctx).len(), 0);
+        let flat = fx(
+            ids::TRANSFORM,
+            &[("scale", Value::Vec2(DVec2::new(0.0, 1.0)))],
+        );
+        assert_eq!(Kernel::Transform.rod(&flat, area, 1.0), area);
+    }
+
     /// The shadows reach the moved, blurred copy of their input.
     #[test]
     fn shadow_regions_cover_the_moved_blur() {
@@ -650,6 +758,8 @@ fn kernel_parameters_are_finite_across_the_grid() {
                     let r = Rect::of_size(voxy_core::glam::DVec2::new(10.0, 10.0));
                     let rod = kernel.rod(&fx, r, scale);
                     assert!(rod.min.is_finite() && rod.max.is_finite(), "{kernel:?}");
+                    // One buffer holds every stage: the region keeps the input.
+                    assert_eq!(rod.union(&r), rod, "{kernel:?} {:?}", fx.params);
                 }
             }
         }

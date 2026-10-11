@@ -133,6 +133,11 @@ fn kernel_shader(kernel: Kernel) -> &'static str {
         Kernel::ChromaKey => include_str!("../shaders/effects/chroma_key.wgsl"),
         Kernel::LumaKey => include_str!("../shaders/effects/luma_key.wgsl"),
         Kernel::MatteChoker => include_str!("../shaders/effects/morphology.wgsl"),
+        Kernel::Transform => include_str!("../shaders/effects/transform.wgsl"),
+        Kernel::Mirror => include_str!("../shaders/effects/mirror.wgsl"),
+        Kernel::Wave => include_str!("../shaders/effects/wave.wgsl"),
+        Kernel::Ripple => include_str!("../shaders/effects/ripple.wgsl"),
+        Kernel::Bulge => include_str!("../shaders/effects/bulge.wgsl"),
     }
 }
 
