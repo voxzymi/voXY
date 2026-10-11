@@ -390,6 +390,23 @@ at the layer origin.
   puts the frame in the cache key, and only seeded effects put the layer
   in it.
 
+### Chromatic Aberration (`voxy.stylize.chromatic_aberration`, v1)
+
+| Parameter | Type | Range | Default |
+|---|---|---|---|
+| Amount (`amount`) | scalar, factor | 0–0.2 (slider 0–0.05) | 0.01 |
+| Center (`center`) | point, layer px, on-canvas handle | any | centre of the layer's content |
+
+- **Space:** working, premultiplied.
+- **Formula:** with `k` the amount and `d = p − c` in texels, red comes
+  from a bilinear sample at `c + d/(1 + k)` (red drawn `1 + k` larger),
+  blue from `c + d/(1 − k)` (drawn `1 − k` smaller), green from the pixel
+  itself. Alpha is the largest of the three samples' alphas. Samples
+  outside the buffer are transparent.
+- **Regions:** RoD = the input and the input scaled by `1 ± k` around `c`,
+  padded by 1 px. ROI = the output and the output scaled by `1/(1 ± k)`,
+  padded by 1 px. Amount 0 changes nothing.
+
 ## Blend modes
 
 A layer's blend mode decides how it combines with everything below it in

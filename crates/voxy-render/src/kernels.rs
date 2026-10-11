@@ -270,6 +270,11 @@ pub fn grain_seed(layer: u64, seed: i64, frame: i64) -> u32 {
     (h ^ (h >> 32)) as u32
 }
 
+/// Chromatic Aberration's scale difference `k` (red `1 + k`, blue `1 − k`).
+fn aberration(fx: &EvaluatedEffect) -> f64 {
+    scalar(fx, "amount", 0.0).clamp(0.0, 0.2)
+}
+
 /// Pixelate's block size in layer pixels.
 fn pixel_cell(fx: &EvaluatedEffect) -> f64 {
     scalar(fx, "cell", 10.0).clamp(1.0, 1000.0)
@@ -322,11 +327,12 @@ pub enum Kernel {
     Vignette,
     Pixelate,
     Grain,
+    ChromaticAberration,
 }
 
 impl Kernel {
     /// Every kernel.
-    pub const ALL: [Kernel; 19] = [
+    pub const ALL: [Kernel; 20] = [
         Kernel::Invert,
         Kernel::GaussianBlur,
         Kernel::BoxBlur,
@@ -346,6 +352,7 @@ impl Kernel {
         Kernel::Vignette,
         Kernel::Pixelate,
         Kernel::Grain,
+        Kernel::ChromaticAberration,
     ];
 
     /// The kernel running `type_id` at `version`, if this build has one.
@@ -401,6 +408,7 @@ impl Kernel {
             Kernel::Vignette => ids::VIGNETTE,
             Kernel::Pixelate => ids::PIXELATE,
             Kernel::Grain => ids::GRAIN,
+            Kernel::ChromaticAberration => ids::CHROMATIC_ABERRATION,
         }
     }
 
@@ -519,6 +527,15 @@ impl Kernel {
                     0.0,
                 ];
                 k.p[2] = working_rgb(color(fx, "color", LinearRgba::BLACK), space);
+                vec![k]
+            }
+            Kernel::ChromaticAberration => {
+                let amount = aberration(fx);
+                if amount == 0.0 {
+                    return Vec::new();
+                }
+                let c = ctx.texel(point(fx, "center"));
+                k.p[0] = [c.x as f32, c.y as f32, amount as f32, 0.0];
                 vec![k]
             }
             Kernel::Grain => {
@@ -702,7 +719,8 @@ impl Kernel {
             // Position-dependent: `rod` and `roi` handle them.
             | Kernel::RadialBlur
             | Kernel::ZoomBlur
-            | Kernel::Pixelate => DVec2::ZERO,
+            | Kernel::Pixelate
+            | Kernel::ChromaticAberration => DVec2::ZERO,
             Kernel::GaussianBlur | Kernel::BoxBlur => {
                 let passes = if self == Kernel::BoxBlur {
                     scalar(fx, "passes", 1.0).clamp(1.0, 5.0)
@@ -740,6 +758,14 @@ impl Kernel {
                 .union(&scaled(input, c, 1.0 / (1.0 - zoom_amount(fx))))
                 .pad(DVec2::ONE),
             Kernel::Pixelate if pixel_cell(fx) > 1.0 => cells(input, pixel_cell(fx)),
+            // Red is drawn scaled by 1 + k around c, blue by 1 − k.
+            Kernel::ChromaticAberration if aberration(fx) > 0.0 => {
+                let k = aberration(fx);
+                input
+                    .union(&scaled(input, c, 1.0 + k))
+                    .union(&scaled(input, c, 1.0 - k))
+                    .pad(DVec2::ONE)
+            }
             _ if self.repeats_edges(fx) => input,
             _ => input.pad(self.reach(fx)),
         }
@@ -755,6 +781,13 @@ impl Kernel {
                 .union(&scaled(output, c, 1.0 - zoom_amount(fx)))
                 .pad(DVec2::ONE),
             Kernel::Pixelate if pixel_cell(fx) > 1.0 => cells(output, pixel_cell(fx)),
+            Kernel::ChromaticAberration if aberration(fx) > 0.0 => {
+                let k = aberration(fx);
+                output
+                    .union(&scaled(output, c, 1.0 / (1.0 + k)))
+                    .union(&scaled(output, c, 1.0 / (1.0 - k)))
+                    .pad(DVec2::ONE)
+            }
             _ => output.pad(self.reach(fx)),
         }
     }

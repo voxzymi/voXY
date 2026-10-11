@@ -326,7 +326,10 @@ at `743b053` (merge of #3).
       chain key) and keeps the frame only while Animate is on. Tests: same
       frame bit-identical (also across compositors), next frame different,
       Animate off still, one seed per layer; two goldens.
-   3. Chromatic Aberration.
+   3. **Done:** Chromatic Aberration (red and blue scaled `1 ± k` around a
+      draggable centre). Region rules tested against sampled geometry; one
+      golden. CI green on all four platforms for group 2 (run 38123139130,
+      `bf3b52c`).
    4. A saved "original input" texture for kernels that combine their
       result with their input: Drop Shadow and Inner Shadow.
    5. Glow.

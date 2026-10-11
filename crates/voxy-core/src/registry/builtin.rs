@@ -35,6 +35,7 @@ pub mod ids {
     pub const VIGNETTE: &str = "voxy.stylize.vignette";
     pub const PIXELATE: &str = "voxy.stylize.pixelate";
     pub const GRAIN: &str = "voxy.stylize.grain";
+    pub const CHROMATIC_ABERRATION: &str = "voxy.stylize.chromatic_aberration";
 }
 
 /// Every built-in definition, in no particular order.
@@ -59,6 +60,7 @@ pub fn builtin_definitions() -> Vec<EffectDef> {
         vignette(),
         pixelate(),
         grain(),
+        chromatic_aberration(),
     ]
 }
 
@@ -580,4 +582,24 @@ fn grain() -> EffectDef {
     );
     d.seeded = true;
     d
+}
+
+fn chromatic_aberration() -> EffectDef {
+    def(
+        ids::CHROMATIC_ABERRATION,
+        "Chromatic Aberration",
+        Category::Stylize,
+        "Splits red and blue apart towards the edges, like a cheap lens.",
+        |p| {
+            p.add("amount", "Amount", Value::Scalar(0.01), Unit::Factor)
+                .range(0.0, 0.2)
+                .soft(0.0, 0.05)
+                .hint(
+                    "Red is drawn this much larger and blue this much smaller, around the centre.",
+                );
+            p.add("center", "Center", Value::Vec2(DVec2::ZERO), Unit::Pixels)
+                .point()
+                .hint("In layer pixels. Drag the handle in the viewer.");
+        },
+    )
 }

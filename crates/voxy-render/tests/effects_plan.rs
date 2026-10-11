@@ -298,10 +298,34 @@ mod blur_rules {
                 }
             }
         }
+        for amount in [0.01, 0.2] {
+            let effect = fx(
+                ids::CHROMATIC_ABERRATION,
+                &[
+                    ("amount", Value::Scalar(amount)),
+                    ("center", Value::Vec2(c)),
+                ],
+            );
+            let roi = Kernel::ChromaticAberration.roi(&effect, area, 1.0);
+            let rod = Kernel::ChromaticAberration.rod(&effect, area, 1.0);
+            for p in &grid {
+                for scale in [1.0 + amount, 1.0 - amount] {
+                    // A pixel reads c + (p − c)/scale; an input point is
+                    // drawn at c + (p − c)·scale.
+                    assert!(inside(&roi, c + (*p - c) / scale), "aberration roi");
+                    assert!(inside(&rod, c + (*p - c) * scale), "aberration rod");
+                }
+            }
+        }
         // Nothing to do: the regions stay as they are.
         for (kernel, id, name) in [
             (Kernel::RadialBlur, ids::RADIAL_BLUR, "angle"),
             (Kernel::ZoomBlur, ids::ZOOM_BLUR, "amount"),
+            (
+                Kernel::ChromaticAberration,
+                ids::CHROMATIC_ABERRATION,
+                "amount",
+            ),
         ] {
             let effect = fx(
                 id,

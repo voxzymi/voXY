@@ -96,6 +96,9 @@ pub(super) fn kernel_shader(kernel: Kernel) -> &'static str {
         Kernel::Vignette => include_str!("../shaders/effects/vignette.wgsl"),
         Kernel::Pixelate => include_str!("../shaders/effects/pixelate.wgsl"),
         Kernel::Grain => include_str!("../shaders/effects/grain.wgsl"),
+        Kernel::ChromaticAberration => {
+            include_str!("../shaders/effects/chromatic_aberration.wgsl")
+        }
     }
 }
 
