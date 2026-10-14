@@ -485,8 +485,12 @@ at `743b053` (merge of #3).
          render through shared memory, messages, unload; a crashing
          plugin ends only the sandbox. Parameter queries at other times
          use the snapshot value until the editor-query step.
-   4. Host client: launch, handshake, timeouts, crash and hang handling,
-      session blocklist; the deliberately broken test plugins.
+   4. **Done:** `client::Sandbox`: launch with a connect timeout,
+      handshake, per-action timeouts, crash/hang/protocol errors that kill
+      the sandbox and stick, abort flag; `Blocklist` (session, persistent
+      after 3 failures, Retry). Tests: clean run, crash in Render, hang in
+      Render (killed at a 0.5 s test timeout), a bundle that does not load,
+      the blocklist rules.
    5. Effect definitions from descriptions; CPU rendering of filter
       plugins in the render graph.
    6. UI: error badge, reason and Retry; persistent blocklist.

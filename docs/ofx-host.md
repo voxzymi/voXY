@@ -209,6 +209,24 @@ closes (then it unloads everything and exits 0).
 - `OfxSetHost` (the optional binary-level export in 1.5) is not called
   yet.
 
+## Editor side of a sandbox (O-B, `voxy_ofx_host::client`)
+
+- **Launch:** the editor listens, starts the sandbox (found next to its
+  own executable), waits up to 10 s for it to connect, checks the
+  protocol version and hands it its mapping. A bundle that does not load
+  fails the launch with the sandbox's reason.
+- **Timeouts** (defaults, adjustable in Preferences later): Describe 10 s,
+  CreateInstance 5 s, Render 30 s, everything else 5 s.
+- **Crash, hang, protocol error:** the sandbox process is killed, the
+  error names the action (and the exit status or signal for a crash), and
+  every later request fails at once with it. The editor's process is never
+  affected; tests run a crashing and a hanging plugin to prove it.
+- **Blocklist:** a failure blocks the plugin for the session. After 3
+  failures the block is persistent (kept in Preferences). Retry clears it
+  and restarts the sandbox cleanly.
+- Dropping a healthy sandbox sends Unload (0.5 s grace) and then ends the
+  process.
+
 ## Still to be written (O-A to O-D)
 
 Render scale and multi-resolution, thread-safety levels across

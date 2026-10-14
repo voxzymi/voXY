@@ -42,7 +42,10 @@ fn main() -> ExitCode {
         Ok(s) => s,
         Err(e) => {
             eprintln!("voxy-ofx-sandbox: {e}");
-            // Tell the editor why before going.
+            // Answer the editor's greeting with the reason, then go.
+            let _ = voxy_ofx_host::protocol::read_frame::<voxy_ofx_host::protocol::Request>(
+                &mut stream,
+            );
             let _ = voxy_ofx_host::protocol::write_frame(
                 &mut stream,
                 &voxy_ofx_host::protocol::Reply::Error(e),
