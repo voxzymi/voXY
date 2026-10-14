@@ -14,6 +14,8 @@ workspace = true
 
 [dependencies]
 voxy-ofx-sys.workspace = true
+interprocess.workspace = true
+libloading.workspace = true
 memmap2.workspace = true
 postcard.workspace = true
 serde.workspace = true

@@ -285,6 +285,29 @@ impl Image {
         self.write_rgba(&px);
     }
 
+    /// An image holding `bytes` exactly as laid out in memory (bottom-up
+    /// rows of `row_bytes`), or `None` if the sizes disagree.
+    pub fn from_raw(
+        bounds: RectI,
+        depth: Depth,
+        components: Components,
+        premult: Premult,
+        bytes: &[u8],
+    ) -> Option<Image> {
+        let img = Image::new(bounds, depth, components, premult, [1.0, 1.0], 1.0)?;
+        if bytes.len() != img.buf.len() {
+            return None;
+        }
+        img.buf.write(bytes);
+        Some(img)
+    }
+
+    /// The bytes as laid out in memory. Call only when no plugin action is
+    /// writing.
+    pub fn raw(&self) -> Vec<u8> {
+        self.buf.to_vec()
+    }
+
     /// The pixels as RGBA floats, bottom-up. RGB gets alpha 1; Alpha gets
     /// colour 0. Call only when no plugin action is writing.
     pub fn to_rgba(&self) -> Vec<f32> {

@@ -186,6 +186,29 @@ it.
 - **DestroyInstance** when an instance is dropped, **Unload** when the
   plugin is.
 
+## Sandbox (O-B)
+
+`voxy-ofx-sandbox --bundle <path> --channel <spec>` runs one bundle's
+plugins. It connects to the editor's local socket (`ns:` names on Linux
+and Windows, an `fs:` socket file in the session folder on macOS),
+answers `Hello` with its protocol version and process ID, maps the shared
+memory it is sent, and serves requests until `Unload` or until the channel
+closes (then it unloads everything and exits 0).
+
+- The binary is the bundle's `Contents/<arch>/NAME.ofx`, or a path to a
+  binary. Plugins that fail Load or Describe are listed in the
+  description's `failed` with the reason; the rest still work.
+- For a render, each input slot is copied into an image the plugin reads,
+  and the output image is copied back into its slot afterwards.
+- A heartbeat thread bumps the counter in the mapping every 25 ms, and
+  passes the editor's abort flag on to every instance.
+- Parameter values come from the request's snapshot. A plugin asking for
+  another time gets the snapshot value for now; asking the editor back
+  comes in a later O-B step. Changes the plugin makes return as
+  `ParamEdit`s with the action's reply.
+- `OfxSetHost` (the optional binary-level export in 1.5) is not called
+  yet.
+
 ## Still to be written (O-A to O-D)
 
 Render scale and multi-resolution, thread-safety levels across

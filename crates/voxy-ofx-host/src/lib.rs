@@ -1,5 +1,6 @@
 //! voXY's OpenFX host.
 //!
+//! - [`channel`]: the local-socket control channel to a sandbox.
 //! - [`clip`]: clip descriptors and instances.
 //! - [`discovery`]: the plugin search paths and the `.ofx.bundle` layout.
 //! - [`props`]: property sets, in safe Rust.
@@ -16,6 +17,7 @@
 //! The editor never loads a plugin binary: that happens in
 //! `voxy-ofx-sandbox`, one helper process per bundle (design §6.3).
 
+pub mod channel;
 pub mod clip;
 pub mod discovery;
 pub mod effect;

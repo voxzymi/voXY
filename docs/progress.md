@@ -478,6 +478,13 @@ at `743b053` (merge of #3).
       1. **Done:** `voxy-ofx-testplugins`, our own test plugins (gain,
          crash, hang) as a `cdylib` + `rlib` exporting `OfxGetPlugin`; the
          in-process harness now links the same gain plugin.
+      2. **Done:** `voxy-ofx-sandbox`: bundle loading (`libloading`, in the
+         sandbox only), the request server, local-socket channel
+         (`interprocess`), heartbeat and abort thread. End-to-end tests
+         build a real `.ofx.bundle` from the test plugins: describe,
+         render through shared memory, messages, unload; a crashing
+         plugin ends only the sandbox. Parameter queries at other times
+         use the snapshot value until the editor-query step.
    4. Host client: launch, handshake, timeouts, crash and hang handling,
       session blocklist; the deliberately broken test plugins.
    5. Effect definitions from descriptions; CPU rendering of filter

@@ -267,6 +267,41 @@ impl SharedMemory {
         Some(&mut self.map[r])
     }
 
+    /// Copies `out.len()` bytes from `offset`; false if out of range. Takes
+    /// `&self` because the other process may write at any time anyway; the
+    /// protocol decides who owns a slot when.
+    pub fn read_into(&self, offset: u64, out: &mut [u8]) -> bool {
+        let Some(r) = self.range(offset, out.len()) else {
+            return false;
+        };
+        // SAFETY: inside the mapping; `out` is a separate Rust buffer.
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                self.map.as_ptr().add(r.start),
+                out.as_mut_ptr(),
+                out.len(),
+            );
+        };
+        true
+    }
+
+    /// Copies `data` to `offset`; false if out of range.
+    pub fn write_from(&self, offset: u64, data: &[u8]) -> bool {
+        let Some(r) = self.range(offset, data.len()) else {
+            return false;
+        };
+        // SAFETY: inside the mapping (writable, `MmapMut`); the slot is
+        // the writer's by protocol, and `data` is a separate Rust buffer.
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                data.as_ptr(),
+                self.map.as_ptr().cast_mut().add(r.start),
+                data.len(),
+            );
+        }
+        true
+    }
+
     /// The address of `offset`, for handing an image to a plugin; checked
     /// like [`SharedMemory::bytes`].
     pub fn ptr(&mut self, offset: u64, len: usize) -> Option<*mut u8> {

@@ -218,6 +218,11 @@ pub enum Request {
     Hello {
         version: u32,
     },
+    /// Use the shared memory at `path` (sent first, and again whenever the
+    /// host replaces the mapping with a bigger one).
+    Map {
+        path: String,
+    },
     /// Load and describe every plugin in the bundle.
     Describe,
     CreateInstance {
@@ -243,6 +248,8 @@ pub enum Request {
         instance: u32,
         time: f64,
         scale: [f64; 2],
+        /// The input clips' regions of definition, canonical coordinates.
+        inputs: Vec<(String, [f64; 4])>,
     },
     RegionsOfInterest {
         instance: u32,
