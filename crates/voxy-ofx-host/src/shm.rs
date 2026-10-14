@@ -87,15 +87,16 @@ impl Drop for SessionDir {
     }
 }
 
-#[cfg(unix)]
+/// Makes `path` private to the user. The per-user temp folder is already
+/// private on Windows.
+#[cfg_attr(not(unix), allow(clippy::unnecessary_wraps))]
 fn restrict(path: &Path) -> io::Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
-}
-
-#[cfg(not(unix))]
-fn restrict(_path: &Path) -> io::Result<()> {
-    // The per-user temp folder is already private on Windows.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
+    }
+    let _ = path;
     Ok(())
 }
 
