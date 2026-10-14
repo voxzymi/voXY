@@ -133,6 +133,12 @@ pub struct EditorState {
     pub ofx: Option<std::sync::Arc<voxy_ofx_host::runtime::OfxRuntime>>,
     /// What OpenFX start-up could not use: `(bundle or plugin, reason)`.
     pub ofx_problems: Vec<(String, String)>,
+    /// Effects the last viewport frame passed through because their plugin
+    /// failed, with the reason (shown on the effect's header).
+    pub effect_errors: std::collections::HashMap<voxy_core::EffectId, String>,
+    /// Render the viewport again even if the document has not changed
+    /// (after Retry).
+    pub redraw: bool,
     /// Effects last copied (Copy Effect), for pasting onto other layers.
     pub effect_clipboard: Vec<voxy_core::EffectInstance>,
     /// The Effects & Presets panel's view state.
@@ -199,6 +205,8 @@ impl EditorState {
             effects: std::sync::Arc::new(voxy_core::registry::builtins().clone()),
             ofx: None,
             ofx_problems: Vec::new(),
+            effect_errors: std::collections::HashMap::new(),
+            redraw: false,
             effect_clipboard: Vec::new(),
             effects_panel: crate::effects_panel::EffectsPanel::default(),
             selected_effect: None,
@@ -1227,6 +1235,22 @@ impl EditorState {
         }
         self.ofx_problems = startup.problems;
         self.ofx = startup.runtime;
+    }
+
+    /// Why an OpenFX effect type is blocked, if it is.
+    pub fn ofx_blocked(&self, type_id: &voxy_core::EffectTypeId) -> Option<String> {
+        self.ofx.as_ref()?.blocked(type_id).map(|b| b.reason)
+    }
+
+    /// The Retry action on an OpenFX effect: unblocks its plugin, whose
+    /// host restarts cleanly on the next frame.
+    pub fn retry_ofx(&mut self, type_id: &voxy_core::EffectTypeId) {
+        if let Some(rt) = &self.ofx {
+            rt.retry(type_id);
+        }
+        self.effect_errors.clear();
+        self.redraw = true;
+        self.save_prefs();
     }
 
     /// Keeps the live preview in step with the dialog: the viewport shows

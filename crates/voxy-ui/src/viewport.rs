@@ -104,6 +104,12 @@ impl ViewportRenderer {
         }
     }
 
+    /// Forgets the last frames, so the next ones render even if nothing
+    /// changed (after an OpenFX Retry).
+    pub fn invalidate(&mut self) {
+        self.last = [None, None];
+    }
+
     /// Lets the compositor run OpenFX effects through `runtime`.
     pub fn set_external(
         &mut self,

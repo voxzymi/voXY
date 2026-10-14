@@ -289,8 +289,26 @@ the next chain texture; GPU effects after it continue as usual.
   plugins of the bundle get a fresh sandbox); a plugin that returns an
   error status is reported but not blocked.
 
+## Messages in the editor (O-B)
+
+- An OpenFX effect that the last frame passed through (plugin failed,
+  blocked, not installed, or no plugin host) is shown in Effect Controls
+  with its name in the error colour, a ⚠ badge on its header whose
+  tooltip gives the reason, and a line in its body: "The image passes
+  through unchanged: <reason>." with a **Retry** button.
+- Retry unblocks the plugin (session and persistent blocks), forgets the
+  errors and renders the frame again; the plugin's host restarts cleanly.
+- The Effects & Presets panel keeps a blocked plugin listed, in the error
+  colour, with the reason in its tooltip.
+- Start-up problems (bundles without a binary for this platform, plugins
+  that could not be mapped, a missing plugin host) are logged.
+
 ## Still to be written (O-A to O-D)
 
-Render scale and multi-resolution, thread-safety levels across
-instances, timeouts and abort through the sandbox (O-B), the transition
-and general contexts (O-C), interacts (O-D), parametric parameters.
+Left after O-B: parameter values at other times than the frame (asked
+back from the editor), key times, the plugin's own regions of definition
+and interest, absolute image coordinates, push buttons, sequence-render
+calls during export and playback, the generator context, cancelling a
+render from the editor, timeouts in Preferences, and instance clean-up when
+an effect is deleted. Then the transition and general contexts (O-C),
+interacts (O-D) and parametric parameters.

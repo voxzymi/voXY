@@ -141,4 +141,18 @@ mod tests {
         );
         assert_eq!(state.ofx_problems.len(), 1);
     }
+
+    #[test]
+    fn retry_clears_the_errors_and_redraws() {
+        let mut state = EditorState::new(EditorState::untitled());
+        let t = EffectTypeId::new("ofx:org.example.Thing");
+        state.effect_errors.insert(
+            voxy_core::EffectId(7),
+            "the plugin crashed during Render".into(),
+        );
+        assert_eq!(state.ofx_blocked(&t), None, "no runtime, nothing blocked");
+        state.retry_ofx(&t);
+        assert!(state.effect_errors.is_empty());
+        assert!(state.redraw);
+    }
 }

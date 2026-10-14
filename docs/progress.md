@@ -522,7 +522,14 @@ at `743b053` (merge of #3).
             session folder. The workspace `rust-version` is now 1.99 (the
             editor links the host, which needs C-variadic functions; CI
             already used 1.99).
-   6. UI: error badge, reason and Retry; persistent blocklist.
+   6. **Done:** UI messages: the effect header's ⚠ badge and error colour
+      with the reason, a pass-through line with Retry in Effect Controls,
+      blocked plugins marked in the Effects panel; Retry unblocks, forgets
+      the errors and redraws. Persistent blocks live in Preferences
+      (step 5.4.2).
+
+   **O-B complete** for the requested scope (filter plugins). What is left
+   for follow-up steps is listed at the end of `docs/ofx-host.md`.
 7. O-C, O-D.
 
 ## Approved decisions
