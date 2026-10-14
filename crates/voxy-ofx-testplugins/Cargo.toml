@@ -1,0 +1,20 @@
+[package]
+name = "voxy-ofx-testplugins"
+description = "voXY's own OpenFX test plugins (gain, crash, hang); test fixtures, never shipped"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[lib]
+# `cdylib` is the `.ofx` binary the sandbox tests load; `rlib` links the
+# same plugins into the in-process harness.
+crate-type = ["cdylib", "rlib"]
+
+[lints]
+workspace = true
+
+[dependencies]
+voxy-ofx-sys.workspace = true

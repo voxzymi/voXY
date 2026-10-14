@@ -475,6 +475,9 @@ at `743b053` (merge of #3).
       whose lock is free (left by a crash), as D4 requires.
    3. The sandbox binary: loads a bundle, serves requests over a local
       socket.
+      1. **Done:** `voxy-ofx-testplugins`, our own test plugins (gain,
+         crash, hang) as a `cdylib` + `rlib` exporting `OfxGetPlugin`; the
+         in-process harness now links the same gain plugin.
    4. Host client: launch, handshake, timeouts, crash and hang handling,
       session blocklist; the deliberately broken test plugins.
    5. Effect definitions from descriptions; CPU rendering of filter

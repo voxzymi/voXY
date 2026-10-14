@@ -19,4 +19,5 @@ postcard.workspace = true
 serde.workspace = true
 
 [dev-dependencies]
+voxy-ofx-testplugins = { path = "../voxy-ofx-testplugins" }
 tempfile.workspace = true

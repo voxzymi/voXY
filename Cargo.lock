@@ -3799,6 +3799,7 @@ dependencies = [
  "serde",
  "tempfile",
  "voxy-ofx-sys",
+ "voxy-ofx-testplugins",
 ]
 
 [[package]]
@@ -3808,6 +3809,13 @@ version = "0.1.0"
 [[package]]
 name = "voxy-ofx-sys"
 version = "0.1.0"
+
+[[package]]
+name = "voxy-ofx-testplugins"
+version = "0.1.0"
+dependencies = [
+ "voxy-ofx-sys",
+]
 
 [[package]]
 name = "voxy-render"
