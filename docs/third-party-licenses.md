@@ -7,7 +7,7 @@ CI fails if this file is stale. The policy that every license must satisfy is in
 The list covers every target platform, so it includes crates that are only
 compiled on Windows, macOS or Linux.
 
-412 crates.
+415 crates.
 
 ## By license
 
@@ -29,7 +29,7 @@ compiled on Windows, macOS or Linux.
 | `BSL-1.0` | 2 |
 | `ISC` | 1 |
 | `MIT` | 90 |
-| `MIT OR Apache-2.0` | 209 |
+| `MIT OR Apache-2.0` | 212 |
 | `MIT OR Apache-2.0 OR LGPL-2.1-or-later` | 1 |
 | `MIT OR Apache-2.0 OR Zlib` | 6 |
 | `MIT OR Zlib OR Apache-2.0` | 1 |
@@ -99,6 +99,7 @@ compiled on Windows, macOS or Linux.
 | [`cgl`](https://github.com/servo/cgl-rs) | 0.3.2 | `MIT OR Apache-2.0` |
 | [`clang-sys`](https://github.com/KyleMayes/clang-sys) | 1.9.1 | `Apache-2.0` |
 | [`clipboard-win`](https://github.com/DoumanAsh/clipboard-win) | 5.4.1 | `BSL-1.0` |
+| [`cobs`](https://github.com/jamesmunns/cobs.rs) | 0.3.0 | `MIT OR Apache-2.0` |
 | [`codespan-reporting`](https://github.com/brendanzab/codespan) | 0.13.1 | `Apache-2.0` |
 | [`color`](https://github.com/linebender/color) | 0.3.3 | `Apache-2.0 OR MIT` |
 | [`combine`](https://github.com/Marwes/combine) | 4.6.8 | `MIT` |
@@ -131,6 +132,7 @@ compiled on Windows, macOS or Linux.
 | [`egui_glow`](https://github.com/emilk/egui/tree/main/crates/egui_glow) | 0.36.2 | `MIT OR Apache-2.0` |
 | [`either`](https://github.com/rayon-rs/either) | 1.19.0 | `MIT OR Apache-2.0` |
 | [`emath`](https://github.com/emilk/egui/tree/main/crates/emath) | 0.36.2 | `MIT OR Apache-2.0` |
+| [`embedded-io`](https://github.com/embassy-rs/embedded-io) | 0.4.0, 0.6.1 | `MIT OR Apache-2.0` |
 | [`endi`](https://github.com/zeenix/endi) | 1.1.1 | `MIT` |
 | [`enumflags2`](https://github.com/meithecatte/enumflags2) | 0.7.12 | `MIT OR Apache-2.0` |
 | [`enumflags2_derive`](https://github.com/meithecatte/enumflags2) | 0.7.12 | `MIT OR Apache-2.0` |
@@ -278,6 +280,7 @@ compiled on Windows, macOS or Linux.
 | [`polycool`](https://github.com/linebender/kurbo) | 0.4.0 | `MIT OR Apache-2.0` |
 | [`portable-atomic`](https://github.com/taiki-e/portable-atomic) | 1.15.0 | `Apache-2.0 OR MIT` |
 | [`portable-atomic-util`](https://github.com/taiki-e/portable-atomic-util) | 0.2.8 | `Apache-2.0 OR MIT` |
+| [`postcard`](https://github.com/jamesmunns/postcard) | 1.1.3 | `MIT OR Apache-2.0` |
 | [`ppv-lite86`](https://github.com/cryptocorrosion/cryptocorrosion) | 0.2.21 | `MIT OR Apache-2.0` |
 | [`presser`](https://github.com/EmbarkStudios/presser) | 0.3.1 | `MIT OR Apache-2.0` |
 | [`proc-macro-crate`](https://github.com/bkchr/proc-macro-crate) | 3.5.0 | `MIT OR Apache-2.0` |

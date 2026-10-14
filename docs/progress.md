@@ -458,7 +458,24 @@ at `743b053` (merge of #3).
       licenses, unpinned commits, and downloads without a sha256; once
       `third_party/ofx-fixtures.toml` exists, every fixture must be an
       approved credit.
-6. O-B to O-D.
+   **O-A complete.** CI green on `main` at `3a1d1e3` (merge of #4), all
+   jobs on all four platforms (run 38151511685).
+6. O-B: the sandbox process, CPU rendering of filter plugins (design
+   §6.7). Steps:
+   1. **Done:** `protocol`: versioned `Request`/`Reply` in
+      length-prefixed `postcard` frames (16 MiB cap, exact decoding),
+      serializable descriptions (no pointers cross), parameter snapshots,
+      image slots and parameter edits. Round-trip and garbage tests, and
+      a `cargo fuzz` target (`ofx_frame`).
+   2. Shared memory: the per-session file, header and image slots.
+   3. The sandbox binary: loads a bundle, serves requests over a local
+      socket.
+   4. Host client: launch, handshake, timeouts, crash and hang handling,
+      session blocklist; the deliberately broken test plugins.
+   5. Effect definitions from descriptions; CPU rendering of filter
+      plugins in the render graph.
+   6. UI: error badge, reason and Retry; persistent blocklist.
+7. O-C, O-D.
 
 ## Approved decisions
 

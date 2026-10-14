@@ -15,7 +15,7 @@ use crate::props::{PropSet, Values, ofx_str};
 use crate::suites::PixelBuffer;
 
 /// A pixel depth (`kOfxBitDepth*`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Depth {
     Byte,
     Short,
@@ -47,7 +47,7 @@ impl Depth {
 }
 
 /// A component layout (`kOfxImageComponent*`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Components {
     Rgba,
     Rgb,
@@ -79,7 +79,7 @@ impl Components {
 }
 
 /// How alpha relates to colour (`kOfxImage*Multiplied`, `kOfxImageOpaque`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Premult {
     Opaque,
     Premultiplied,
@@ -108,7 +108,7 @@ impl Premult {
 
 /// A rectangle in pixels: `x1, y1` inclusive, `x2, y2` exclusive, with y
 /// up, as `OfxRectI`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct RectI {
     pub x1: i32,
     pub y1: i32,

@@ -3,6 +3,7 @@
 //! - [`clip`]: clip descriptors and instances.
 //! - [`discovery`]: the plugin search paths and the `.ofx.bundle` layout.
 //! - [`props`]: property sets, in safe Rust.
+//! - [`protocol`]: the sandbox wire protocol.
 //! - [`host`]: the host property set.
 //! - [`image`]: images handed to plugins, and the host's image source.
 //! - [`params`]: parameter sets and their value store, in safe Rust.
@@ -22,4 +23,5 @@ pub mod host;
 pub mod image;
 pub mod params;
 pub mod props;
+pub mod protocol;
 pub mod suites;
