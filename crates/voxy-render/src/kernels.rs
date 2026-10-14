@@ -476,6 +476,10 @@ pub enum Kernel {
     Slide,
     Zoom,
     DisplacementMap,
+    /// An effect run by an [`ExternalEffects`](voxy_core::external::ExternalEffects)
+    /// provider on the CPU (OpenFX plugins, design §6.9). Not in
+    /// [`Kernel::ALL`]: it has no shader.
+    External,
 }
 
 impl Kernel {
@@ -523,6 +527,9 @@ impl Kernel {
 
     /// The kernel running `type_id` at `version`, if this build has one.
     pub fn find(type_id: &EffectTypeId, version: u32) -> Option<Kernel> {
+        if type_id.is_ofx() {
+            return Some(Kernel::External);
+        }
         Kernel::ALL
             .into_iter()
             .find(|k| k.type_id() == type_id.as_str() && version == 1)
@@ -587,6 +594,8 @@ impl Kernel {
 
     pub fn type_id(self) -> &'static str {
         match self {
+            // OpenFX types are matched by prefix in `find`.
+            Kernel::External => "",
             Kernel::Invert => ids::INVERT,
             Kernel::GaussianBlur => ids::GAUSSIAN_BLUR,
             Kernel::BoxBlur => ids::BOX_BLUR,
@@ -636,6 +645,8 @@ impl Kernel {
         let space = ctx.space;
         let mut k = KernelParams::default();
         match self {
+            // Runs on the CPU; the compositor handles it, with no passes.
+            Kernel::External => Vec::new(),
             Kernel::BrightnessContrast => {
                 let brightness = scalar(fx, "brightness", 0.0).clamp(-1.0, 1.0);
                 let contrast = scalar(fx, "contrast", 0.0).clamp(-1.0, 1.0);
@@ -1212,7 +1223,10 @@ impl Kernel {
         // for preview scales up to 1.
         let r = |name: &str| scalar(fx, name, 0.0).max(0.0);
         match self {
-            Kernel::Invert
+            // OpenFX filters: the region stays the input's for now (the
+            // plugin's own GetRegionOfDefinition joins in a later step).
+            Kernel::External
+            | Kernel::Invert
             | Kernel::BrightnessContrast
             | Kernel::Exposure
             | Kernel::Tint

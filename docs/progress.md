@@ -498,6 +498,11 @@ at `743b053` (merge of #3).
          conversion both ways, strict base64 for Bytes. The gain test
          plugin registers in the effect registry. A Windows-only clippy
          lint from step 2 was fixed on the way (CI run 38557109300).
+      2. **Done:** `voxy_core::external::{ExternalEffects, CpuFrame}` and
+         the renderer's `External` kernel: readback, CPU provider, upload,
+         between GPU passes; pass-through plus `RenderReport::
+         external_errors` when there is no provider or it fails. GPU tests
+         with a CPU invert provider (Linux, lavapipe).
    6. UI: error badge, reason and Retry; persistent blocklist.
 7. O-C, O-D.
 

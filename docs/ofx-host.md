@@ -255,6 +255,20 @@ category: its grouping (or "OpenFX"); description: its description.
 - Animatable follows `kOfxParamPropAnimates`; secret parameters are
   hidden; labels and hints come from the plugin.
 
+## Rendering (O-B, design §6.9)
+
+An `ofx:` effect in a layer's chain is the renderer's `External` kernel.
+The commands so far are submitted, the chain buffer (premultiplied, in the
+working space, f16) is read back as floats, an `ExternalEffects` provider
+(the OpenFX host) runs the plugin on it, and the result is written into
+the next chain texture; GPU effects after it continue as usual.
+
+- Without a provider, for a type it does not run, or when the plugin
+  fails, the image passes through and the render report lists the effect
+  with the reason (for the effect header's error badge).
+- The region of definition stays the input's for now; the plugin's own
+  GetRegionOfDefinition and GetRegionsOfInterest join in a later step.
+
 ## Still to be written (O-A to O-D)
 
 Render scale and multi-resolution, thread-safety levels across
