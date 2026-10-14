@@ -3835,6 +3835,7 @@ name = "voxy-ofx-sandbox"
 version = "0.1.0"
 dependencies = [
  "tempfile",
+ "voxy-core",
  "voxy-ofx-host",
  "voxy-ofx-testplugins",
 ]

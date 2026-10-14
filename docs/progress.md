@@ -503,6 +503,15 @@ at `743b053` (merge of #3).
          between GPU passes; pass-through plus `RenderReport::
          external_errors` when there is no provider or it fails. GPU tests
          with a CPU invert provider (Linux, lavapipe).
+      3. **Done:** `runtime::OfxRuntime`, the `ExternalEffects` provider:
+         scans bundles into effect definitions, one sandbox per bundle,
+         instances per effect, parameter snapshots, frames through shared
+         memory (flipped, at the plugin's preferred depth), blocklist and
+         Retry. Tested against the real sandbox: gain renders, crash and
+         hang are blocked, the bundle's other plugins carry on.
+      4. App wiring: find bundles, cache descriptions (`ofx-cache.json`),
+         register definitions at start-up, give the compositor the
+         runtime.
    6. UI: error badge, reason and Retry; persistent blocklist.
 7. O-C, O-D.
 

@@ -268,6 +268,20 @@ the next chain texture; GPU effects after it continue as usual.
   with the reason (for the effect header's error badge).
 - The region of definition stays the input's for now; the plugin's own
   GetRegionOfDefinition and GetRegionsOfInterest join in a later step.
+- The provider is `runtime::OfxRuntime`. One sandbox per bundle, started
+  on first use and again after it dies; one plugin instance per voXY
+  effect, created on its first render with the depth and components the
+  plugin prefers (from GetClipPreferences). Each render sends the
+  parameter values at the frame, then the frame through shared memory,
+  rows flipped to OpenFX's bottom-up order and converted to the preferred
+  depth. The mapping grows by replacement when a frame does not fit.
+- For now the image's bounds start at (0, 0) and the project is the
+  buffer's size, so plugins that depend on absolute position see the
+  layer's buffer, not the composition. Parameter key times are not sent
+  yet.
+- A crash, hang or protocol error blocks the plugin for the session (other
+  plugins of the bundle get a fresh sandbox); a plugin that returns an
+  error status is reported but not blocked.
 
 ## Still to be written (O-A to O-D)
 

@@ -17,5 +17,6 @@ workspace = true
 voxy-ofx-host.workspace = true
 
 [dev-dependencies]
+voxy-core.workspace = true
 voxy-ofx-testplugins = { path = "../voxy-ofx-testplugins" }
 tempfile.workspace = true

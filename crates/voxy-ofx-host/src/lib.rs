@@ -7,6 +7,8 @@
 //! - [`discovery`]: the plugin search paths and the `.ofx.bundle` layout.
 //! - [`props`]: property sets, in safe Rust.
 //! - [`protocol`]: the sandbox wire protocol.
+//! - [`runtime`]: the editor's OpenFX runtime: scanning bundles, running
+//!   effects for the renderer.
 //! - [`shm`]: the shared memory images travel in.
 //! - [`host`]: the host property set.
 //! - [`image`]: images handed to plugins, and the host's image source.
@@ -31,5 +33,6 @@ pub mod mapping;
 pub mod params;
 pub mod props;
 pub mod protocol;
+pub mod runtime;
 pub mod shm;
 pub mod suites;

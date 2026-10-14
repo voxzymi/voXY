@@ -139,6 +139,8 @@ pub struct Sandbox {
     from_io: Receiver<Result<Reply, FrameError>>,
     pub shm: SharedMemory,
     pub pid: u32,
+    id: String,
+    generation: u32,
     timeouts: Timeouts,
     dead: Option<SandboxError>,
 }
@@ -226,6 +228,8 @@ impl Sandbox {
             from_io,
             shm,
             pid,
+            id: id.to_owned(),
+            generation: 0,
             timeouts,
             dead: None,
         };
@@ -336,6 +340,27 @@ impl Sandbox {
         }
     }
 
+    /// Makes sure the mapping holds at least `len` bytes, replacing it with
+    /// a bigger one (and telling the sandbox) if not.
+    pub fn ensure_mapping(&mut self, dir: &Path, len: usize) -> Result<(), SandboxError> {
+        if self.shm.len() >= len {
+            return Ok(());
+        }
+        self.generation += 1;
+        let path = dir.join(format!("{}-{}.shm", self.id, self.generation));
+        let bigger = SharedMemory::create(&path, len.next_power_of_two())
+            .map_err(|e| SandboxError::Launch(e.to_string()))?;
+        let p = bigger.path().display().to_string();
+        match self.request(Request::Map { path: p })? {
+            Reply::Done { .. } => {
+                let old = std::mem::replace(&mut self.shm, bigger);
+                let _ = std::fs::remove_file(old.path());
+                Ok(())
+            }
+            other => Err(SandboxError::Protocol(format!("{other:?}"))),
+        }
+    }
+
     /// Asks the running action to stop (the plugin's `abort()` reads it).
     pub fn set_abort(&self, abort: bool) {
         self.shm.set_abort(abort);
@@ -350,6 +375,7 @@ impl Drop for Sandbox {
             let _ = self.request(Request::Unload);
         }
         self.kill();
+        let _ = std::fs::remove_file(self.shm.path());
     }
 }
 
