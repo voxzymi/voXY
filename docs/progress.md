@@ -429,8 +429,8 @@ at `743b053` (merge of #3).
          plugin-writable), the live-handle registry, `OfxHost` and
          `fetchSuite`, and the property and memory suites, tested through
          `fetchSuite`. `voxy-ofx-host` needs Rust 1.99 (C-variadic
-         functions, for the parameter suite); the rest of the workspace
-         stays at 1.97.
+         functions, for the parameter suite); since O-B the whole
+         workspace does (the editor links the host).
       2. **Done:** message (V1/V2, with a C99 printf formatter), progress
          (V1/V2, abort replies no), time line and multi-thread suites
          (recursive mutexes), on a host-side `effect::Effect` record. The
@@ -514,7 +514,14 @@ at `743b053` (merge of #3).
             `OfxRuntime::scan_cached`): unchanged bundles are not loaded at
             start-up. Sandbox channel names are now unique per process
             (two runtimes in one process collided in parallel tests).
-         2. Preferences, start-up scan, registry and compositor.
+         2. **Done:** the editor scans at start-up, before a project
+            opens: standard folders plus Preferences' `ofx_plugin_paths`,
+            cached descriptions, definitions registered, the runtime given
+            to the viewport's compositor; persistent blocks are saved in
+            Preferences (`ofx_blocked`). No plugins means no runtime and no
+            session folder. The workspace `rust-version` is now 1.99 (the
+            editor links the host, which needs C-variadic functions; CI
+            already used 1.99).
    6. UI: error badge, reason and Retry; persistent blocklist.
 7. O-C, O-D.
 
@@ -560,7 +567,7 @@ at `743b053` (merge of #3).
 ## Toolchain
 
 - CI uses the current stable Rust (1.99 since 2026-09-28), and so does
-  local work now. Clippy 1.99 added `assert_is_empty`, and the new tests
+  local work now. The workspace needs 1.99 since O-B. Clippy 1.99 added `assert_is_empty`, and the new tests
   follow it.
 
 ## Known flaky tests (outside the effects scope)

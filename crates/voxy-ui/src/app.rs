@@ -65,6 +65,14 @@ impl VoxyApp {
         if let Some(path) = &state.prefs_path {
             state.prefs = crate::prefs::Preferences::load_from(path);
         }
+        state.install_ofx(crate::ofx::start(
+            &state.prefs.ofx_plugin_paths,
+            state.prefs.ofx_blocked.clone(),
+        ));
+        let mut viewport = viewport;
+        if let (Some(v), Some(rt)) = (viewport.as_mut(), &state.ofx) {
+            v.set_external(rt.clone());
+        }
         state.keymap.load_saved(&state.prefs.shortcuts);
         state.choose_startup_tip(clock_seed());
         state.gpu_max_texture = viewport

@@ -3888,6 +3888,7 @@ dependencies = [
  "tracing",
  "voxy-core",
  "voxy-media",
+ "voxy-ofx-host",
  "voxy-render",
  "wgpu",
 ]

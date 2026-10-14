@@ -3,8 +3,7 @@ name = "voxy-ofx-host"
 description = "voXY OpenFX host (from M7)"
 version.workspace = true
 edition.workspace = true
-# C-variadic functions (the parameter suite's getters) are stable from 1.99.
-rust-version = "1.99"
+rust-version.workspace = true
 repository.workspace = true
 authors.workspace = true
 publish = false

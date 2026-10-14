@@ -3,8 +3,7 @@ name = "voxy-ofx-sandbox"
 description = "Out-of-process OpenFX plugin runner for voXY (from M7)"
 version.workspace = true
 edition.workspace = true
-# The host it runs needs C-variadic functions (Rust 1.99).
-rust-version = "1.99"
+rust-version.workspace = true
 repository.workspace = true
 authors.workspace = true
 publish = false
