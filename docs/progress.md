@@ -509,9 +509,12 @@ at `743b053` (merge of #3).
          memory (flipped, at the plugin's preferred depth), blocklist and
          Retry. Tested against the real sandbox: gain renders, crash and
          hang are blocked, the bundle's other plugins carry on.
-      4. App wiring: find bundles, cache descriptions (`ofx-cache.json`),
-         register definitions at start-up, give the compositor the
-         runtime.
+      4. App wiring:
+         1. **Done:** the discovery cache (`cache::DescribeCache`,
+            `OfxRuntime::scan_cached`): unchanged bundles are not loaded at
+            start-up. Sandbox channel names are now unique per process
+            (two runtimes in one process collided in parallel tests).
+         2. Preferences, start-up scan, registry and compositor.
    6. UI: error badge, reason and Retry; persistent blocklist.
 7. O-C, O-D.
 

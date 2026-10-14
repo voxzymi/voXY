@@ -1,5 +1,6 @@
 //! voXY's OpenFX host.
 //!
+//! - [`cache`]: the discovery cache (`ofx-cache.json`).
 //! - [`channel`]: the local-socket control channel to a sandbox.
 //! - [`client`]: the editor side of a sandbox: launch, timeouts, crashes,
 //!   blocklist.
@@ -22,6 +23,7 @@
 //! The editor never loads a plugin binary: that happens in
 //! `voxy-ofx-sandbox`, one helper process per bundle (design §6.3).
 
+pub mod cache;
 pub mod channel;
 pub mod client;
 pub mod clip;

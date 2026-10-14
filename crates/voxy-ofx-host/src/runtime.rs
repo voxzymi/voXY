@@ -16,13 +16,18 @@ use voxy_core::external::{CpuFrame, ExternalEffects};
 use voxy_core::registry::EffectDef;
 use voxy_core::{EffectId, EffectTypeId, EvaluatedEffect};
 
+use crate::cache::{BinaryKey, DescribeCache};
 use crate::client::{Blocked, Blocklist, Sandbox, SandboxError, Timeouts};
+use crate::discovery::{Arch, Os, bundle_binaries};
 use crate::effect::Project;
 use crate::image::{Components, Depth, Image, Premult, RectI};
 use crate::mapping::{effect_def, to_param_value, type_id};
 use crate::params::ParamKind;
 use crate::protocol::{ImageSlot, ParamSnapshot, PluginDesc, Reply, Request};
 use crate::shm::{HEADER, SessionDir, Slots};
+
+/// Sandbox launches in this process.
+static LAUNCHES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 /// The filter context's name.
 const FILTER: &str = "OfxImageEffectContextFilter";
@@ -53,8 +58,6 @@ struct Inner {
     sandboxes: HashMap<usize, Sandbox>,
     instances: HashMap<EffectId, Live>,
     next_instance: u32,
-    /// Every launch gets fresh channel and mapping names.
-    launches: u32,
     blocklist: Blocklist,
 }
 
@@ -109,7 +112,6 @@ impl OfxRuntime {
                 sandboxes: HashMap::new(),
                 instances: HashMap::new(),
                 next_instance: 1,
-                launches: 0,
                 blocklist: Blocklist::new(),
             }),
         })
@@ -122,13 +124,53 @@ impl OfxRuntime {
     /// Describes every bundle, each in its own sandbox, and returns the
     /// effect definitions of the plugins voXY can run.
     pub fn scan(&self, bundles: &[PathBuf]) -> ScanResult {
+        self.scan_with(bundles, &mut None)
+    }
+
+    /// [`OfxRuntime::scan`] with the discovery cache at `path`: bundles
+    /// whose binary is unchanged are not loaded; the cache is updated.
+    pub fn scan_cached(&self, bundles: &[PathBuf], path: &Path) -> ScanResult {
+        let mut cache = Some(DescribeCache::load(path));
+        let out = self.scan_with(bundles, &mut cache);
+        if let Some(c) = cache
+            && let Err(e) = c.save(path)
+        {
+            let mut out = out;
+            out.problems.push((
+                path.display().to_string(),
+                format!("the cache was not saved: {e}"),
+            ));
+            return out;
+        }
+        out
+    }
+
+    fn scan_with(&self, bundles: &[PathBuf], cache: &mut Option<DescribeCache>) -> ScanResult {
         let mut inner = self.lock();
         let mut out = ScanResult::default();
+        let mut binaries = Vec::new();
         for bundle in bundles {
             let index = inner.bundle_index(bundle);
-            let described = inner
-                .sandbox(index)
-                .and_then(|sb| sb.request(Request::Describe));
+            let key = bundle_binaries(bundle, Os::current(), Arch::current())
+                .into_iter()
+                .find(|b| b.is_file())
+                .and_then(|b| BinaryKey::of(&b));
+            if let Some(k) = &key {
+                binaries.push(k.path.clone());
+            }
+            let cached = key
+                .as_ref()
+                .and_then(|k| cache.as_ref().and_then(|c| c.get(k)).cloned());
+            let described = match cached {
+                Some(d) => Ok(Reply::Described(d)),
+                None => inner
+                    .sandbox(index)
+                    .and_then(|sb| sb.request(Request::Describe)),
+            };
+            if let (Ok(Reply::Described(d)), Some(k), Some(c)) = (&described, &key, cache.as_mut())
+            {
+                c.put(bundle, k.clone(), d.clone());
+            }
             let desc = match described {
                 Ok(Reply::Described(d)) => d,
                 Ok(other) => {
@@ -154,7 +196,19 @@ impl OfxRuntime {
                 }
             }
         }
+        if let Some(c) = cache.as_mut() {
+            c.retain_binaries(&binaries);
+        }
         out
+    }
+
+    /// How many sandboxes are running (for tests and diagnostics).
+    pub fn sandboxes_running(&self) -> usize {
+        self.lock()
+            .sandboxes
+            .values()
+            .filter(|s| s.dead().is_none())
+            .count()
     }
 
     /// Why `type_id` is blocked, if it is.
@@ -231,12 +285,14 @@ impl Inner {
             self.instances.retain(|_, l| l.bundle_index != index);
         }
         if !self.sandboxes.contains_key(&index) {
-            self.launches += 1;
+            // Channel and mapping names are unique in the process, across
+            // runtimes and relaunches.
+            let n = LAUNCHES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let sb = Sandbox::launch(
                 &self.exe,
                 &self.bundles[index],
                 &self.session,
-                &format!("b{index}-{}", self.launches),
+                &format!("b{index}-{n}"),
                 HEADER + (1 << 20),
                 self.timeouts,
             )?;

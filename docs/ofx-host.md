@@ -59,6 +59,12 @@ Checked against OpenFX 1.5.1, "Packaging OFX Plug-ins".
   folder). Intel Macs fall back to the deprecated `MacOS-x86-64`. For arm64
   Windows and Linux the host uses the spec's informational names,
   `Win-arm64` and `Linux-aarch64`; voXY does not build for them yet.
+- **Cache:** `ofx-cache.json` in the config folder holds each bundle's
+  description keyed by its binary's path, modification time and size.
+  Start-up describes only bundles whose key changed (so unchanged plugins
+  are not loaded until an effect uses them), and drops entries of
+  binaries that are gone. A cache from another format version is ignored.
+  It is written to a temporary file and renamed.
 - Discovery never loads a binary. Loading and Describe happen only in the
   sandbox (design §6.3).
 

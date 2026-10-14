@@ -145,3 +145,44 @@ fn a_bundle_that_does_not_load_is_reported() {
         scan.problems
     );
 }
+
+#[test]
+fn the_cache_skips_unchanged_bundles_and_redescribes_changed_ones() {
+    let tmp = tempfile::tempdir().unwrap();
+    let bundle = common::bundle(tmp.path());
+    let cache = tmp.path().join("config").join("ofx-cache.json");
+
+    let first = OfxRuntime::new(Path::new(EXE), tmp.path(), Timeouts::default()).unwrap();
+    let a = first.scan_cached(std::slice::from_ref(&bundle), &cache);
+    assert_eq!(first.sandboxes_running(), 1);
+    assert!(cache.is_file());
+    drop(first);
+
+    let second = OfxRuntime::new(Path::new(EXE), tmp.path(), Timeouts::default()).unwrap();
+    let b = second.scan_cached(std::slice::from_ref(&bundle), &cache);
+    assert_eq!(second.sandboxes_running(), 0, "described from the cache");
+    assert_eq!(a.definitions, b.definitions);
+    // A plugin from the cache still renders: its sandbox starts on demand.
+    let mut f = frame();
+    second
+        .render(&effect(9, "org.voxy.test.Gain", 2.0), &mut f)
+        .unwrap();
+    assert_eq!(second.sandboxes_running(), 1);
+    drop(second);
+
+    // A changed binary (here: one byte longer) is described again.
+    let bin = std::fs::read_dir(bundle.join("Contents"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path()
+        .join("VoxyTest.ofx");
+    let mut bytes = std::fs::read(&bin).unwrap();
+    bytes.push(0);
+    std::fs::write(&bin, bytes).unwrap();
+    let third = OfxRuntime::new(Path::new(EXE), tmp.path(), Timeouts::default()).unwrap();
+    let c = third.scan_cached(std::slice::from_ref(&bundle), &cache);
+    assert_eq!(third.sandboxes_running(), 1, "re-described");
+    assert_eq!(c.definitions, a.definitions);
+}
