@@ -467,7 +467,12 @@ at `743b053` (merge of #3).
       serializable descriptions (no pointers cross), parameter snapshots,
       image slots and parameter edits. Round-trip and garbage tests, and
       a `cargo fuzz` target (`ofx_frame`).
-   2. Shared memory: the per-session file, header and image slots.
+   2. **Done:** `shm`: a `memmap2` mapping per sandbox in a private
+      session folder (`/dev/shm` on Linux, temp elsewhere; 0700 on Unix),
+      a 4 KiB header (magic, layout, length, abort flag, heartbeat),
+      64-byte-aligned slots with bounds checks. The folder is locked while
+      the session lives, removed on drop, and `clean_stale` removes folders
+      whose lock is free (left by a crash), as D4 requires.
    3. The sandbox binary: loads a bundle, serves requests over a local
       socket.
    4. Host client: launch, handshake, timeouts, crash and hang handling,
