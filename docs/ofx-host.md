@@ -227,6 +227,34 @@ closes (then it unloads everything and exits 0).
 - Dropping a healthy sandbox sends Unload (0.5 s grace) and then ends the
   process.
 
+## Plugins as voXY effects (O-B, `voxy_ofx_host::mapping`)
+
+The filter context of each plugin becomes an effect definition
+`ofx:<pluginIdentifier>`, version = the plugin's major version (a newer
+minor version loads normally). Name: the plugin's label (or identifier);
+category: its grouping (or "OpenFX"); description: its description.
+
+| OFX parameter | voXY |
+|---|---|
+| Double, 2D, 3D | `Scalar`, `Vec2`, `Vec3`. Unit by double type: angle → degrees, scale → factor, X/Y types → pixels, normalised coordinates → normalised (sent as is), others none. |
+| Integer, 2D, 3D | `Int`, or `Vec2`/`Vec3` shown as integers |
+| Boolean | `Bool` |
+| Choice | `Enum` with the option labels; a default past the options becomes 0 |
+| StrChoice | `String`; the hint lists the allowed values |
+| String | `String` |
+| RGB / RGBA | `Color` (RGB hides alpha); components passed as they are |
+| Custom | `String`, not animatable (hold-only) |
+| Bytes | hidden `String`, base64 (standard alphabet, padded, strict) |
+| Group | a collapsible group (open state from the plugin) |
+| Page | flattened |
+| PushButton | read-only for now; buttons come with the parameter UI step |
+| Parametric | refused at define time (not supported yet) |
+
+- Hard range from Min/Max unless they are the "no limit" defaults; the
+  display range from DisplayMin/Max, kept inside the hard range.
+- Animatable follows `kOfxParamPropAnimates`; secret parameters are
+  hidden; labels and hints come from the plugin.
+
 ## Still to be written (O-A to O-D)
 
 Render scale and multi-resolution, thread-safety levels across

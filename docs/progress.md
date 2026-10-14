@@ -493,6 +493,11 @@ at `743b053` (merge of #3).
       the blocklist rules.
    5. Effect definitions from descriptions; CPU rendering of filter
       plugins in the render graph.
+      1. **Done:** `mapping`: a plugin's filter context as an `EffectDef`
+         (`ofx:<id>`, major version), every parameter type per §6.6, value
+         conversion both ways, strict base64 for Bytes. The gain test
+         plugin registers in the effect registry. A Windows-only clippy
+         lint from step 2 was fixed on the way (CI run 38557109300).
    6. UI: error badge, reason and Retry; persistent blocklist.
 7. O-C, O-D.
 

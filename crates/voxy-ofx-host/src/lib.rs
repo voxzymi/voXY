@@ -10,6 +10,7 @@
 //! - [`shm`]: the shared memory images travel in.
 //! - [`host`]: the host property set.
 //! - [`image`]: images handed to plugins, and the host's image source.
+//! - [`mapping`]: plugin descriptions as voXY effect definitions.
 //! - [`params`]: parameter sets and their value store, in safe Rust.
 //! - [`effect`]: the host's record of an effect handle (messages,
 //!   progress, time line, abort).
@@ -26,6 +27,7 @@ pub mod discovery;
 pub mod effect;
 pub mod host;
 pub mod image;
+pub mod mapping;
 pub mod params;
 pub mod props;
 pub mod protocol;
