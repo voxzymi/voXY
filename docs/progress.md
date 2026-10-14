@@ -528,7 +528,9 @@ at `743b053` (merge of #3).
       the errors and redraws. Persistent blocks live in Preferences
       (step 5.4.2).
 
-   **O-B complete** for the requested scope (filter plugins). What is left
+   **O-B complete** for the requested scope (filter plugins). 709
+   workspace tests pass; CI green on all four platforms at `f04f2f8`
+   (run 38560685814). What is left
    for follow-up steps is listed at the end of `docs/ofx-host.md`.
 7. O-C, O-D.
 
