@@ -817,6 +817,16 @@ at `86e1edf` (merge of #6). Design note: `docs/design-ux.md`.
   says so, plus the existing timeline OS-drop test pumps the job to completion.
   clippy `-D warnings` clean; 282 `voxy-ui` tests pass; `voxy-app` builds.
 
+- **U-A step 6: drop undo proptest.** Added a `Drop` case to the
+  `history_props` edit generator (so `undo_redo_round_trip` and
+  `save_load_round_trip` now exercise random file drops too) and a dedicated
+  `random_drops_then_full_undo_restore_the_document` proptest in
+  `tests/drop.rs`: a random sequence of timeline / viewport file drops (images
+  and videos, 1–3 per drop, with sequence placement), each a command, then
+  undoing everything restores the document exactly. `cargo fmt --check`,
+  `clippy -D warnings`, and all `voxy-core` + `voxy-ui` tests pass. **U-A
+  complete** pending the per-job CI report.
+
 ## Next, in order
 
 - **U-A:** single Import File… (remove the separate Image/Video entries),

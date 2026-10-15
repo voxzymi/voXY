@@ -9,10 +9,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use voxy_core::command::{
-    AddSolidLayer, CreateComposition, CreateFolder,
-    DuplicateComposition, ImportAssets, MoveToFolder, RemoveItems, RemoveLayers, RemoveMode,
-    RenameComposition, RenameFolder, RenameMedia, ReplaceMedia, ResizeMode, SetAssetPath,
-    SetCompositionSettings,
+    AddSolidLayer, CreateComposition, CreateFolder, DuplicateComposition, ImportAssets,
+    MoveToFolder, RemoveItems, RemoveLayers, RemoveMode, RenameComposition, RenameFolder,
+    RenameMedia, ReplaceMedia, ResizeMode, SetAssetPath, SetCompositionSettings,
 };
 use voxy_core::{
     Asset, AssetId, AssetKind, Command, CommandReport, CompId, CompSettings, Composition, Document,
@@ -2939,7 +2938,9 @@ mod tests {
         // not merged by content-hash reuse.
         let mut img = image::RgbaImage::new(2, 3);
         let tint = path.file_name().map_or(0, |n| {
-            n.as_encoded_bytes().iter().fold(0u8, |a, &b| a.wrapping_add(b))
+            n.as_encoded_bytes()
+                .iter()
+                .fold(0u8, |a, &b| a.wrapping_add(b))
         });
         img.put_pixel(0, 0, image::Rgba([tint, tint, tint, 255]));
         img.save(path).unwrap();

@@ -345,10 +345,7 @@ impl VoxyApp {
                 }
                 ui.label(format!("Importing {done} of {total}…"));
                 if total > 0 {
-                    ui.add(
-                        egui::ProgressBar::new(done as f32 / total as f32)
-                            .desired_width(120.0),
-                    );
+                    ui.add(egui::ProgressBar::new(done as f32 / total as f32).desired_width(120.0));
                 }
             });
             return;
