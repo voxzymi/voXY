@@ -241,6 +241,7 @@ mod blur_rules {
             matte: None,
             frame: 0,
             layer_progress: 0.0,
+            timeline: None,
         }
     }
 
@@ -764,6 +765,7 @@ fn kernel_parameters_are_finite_across_the_grid() {
                 matte: None,
                 frame: 0,
                 layer_progress: 0.0,
+                timeline: None,
             };
             for space in [WorkingSpace::Linear, WorkingSpace::SrgbCompat] {
                 for scale in [1.0, 0.25] {

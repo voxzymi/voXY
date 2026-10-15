@@ -6,6 +6,6 @@ use libfuzzer_sys::fuzz_target;
 use voxy_ofx_host::protocol::{Reply, Request, read_frame};
 
 fuzz_target!(|data: &[u8]| {
-    let _ = read_frame::<Reply>(&mut &data[..]);
-    let _ = read_frame::<Request>(&mut &data[..]);
+    let _ = read_frame::<Reply, _>(&mut &data[..]);
+    let _ = read_frame::<Request, _>(&mut &data[..]);
 });

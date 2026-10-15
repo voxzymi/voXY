@@ -749,6 +749,7 @@ mod keys {
                     matte: None,
                     frame: 0,
                     layer_progress: 0.0,
+                    timeline: None,
                 },
                 seed: 0,
                 inputs: Vec::new(),

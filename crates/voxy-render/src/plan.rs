@@ -236,6 +236,16 @@ impl ChainPlan {
                 }
                 None => h.u32(0),
             }
+            // A plugin may read its parameters at other times: the whole
+            // animation is part of its result (in-memory key; Debug output
+            // is deterministic).
+            match &fx.timeline {
+                Some(t) => {
+                    h.u32(1);
+                    h.str(&format!("{t:?}"));
+                }
+                None => h.u32(0),
+            }
             // Zero unless the kernel uses them (see the planner).
             h.u64(fx.frame as u64);
             h.f64(fx.layer_progress);

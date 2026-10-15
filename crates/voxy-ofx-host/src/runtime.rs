@@ -344,24 +344,53 @@ impl Inner {
     }
 
     fn snapshot(entry: &PluginEntry, fx: &EvaluatedEffect) -> Vec<ParamSnapshot> {
-        // A transition on Auto runs over the layer's duration (design §5).
-        let auto = entry.transition && fx.param(AUTO_PARAM) == Some(&Value::Bool(true));
         fx.params
             .iter()
             .filter_map(|(name, v)| {
                 let kind = entry.kinds.get(&**name)?;
-                let value = if auto && &**name == TRANSITION {
-                    ParamValue::Doubles(vec![fx.layer_progress])
-                } else {
-                    to_param_value(*kind, v)?
-                };
+                // A transition on Auto runs over the layer's duration
+                // (design §5); its keys do not apply then.
+                if Self::auto(entry, fx) && &**name == TRANSITION {
+                    return Some(ParamSnapshot {
+                        name: name.to_string(),
+                        value: ParamValue::Doubles(vec![fx.layer_progress]),
+                        keys: Vec::new(),
+                    });
+                }
                 Some(ParamSnapshot {
                     name: name.to_string(),
-                    value,
-                    keys: Vec::new(),
+                    value: to_param_value(*kind, v)?,
+                    keys: fx
+                        .timeline
+                        .as_ref()
+                        .and_then(|t| t.key_frames(name))
+                        .unwrap_or_default(),
                 })
             })
             .collect()
+    }
+
+    fn auto(entry: &PluginEntry, fx: &EvaluatedEffect) -> bool {
+        entry.transition && fx.param(AUTO_PARAM) == Some(&Value::Bool(true))
+    }
+
+    /// `req` to `fx`'s sandbox, answering the plugin's queries for
+    /// parameter values at other times from `fx`'s animation.
+    fn ask(
+        &mut self,
+        index: usize,
+        entry: &PluginEntry,
+        fx: &EvaluatedEffect,
+        req: Request,
+    ) -> Result<Reply, SandboxError> {
+        let mut answer = |name: &str, frame: f64| {
+            if Self::auto(entry, fx) && name == TRANSITION {
+                return None;
+            }
+            let v = fx.timeline.as_ref()?.value_at(name, frame)?;
+            to_param_value(*entry.kinds.get(name)?, &v)
+        };
+        self.sandbox(index)?.request_with(req, &mut answer)
     }
 
     /// Runs `f` against `fx`'s plugin: refused when the plugin is missing
@@ -417,18 +446,22 @@ impl Inner {
         }
         let instance = self.next_instance;
         self.next_instance += 1;
-        let sb = self.sandbox(index)?;
-        match sb.request(Request::CreateInstance {
-            instance,
-            plugin: entry.identifier.clone(),
-            context: entry.context.clone(),
-            project: Project {
-                size: layer_size.to_array(),
-                extent: layer_size.to_array(),
-                ..Project::default()
+        match self.ask(
+            index,
+            entry,
+            fx,
+            Request::CreateInstance {
+                instance,
+                plugin: entry.identifier.clone(),
+                context: entry.context.clone(),
+                project: Project {
+                    size: layer_size.to_array(),
+                    extent: layer_size.to_array(),
+                    ..Project::default()
+                },
+                params: Self::snapshot(entry, fx),
             },
-            params: Self::snapshot(entry, fx),
-        })? {
+        )? {
             Reply::Done { .. } => {}
             Reply::Failed { action, status, .. } => {
                 return Ok(Err(format!(
@@ -437,7 +470,7 @@ impl Inner {
             }
             other => return Ok(Err(format!("unexpected reply {other:?}"))),
         }
-        let prefs = sb.request(Request::ClipPreferences { instance })?;
+        let prefs = self.ask(index, entry, fx, Request::ClipPreferences { instance })?;
         let clips = match prefs {
             Reply::ClipPreferences { clips, .. } => {
                 clips.into_iter().map(|(n, d, c)| (n, (d, c))).collect()
@@ -495,13 +528,18 @@ impl Inner {
                 .map(|c| (c.clone(), canonical(input, h)))
                 .collect();
             Ok(
-                match this.sandbox(index)?.request(Request::RegionOfDefinition {
-                    instance: live.instance,
-                    time: fx.frame as f64,
-                    // Regions are canonical; the scale does not change them.
-                    scale: [1.0, 1.0],
-                    inputs,
-                })? {
+                match this.ask(
+                    index,
+                    entry,
+                    fx,
+                    Request::RegionOfDefinition {
+                        instance: live.instance,
+                        time: fx.frame as f64,
+                        // Regions are canonical; the scale does not change them.
+                        scale: [1.0, 1.0],
+                        inputs,
+                    },
+                )? {
                     Reply::Region(r) => Ok(from_canonical(r, h)),
                     Reply::Failed { action, status, .. } => {
                         Err(format!("the plugin failed {action} (status {status})"))
@@ -567,18 +605,22 @@ impl Inner {
             + image_len(live.format(OUTPUT))
             + crate::shm::ALIGN;
         let dir = self.session.path().to_path_buf();
-        let sb = self.sandbox(index)?;
-        sb.ensure_mapping(&dir, need)?;
+        self.sandbox(index)?.ensure_mapping(&dir, need)?;
         // An identity skips Render: an input passes through. An identity at
         // another time needs images the editor does not send yet, so the
         // plugin renders instead.
         if !sources.is_empty()
-            && let Reply::Identity(Some((clip, at))) = sb.request(Request::IsIdentity {
-                instance: live.instance,
-                time,
-                window,
-                scale,
-            })?
+            && let Reply::Identity(Some((clip, at))) = self.ask(
+                index,
+                entry,
+                fx,
+                Request::IsIdentity {
+                    instance: live.instance,
+                    time,
+                    window,
+                    scale,
+                },
+            )?
             && at == time
             && let Some((_, pixels)) = sources.iter().find(|(c, _)| *c == clip)
         {
@@ -586,6 +628,7 @@ impl Inner {
             frame.pixels = pixels;
             return Ok(Ok(()));
         }
+        let sb = self.sandbox(index)?;
         let mut slots = Slots::new(sb.shm.len());
         let mut inputs = Vec::new();
         for (clip, pixels) in &sources {
@@ -608,14 +651,19 @@ impl Inner {
         let Some(dst) = slots.take(image_len(output)) else {
             return Ok(Err("the image does not fit the shared memory".into()));
         };
-        let reply = sb.request(Request::Render {
-            instance: live.instance,
-            time,
-            window,
-            scale,
-            inputs,
-            output: slot_for(dst, bounds, output),
-        })?;
+        let reply = self.ask(
+            index,
+            entry,
+            fx,
+            Request::Render {
+                instance: live.instance,
+                time,
+                window,
+                scale,
+                inputs,
+                output: slot_for(dst, bounds, output),
+            },
+        )?;
         match reply {
             Reply::Done { .. } => {}
             Reply::Failed { action, status, .. } => {
@@ -624,7 +672,7 @@ impl Inner {
             other => return Ok(Err(format!("unexpected reply {other:?}"))),
         }
         let mut bytes = vec![0u8; image_len(output)];
-        sb.shm.read_into(dst, &mut bytes);
+        self.sandbox(index)?.shm.read_into(dst, &mut bytes);
         let out = Image::from_raw(bounds, output.0, output.1, Premult::Premultiplied, &bytes)
             .ok_or_else(|| SandboxError::Protocol("bad output image".into()))?;
         frame.pixels = flip_rows(&out.to_rgba(), w, h);

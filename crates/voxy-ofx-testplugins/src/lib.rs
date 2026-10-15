@@ -13,6 +13,8 @@
 //! - `org.voxy.test.Fade`: a cross-fade in the transition context.
 //! - `org.voxy.test.Matte`: a general-context plugin with an extra clip
 //!   and a mask clip.
+//! - `org.voxy.test.Lag`: reads its parameter one frame back and counts its
+//!   keys.
 
 // A test fixture: a missing suite entry may panic (and abort) loudly.
 #![allow(
@@ -29,11 +31,13 @@ use voxy_ofx_sys as ofx;
 
 mod blur;
 mod fade;
+mod lag;
 mod matte;
 mod solid;
 
 pub use blur::BLUR;
 pub use fade::FADE;
+pub use lag::LAG;
 pub use matte::MATTE;
 pub use solid::SOLID;
 
@@ -466,7 +470,7 @@ pub static HANG: StaticPlugin = StaticPlugin(ofx::OfxPlugin {
 });
 
 /// The bundle's plugins, in `OfxGetPlugin` order.
-pub static ALL: [&StaticPlugin; 7] = [&GAIN, &CRASH, &HANG, &SOLID, &BLUR, &FADE, &MATTE];
+pub static ALL: [&StaticPlugin; 8] = [&GAIN, &CRASH, &HANG, &SOLID, &BLUR, &FADE, &MATTE, &LAG];
 
 /// The OpenFX export: how many plugins the binary holds.
 #[unsafe(no_mangle)]

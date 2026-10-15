@@ -207,10 +207,16 @@ closes (then it unloads everything and exits 0).
   and the output image is copied back into its slot afterwards.
 - A heartbeat thread bumps the counter in the mapping every 25 ms, and
   passes the editor's abort flag on to every instance.
-- Parameter values come from the request's snapshot. A plugin asking for
-  another time gets the snapshot value for now; asking the editor back
-  comes in a later O-B step. Changes the plugin makes return as
-  `ParamEdit`s with the action's reply.
+- Parameter values come from the request's snapshot: each parameter's
+  value at the render time and its key times (in frames), so key queries
+  (`paramGetNumKeys`, `paramGetKeyTime`, …) stay local (O-C). A plugin
+  asking for a keyed parameter at another time sends `Reply::ValueAt` in
+  the middle of the action; the editor evaluates the real animation
+  (voXY's own interpolation, at that fractional frame) and answers with
+  `Request::Value`, then keeps waiting for the action's reply. A
+  parameter without keys never costs a round trip. Protocol version 2.
+  Changes the plugin makes return as `ParamEdit`s with the action's
+  reply.
 - `OfxSetHost` (the optional binary-level export in 1.5) is not called
   yet.
 
@@ -319,7 +325,10 @@ the next chain texture; GPU effects after it continue as usual.
   cleared it, as it does for GPU kernels that ignore time, so plugins
   always saw frame 0). An OpenFX effect's chain is therefore cached per
   frame.
-- Parameter key times are not sent yet.
+- OpenFX time is the frame of the layer's composition (fractional for
+  queries). `EvaluatedEffect::timeline` carries an OpenFX effect's
+  animated parameters for queries; the chain's cache key includes it,
+  since a plugin may read any time.
 - Identity (O-C): before each render the host asks IsIdentity. When the
   plugin names one of its inputs at the render time, Render is skipped
   and that input passes through (a transition at 1 shows `SourceTo`). An
@@ -351,8 +360,7 @@ the next chain texture; GPU effects after it continue as usual.
 
 ## Still to be written (O-A to O-D)
 
-Left after O-B: parameter values at other times than the frame (asked
-back from the editor), key times, push buttons, sequence-render
+Left after O-B: push buttons, sequence-render
 calls during export and playback, cancelling a
 render from the editor, timeouts in Preferences, and instance clean-up when
 an effect is deleted. The generator, transition and general contexts

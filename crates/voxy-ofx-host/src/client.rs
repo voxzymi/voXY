@@ -14,6 +14,7 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant};
 
 use crate::channel;
+use crate::params::ParamValue;
 use crate::protocol::{self, FrameError, Reply, Request, VERSION};
 use crate::shm::{SessionDir, SharedMemory};
 
@@ -105,6 +106,7 @@ fn action(r: &Request) -> &'static str {
         Request::Sequence { .. } => "sequence render",
         Request::InstanceChanged { .. } => "InstanceChanged",
         Request::Unload => "Unload",
+        Request::Value { .. } => "parameter query",
     }
 }
 
@@ -282,6 +284,16 @@ impl Sandbox {
 
     /// Sends `req` and waits for the reply, within the request's timeout.
     pub fn request(&mut self, req: Request) -> Result<Reply, SandboxError> {
+        self.request_with(req, &mut |_, _| None)
+    }
+
+    /// [`Sandbox::request`], answering the plugin's parameter queries at
+    /// other times (`Reply::ValueAt`) with `values(name, time)` meanwhile.
+    pub fn request_with(
+        &mut self,
+        req: Request,
+        values: &mut dyn FnMut(&str, f64) -> Option<ParamValue>,
+    ) -> Result<Reply, SandboxError> {
         if let Some(e) = &self.dead {
             return Err(SandboxError::Dead(Box::new(e.clone())));
         }
@@ -299,6 +311,17 @@ impl Sandbox {
         let deadline = Instant::now() + limit;
         loop {
             match self.from_io.recv_timeout(Duration::from_millis(20)) {
+                Ok(Ok(Reply::ValueAt { name: param, time })) => {
+                    let value = values(&param, time);
+                    let sent = self
+                        .to_io
+                        .as_ref()
+                        .is_some_and(|t| t.send(Request::Value { value }).is_ok());
+                    if !sent {
+                        let e = self.crashed(&name);
+                        return Err(self.die(e));
+                    }
+                }
                 Ok(Ok(reply)) => return Ok(reply),
                 Ok(Err(FrameError::Io(_))) | Err(RecvTimeoutError::Disconnected) => {
                     let e = self.crashed(&name);

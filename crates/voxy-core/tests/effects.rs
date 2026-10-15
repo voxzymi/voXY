@@ -423,3 +423,56 @@ fn evaluation_resolves_enabled_effects_at_the_time() {
     // 30 fps by default: one second is frame 30.
     assert_eq!(fx.frame, 30);
 }
+
+/// O-C: an OpenFX effect with keys carries its animation for the plugin's
+/// queries at other times; built-in effects and static ones carry none.
+#[test]
+fn ofx_effects_with_keys_carry_their_timeline() {
+    use voxy_core::command::{Command, SetAnimated};
+    let (mut doc, layer) = doc_with_solid();
+    let ofx = add_effect(
+        &mut doc,
+        layer,
+        "ofx:org.example.Blur",
+        &[("size", Value::Scalar(2.0)), ("mix", Value::Scalar(1.0))],
+    );
+    add_effect(
+        &mut doc,
+        layer,
+        "voxy.blur.gaussian",
+        &[("radius", Value::Scalar(2.0))],
+    );
+    let comp = doc.main_comp.expect("comp");
+    let eval =
+        |doc: &Document| voxy_core::evaluate(doc, comp, voxy_core::Time::ZERO).expect("eval");
+    assert!(
+        eval(&doc).layers[0]
+            .effects
+            .iter()
+            .all(|e| e.timeline.is_none())
+    );
+
+    let size = doc.find_layer(layer).expect("layer").1.effects[0].params[0].id;
+    SetAnimated {
+        prop: size,
+        time: voxy_core::Time::ZERO,
+        animated: true,
+    }
+    .apply(&mut doc)
+    .expect("animate");
+    let e = eval(&doc);
+    let fx = e.layers[0]
+        .effects
+        .iter()
+        .find(|e| e.id == ofx)
+        .expect("ofx");
+    let t = fx.timeline.as_ref().expect("a timeline");
+    assert_eq!(
+        t.params.iter().map(|(n, _)| &**n).collect::<Vec<_>>(),
+        ["size"],
+        "only animated parameters"
+    );
+    assert_eq!(t.key_frames("size"), Some(vec![0.0]));
+    assert_eq!(t.value_at("size", 7.5), Some(Value::Scalar(2.0)));
+    assert_eq!(t.value_at("mix", 0.0), None);
+}

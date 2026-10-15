@@ -30,6 +30,7 @@ fn effect(id: u64, plugin: &str, gain: f64) -> EvaluatedEffect {
         matte: None,
         frame: 0,
         layer_progress: 0.0,
+        timeline: None,
     }
 }
 
@@ -74,6 +75,7 @@ fn scan_render_block_and_retry() {
             "Test Gain",
             "Test Gain",
             "Test Gain",
+            "Test Lag",
             "Test Matte",
             "Test Solid"
         ],
@@ -223,6 +225,7 @@ fn a_generator_replaces_the_input() {
         matte: None,
         frame: 0,
         layer_progress: 0.0,
+        timeline: None,
     };
     let mut f = frame();
     rt.render(&fx, &mut f).unwrap();
@@ -260,6 +263,7 @@ fn blur(id: u64, radius: f64) -> EvaluatedEffect {
         matte: None,
         frame: 0,
         layer_progress: 0.0,
+        timeline: None,
     }
 }
 
@@ -337,6 +341,7 @@ fn fade(id: u64, auto: bool, transition: f64, progress: f64) -> EvaluatedEffect 
         matte: None,
         frame: 0,
         layer_progress: progress,
+        timeline: None,
     }
 }
 
@@ -400,6 +405,7 @@ fn matte(id: u64, invert: bool) -> EvaluatedEffect {
         matte: None,
         frame: 0,
         layer_progress: 0.0,
+        timeline: None,
     }
 }
 
@@ -445,4 +451,82 @@ fn a_general_context_plugin_reads_its_extra_clip_and_never_gets_a_mask() {
     let mut f = frame();
     rt.render(&matte(1, false), &mut f).unwrap();
     assert!(f.pixels.iter().all(|v| *v == 0.0));
+}
+
+#[test]
+fn a_plugin_reads_parameters_at_other_times_and_their_keys() {
+    use voxy_core::{EffectTimeline, FrameRate, PropId, Property, PropertyDesc, Unit, ValueKind};
+    let tmp = tempfile::tempdir().unwrap();
+    let bundle = common::bundle(tmp.path());
+    let rt = OfxRuntime::new(Path::new(EXE), tmp.path(), Timeouts::default()).unwrap();
+    rt.scan(std::slice::from_ref(&bundle));
+
+    // `gain` keyed 1 at frame 0 and 3 at frame 10 (linear), at 25 fps.
+    let desc = Arc::new(PropertyDesc {
+        key: "ofx:org.voxy.test.Lag/gain".into(),
+        label: "gain".into(),
+        kind: ValueKind::Scalar,
+        default: Value::Scalar(1.0),
+        range: None,
+        soft_range: None,
+        unit: Unit::None,
+        animatable: true,
+        spatial: false,
+    });
+    let rate = FrameRate::FPS_25;
+    let mut gain = Property::with_default(PropId(1), desc);
+    gain.set_animated(rate.frame_to_time(0), true).unwrap();
+    gain.add_keyframe(rate.frame_to_time(10)).unwrap();
+    gain.set_value_at(rate.frame_to_time(10), Value::Scalar(3.0))
+        .unwrap();
+    let timeline = Arc::new(EffectTimeline {
+        frame_rate: rate,
+        params: vec![(Arc::from("gain"), gain)],
+    });
+    let at = |frame: f64| match timeline.value_at("gain", frame).unwrap() {
+        Value::Scalar(v) => v,
+        other => panic!("{other:?}"),
+    };
+    assert!((at(4.0) - 1.8).abs() < 1e-9 && (at(5.0) - 2.0).abs() < 1e-9);
+    assert_eq!(timeline.key_frames("gain").unwrap(), vec![0.0, 10.0]);
+
+    // Rendered at frame 5, the plugin multiplies by gain at frame 4, which
+    // only the editor knows, and writes the key count (2) into alpha.
+    let fx = EvaluatedEffect {
+        id: EffectId(1),
+        type_id: plugin_type("org.voxy.test.Lag"),
+        version: 1,
+        params: vec![(Arc::from("gain"), Value::Scalar(at(5.0)))],
+        matte: None,
+        frame: 5,
+        layer_progress: 0.0,
+        timeline: Some(Arc::clone(&timeline)),
+    };
+    let a = frame();
+    let mut f = frame();
+    rt.render(&fx, &mut f).unwrap();
+    for (out, a) in f
+        .pixels
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(a.pixels.as_chunks::<4>().0)
+    {
+        for k in 0..3 {
+            assert!((out[k] - a[k] * 1.8).abs() < 1e-5, "{out:?} from {a:?}");
+        }
+        assert_eq!(out[3], 2.0, "two keys");
+    }
+
+    // Without keys there is nothing to ask: the snapshot value holds.
+    let still = EvaluatedEffect {
+        timeline: None,
+        params: vec![(Arc::from("gain"), Value::Scalar(2.0))],
+        id: EffectId(2),
+        ..fx
+    };
+    let mut f = frame();
+    rt.render(&still, &mut f).unwrap();
+    assert!((f.pixels[0] - a.pixels[0] * 2.0).abs() < 1e-6);
+    assert_eq!(f.pixels[3], 0.0, "no keys");
 }

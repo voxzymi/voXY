@@ -70,11 +70,11 @@ fn frames_round_trip() {
     write_frame(&mut buf, &reply).unwrap();
     let mut r = Cursor::new(buf);
     for want in requests() {
-        assert_eq!(read_frame::<Request>(&mut r).unwrap(), want);
+        assert_eq!(read_frame::<Request, _>(&mut r).unwrap(), want);
     }
-    assert_eq!(read_frame::<Reply>(&mut r).unwrap(), reply);
+    assert_eq!(read_frame::<Reply, _>(&mut r).unwrap(), reply);
     assert!(
-        matches!(read_frame::<Request>(&mut r), Err(FrameError::Io(_))),
+        matches!(read_frame::<Request, _>(&mut r), Err(FrameError::Io(_))),
         "end of stream"
     );
 }
@@ -84,7 +84,7 @@ fn oversized_truncated_and_trailing_frames_are_refused() {
     let mut big = (MAX_FRAME + 1).to_le_bytes().to_vec();
     big.extend_from_slice(&[0; 8]);
     assert!(matches!(
-        read_frame::<Request>(&mut Cursor::new(big)),
+        read_frame::<Request, _>(&mut Cursor::new(big)),
         Err(FrameError::TooLarge(_))
     ));
 
@@ -92,7 +92,7 @@ fn oversized_truncated_and_trailing_frames_are_refused() {
     write_frame(&mut buf, &requests()[2]).unwrap();
     buf.truncate(buf.len() - 3);
     assert!(matches!(
-        read_frame::<Request>(&mut Cursor::new(buf)),
+        read_frame::<Request, _>(&mut Cursor::new(buf)),
         Err(FrameError::Io(_))
     ));
 

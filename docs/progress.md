@@ -571,7 +571,14 @@ at `743b053` (merge of #3).
        chain content key now hashes the input parameter names too
        (in-memory cache only; goldens unchanged). GPU test with three
        clip parameters, one unset.
-   6. Parameter values at other times and key times (editor queries).
+   6. **Done:** parameter values at other times and key times. Snapshots
+      carry key times (frames); a query for a keyed parameter at another
+      time is a nested `ValueAt`/`Value` exchange during the action
+      (protocol version 2), answered from `EvaluatedEffect::timeline`
+      (new in `voxy-core`: an OpenFX effect's animated parameters and the
+      frame rate). The sandbox server now owns its channel so plugin
+      threads can ask. New test plugin `org.voxy.test.Lag` (reads its
+      gain one frame back, counts keys).
    7. Push buttons, InstanceChanged, and plugin edits as undoable
       commands.
    8. Begin/EndSequenceRender around export and playback.
