@@ -275,6 +275,18 @@ impl Document {
         id
     }
 
+    /// The id of an existing asset whose content matches `hash`, if any.
+    /// Used so that importing the same file twice reuses the first item
+    /// instead of adding a duplicate. The lowest id wins, so the result is
+    /// the same whatever order the assets were added in.
+    pub fn asset_by_content_hash(&self, hash: &crate::ContentHash) -> Option<AssetId> {
+        self.assets
+            .0
+            .iter()
+            .find(|(_, a)| a.content_hash.as_ref() == Some(hash))
+            .map(|(&id, _)| id)
+    }
+
     /// The main composition, if the project has one.
     pub fn main(&self) -> Option<&Composition> {
         self.main_comp.and_then(|id| self.comp(id))

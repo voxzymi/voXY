@@ -180,6 +180,10 @@ impl EditorState {
                 }
             )
         };
+        let reused = report.reused_assets.len();
+        if reused > 0 {
+            text = format!("{text} (reused {reused} already in the project)");
+        }
         for w in &report.warnings {
             text.push(' ');
             text.push_str(w);

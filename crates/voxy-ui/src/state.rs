@@ -1398,22 +1398,21 @@ impl EditorState {
             return;
         }
         let folder = self.target_folder();
-        let count = assets.len();
         let Some(report) = self.execute_reported(ImportAssets { assets, folder }) else {
             return;
         };
         self.show_created(&report);
         self.project.missing.invalidate();
+        let text = import_summary(
+            report.created_assets.len(),
+            report.reused_assets.len(),
+            0,
+            &failures,
+        );
         if failures.is_empty() {
-            self.info(format!(
-                "Imported {count} {}",
-                if count == 1 { "file" } else { "files" }
-            ));
+            self.info(text);
         } else {
-            self.error(format!(
-                "Imported {count}; could not import {}",
-                failures.join("; ")
-            ));
+            self.error(text);
         }
     }
 
@@ -2283,34 +2282,124 @@ fn media_kind(path: &Path) -> Option<AssetKind> {
 
 /// Reads a media file's facts into an [`Asset`] (path stored relative to
 /// `root` when inside it). Fails with a short reason.
+/// A status line for an import: how many files were added, reused (already
+/// in the project by content), skipped (unsupported, e.g. inside a dropped
+/// folder) and could not be read. Reads naturally and never stays silent.
+pub(crate) fn import_summary(
+    created: usize,
+    reused: usize,
+    skipped: usize,
+    failures: &[String],
+) -> String {
+    let files = |n: usize| if n == 1 { "file" } else { "files" };
+    let mut parts: Vec<String> = Vec::new();
+    if created > 0 {
+        parts.push(format!("imported {created} {}", files(created)));
+    }
+    if reused > 0 {
+        parts.push(format!("reused {reused} already in the project"));
+    }
+    if skipped > 0 {
+        parts.push(format!("skipped {skipped} unsupported {}", files(skipped)));
+    }
+    if !failures.is_empty() {
+        parts.push(format!("could not import {}", failures.join("; ")));
+    }
+    if parts.is_empty() {
+        return "Nothing to import".to_owned();
+    }
+    let mut s = parts.join("; ");
+    if let Some(first) = s.get_mut(0..1) {
+        first.make_ascii_uppercase();
+    }
+    s
+}
+
 pub(crate) fn probe_asset(path: &Path, root: Option<&Path>) -> Result<Asset, String> {
     let stored = portable_path(path, root);
     let name = path
         .file_name()
         .map_or_else(|| stored.clone(), |n| n.to_string_lossy().into_owned());
-    match media_kind(path).ok_or("unsupported file type")? {
+    let mut asset = match media_kind(path).ok_or("unsupported file type")? {
         AssetKind::Image => {
             let (w, h) = voxy_media::image_dimensions(path).map_err(|e| e.to_string())?;
-            Ok(Asset {
+            Asset {
                 pixel_size: Some([w, h]),
                 ..Asset::new(AssetKind::Image, name, stored)
-            })
+            }
         }
         AssetKind::Video => {
             let info = voxy_media::video::probe(path).map_err(|e| e.to_string())?;
             let video = info.video.ok_or("no video stream")?;
-            Ok(Asset {
+            Asset {
                 pixel_size: Some([video.width, video.height]),
                 duration: video.duration.or(info.duration),
                 frame_rate: video.frame_rate,
                 ..Asset::new(AssetKind::Video, name, stored)
-            })
+            }
         }
         AssetKind::Lut => {
             read_lut(path)?;
-            Ok(Asset::new(AssetKind::Lut, name, stored))
+            Asset::new(AssetKind::Lut, name, stored)
         }
+    };
+    // A content fingerprint, so importing the same file twice reuses the
+    // first item. Best-effort: if the file cannot be read for it, the asset
+    // just imports without a hash and is never matched as a duplicate.
+    asset.content_hash = content_hash(path);
+    Ok(asset)
+}
+
+/// Bytes sampled from each of the start, middle and end of a large file.
+const HASH_SAMPLE: u64 = 64 * 1024;
+
+/// A cheap content fingerprint: the file size and an FNV-1a 64-bit hash of
+/// the whole file (when small) or of sampled chunks (when large). Two files
+/// with the same fingerprint are treated as the same footage on import.
+/// `None` if the file cannot be read.
+pub(crate) fn content_hash(path: &Path) -> Option<voxy_core::ContentHash> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let size = std::fs::metadata(path).ok()?.len();
+    let mut file = std::fs::File::open(path).ok()?;
+
+    // FNV-1a 64-bit over the sampled bytes.
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut fold = |bytes: &[u8]| {
+        for &b in bytes {
+            hash ^= u64::from(b);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    };
+
+    let mut buf = vec![0u8; HASH_SAMPLE as usize];
+    let mut sample_at = |file: &mut std::fs::File, off: u64, fold: &mut dyn FnMut(&[u8])| {
+        if file.seek(SeekFrom::Start(off)).is_err() {
+            return;
+        }
+        let mut read = 0usize;
+        while read < buf.len() {
+            match file.read(&mut buf[read..]) {
+                Ok(n) if n > 0 => read += n,
+                Ok(_) | Err(_) => break,
+            }
+        }
+        fold(&buf[..read]);
+    };
+
+    if size <= 3 * HASH_SAMPLE {
+        sample_at(&mut file, 0, &mut fold);
+    } else {
+        sample_at(&mut file, 0, &mut fold);
+        sample_at(&mut file, size / 2, &mut fold);
+        sample_at(&mut file, size - HASH_SAMPLE, &mut fold);
     }
+
+    Some(voxy_core::ContentHash {
+        algo: "fnv1a64-sampled".to_owned(),
+        size,
+        digest: format!("{hash:016x}"),
+    })
 }
 
 /// The largest `.cube` file read (a 129³ table is about 60 MB of text).
@@ -3825,5 +3914,50 @@ mod tests {
             !s.transport.is_playing(),
             "playback stopped with the switch"
         );
+    }
+
+    #[test]
+    fn content_hash_matches_same_bytes_and_differs_on_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.bin");
+        let b = dir.path().join("b.bin");
+        let c = dir.path().join("c.bin");
+        std::fs::write(&a, vec![7u8; 500_000]).unwrap();
+        std::fs::write(&b, vec![7u8; 500_000]).unwrap(); // identical bytes
+        let mut changed = vec![7u8; 500_000];
+        *changed.last_mut().unwrap() = 8; // one byte differs, at the end
+        std::fs::write(&c, &changed).unwrap();
+
+        let ha = content_hash(&a).unwrap();
+        let hb = content_hash(&b).unwrap();
+        let hc = content_hash(&c).unwrap();
+        assert_eq!(ha, hb, "identical files hash the same");
+        assert_ne!(ha, hc, "a one-byte change is detected");
+        assert_eq!(ha.algo, "fnv1a64-sampled");
+        assert_eq!(ha.size, 500_000);
+        assert!(content_hash(dir.path().join("missing.bin").as_path()).is_none());
+    }
+
+    #[test]
+    fn import_summary_reads_naturally() {
+        assert_eq!(import_summary(3, 0, 0, &[]), "Imported 3 files");
+        assert_eq!(import_summary(1, 0, 0, &[]), "Imported 1 file");
+        assert_eq!(
+            import_summary(2, 1, 0, &[]),
+            "Imported 2 files; reused 1 already in the project"
+        );
+        assert_eq!(
+            import_summary(0, 1, 0, &[]),
+            "Reused 1 already in the project"
+        );
+        assert_eq!(
+            import_summary(4, 0, 2, &[]),
+            "Imported 4 files; skipped 2 unsupported files"
+        );
+        assert_eq!(
+            import_summary(0, 0, 0, &["x.psd: unsupported file type".into()]),
+            "Could not import x.psd: unsupported file type"
+        );
+        assert_eq!(import_summary(0, 0, 0, &[]), "Nothing to import");
     }
 }

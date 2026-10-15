@@ -48,6 +48,17 @@ fn still(name: &str, w: u32, h: u32) -> Asset {
     }
 }
 
+fn still_hashed(name: &str, digest: &str) -> Asset {
+    Asset {
+        content_hash: Some(voxy_core::ContentHash {
+            algo: "fnv1a64-sampled".into(),
+            size: 256,
+            digest: digest.into(),
+        }),
+        ..still(name, 320, 180)
+    }
+}
+
 fn import(h: &mut History, assets: Vec<Asset>) -> Vec<AssetId> {
     h.execute_reported(voxy_core::command::ImportAssets {
         assets,
@@ -490,6 +501,41 @@ fn files_are_imported_created_and_placed_in_one_undo_step() {
         "imports undone too"
     );
     assert!(!h.can_undo() || h.current().comps.is_empty());
+}
+
+#[test]
+fn dropping_a_file_already_in_the_project_reuses_it_as_the_layer_source() {
+    let mut h = history();
+    let c = main_id(&h);
+    // Import once; the asset is now in the project.
+    let existing = import(&mut h, vec![still_hashed("pic.png", "cafef00d")])[0];
+
+    // Drop a file with the same content: no new asset, the layer points at
+    // the existing one, and it is reported as reused.
+    let before_assets = h.current().assets.iter().count();
+    let r = h
+        .execute_reported(DropItems {
+            target: timeline(c, 1.0, 0),
+            items: vec![DropItem::File(still_hashed("copy.png", "cafef00d"))],
+            placement: Placement::default(),
+            folder: None,
+        })
+        .expect("test setup");
+    assert_eq!(r.created_assets, Vec::<AssetId>::new(), "no duplicate asset");
+    assert_eq!(r.reused_assets, vec![existing]);
+    assert_eq!(r.created_layers.len(), 1);
+    assert_eq!(h.current().assets.iter().count(), before_assets);
+    let layer = h
+        .current()
+        .comp(c)
+        .expect("test setup")
+        .layer(r.created_layers[0])
+        .expect("test setup")
+        .clone();
+    assert!(
+        matches!(layer.kind.source(), Some(SourceRef::Asset(a)) if a == existing),
+        "the layer reuses the existing asset"
+    );
 }
 
 #[test]

@@ -363,7 +363,15 @@ mod tests {
 
     fn png(dir: &Path, name: &str, w: u32, h: u32) -> PathBuf {
         let path = dir.join(name);
-        image::RgbaImage::new(w, h).save(&path).unwrap();
+        // Vary one pixel by name so two same-sized images are still distinct
+        // files (content-hash reuse would otherwise treat identical bytes as
+        // the same footage).
+        let mut img = image::RgbaImage::new(w, h);
+        if w > 0 && h > 0 {
+            let tint = name.bytes().fold(0u8, u8::wrapping_add);
+            img.put_pixel(0, 0, image::Rgba([tint, tint, tint, 255]));
+        }
+        img.save(&path).unwrap();
         path
     }
 

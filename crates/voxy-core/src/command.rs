@@ -53,6 +53,9 @@ pub enum CommandError {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CommandReport {
     pub created_assets: Vec<crate::AssetId>,
+    /// Assets an import reused instead of creating, because an existing
+    /// asset had the same content (matched by [`crate::ContentHash`]).
+    pub reused_assets: Vec<crate::AssetId>,
     pub created_comps: Vec<CompId>,
     pub created_layers: Vec<LayerId>,
     pub created_folders: Vec<crate::FolderId>,

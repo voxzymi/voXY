@@ -760,6 +760,20 @@ at `86e1edf` (merge of #6). Design note: `docs/design-ux.md`.
   offers `New Solid` / `New Adjustment Layer` and the one `Import…` command.
   `cargo clippy -p voxy-ui -D warnings` clean; 272 `voxy-ui` tests pass.
 
+- **U-A step 2: content-hash reuse.** `probe_asset` now computes a content
+  fingerprint (`ContentHash`, algo `fnv1a64-sampled`: file size + an FNV-1a
+  hash of the whole file, or of start/middle/end 64 KiB samples when large;
+  best-effort, `None` if unreadable). `Document::asset_by_content_hash` finds a
+  matching item (lowest id, so the result is order-independent). `ImportAssets`
+  and `DropItems` reuse the existing asset instead of adding a duplicate —
+  within one import too — and report it in a new `CommandReport.reused_assets`.
+  Status lines say so ("… reused 1 already in the project") via a shared
+  `import_summary` helper. Reuse changes nothing in the document, so undo is
+  unaffected. Tests: core reuse (import + drop-as-source, batch dedup), UI
+  `content_hash` (same bytes match, one-byte change differs, missing file) and
+  `import_summary`. `cargo clippy -D warnings` clean on `voxy-core` and
+  `voxy-ui`; all core + UI tests pass.
+
 ## Next, in order
 
 - **U-A:** single Import File… (remove the separate Image/Video entries),

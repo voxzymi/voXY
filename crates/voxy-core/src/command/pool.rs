@@ -380,6 +380,14 @@ impl Command for ImportAssets {
             if asset.path.trim().is_empty() {
                 return Err(CommandError::Invalid("a media path cannot be empty".into()));
             }
+            // Reuse an item already in the project with the same content,
+            // so importing the same file twice does not duplicate it.
+            if let Some(hash) = &asset.content_hash
+                && let Some(existing) = doc.asset_by_content_hash(hash)
+            {
+                report.reused_assets.push(existing);
+                continue;
+            }
             let mut asset = asset.clone();
             asset.name = validate_name(&asset.name)?;
             asset.folder = self.folder;
