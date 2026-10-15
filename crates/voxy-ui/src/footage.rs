@@ -350,12 +350,6 @@ mod tests {
         fn pick_media(&self) -> Vec<PathBuf> {
             self.0.clone()
         }
-        fn pick_image(&self) -> Option<PathBuf> {
-            None
-        }
-        fn pick_video(&self) -> Option<PathBuf> {
-            None
-        }
         fn pick_relink(&self) -> Option<PathBuf> {
             None
         }

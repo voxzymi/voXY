@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use voxy_core::command::{
-    AddImageLayer, AddSolidLayer, AddVideoLayer, CreateComposition, CreateFolder,
+    AddSolidLayer, CreateComposition, CreateFolder,
     DuplicateComposition, ImportAssets, MoveToFolder, RemoveItems, RemoveLayers, RemoveMode,
     RenameComposition, RenameFolder, RenameMedia, ReplaceMedia, ResizeMode, SetAssetPath,
     SetCompositionSettings,
@@ -840,62 +840,6 @@ impl EditorState {
         self.execute(voxy_core::command::AddAdjustmentLayer {
             comp,
             name: None,
-            index: 0,
-        });
-        self.select_top_layer();
-    }
-
-    pub fn import_image_dialog(&mut self) {
-        let Some(path) = self.dialogs.pick_image() else {
-            return;
-        };
-        match voxy_media::image_dimensions(&path) {
-            Ok((w, h)) => {
-                let Some(comp) = self.require_comp() else {
-                    return;
-                };
-                let stored = portable_path(&path, self.asset_root().as_deref());
-                self.execute(AddImageLayer {
-                    comp,
-                    path: stored,
-                    pixel_size: [w, h],
-                    index: 0,
-                });
-                self.select_top_layer();
-            }
-            Err(e) => self.error(format!("Could not import {}: {e}", path.display())),
-        }
-    }
-
-    pub fn import_video_dialog(&mut self) {
-        if let Some(path) = self.dialogs.pick_video() {
-            self.import_video(&path);
-        }
-    }
-
-    /// Adds a layer showing the video at `path`.
-    pub fn import_video(&mut self, path: &Path) {
-        let info = match voxy_media::video::probe(path) {
-            Ok(info) => info,
-            Err(e) => {
-                self.error(format!("Could not import {}: {e}", path.display()));
-                return;
-            }
-        };
-        let Some(video) = info.video else {
-            self.error(format!("{} has no video stream", path.display()));
-            return;
-        };
-        let Some(comp) = self.require_comp() else {
-            return;
-        };
-        let stored = portable_path(path, self.asset_root().as_deref());
-        self.execute(AddVideoLayer {
-            comp,
-            path: stored,
-            pixel_size: [video.width, video.height],
-            duration: video.duration.or(info.duration),
-            frame_rate: video.frame_rate,
             index: 0,
         });
         self.select_top_layer();
@@ -1941,8 +1885,6 @@ impl EditorState {
             }
             Action::LayerNewSolid => self.add_solid(),
             Action::LayerNewAdjustment => self.add_adjustment(),
-            Action::LayerImportImage => self.import_image_dialog(),
-            Action::LayerImportVideo => self.import_video_dialog(),
             Action::LayerDelete => self.delete_selection(),
             Action::TransportPlayPause => self.toggle_playback(),
             Action::TransportStart => self.time = Time::ZERO,
@@ -3839,12 +3781,6 @@ mod tests {
     impl crate::dialogs::Dialogs for SaveTo {
         fn pick_media(&self) -> Vec<PathBuf> {
             Vec::new()
-        }
-        fn pick_image(&self) -> Option<PathBuf> {
-            None
-        }
-        fn pick_video(&self) -> Option<PathBuf> {
-            None
         }
         fn pick_relink(&self) -> Option<PathBuf> {
             None

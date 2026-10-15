@@ -749,8 +749,16 @@ at `86e1edf` (merge of #6). Design note: `docs/design-ux.md`.
 - **Step U-1: design note** `docs/design-ux.md` — what exists, the drop-target
   and menu tables, the central text-selection approach, the preferences schema
   and storage, the workspace model, and the §8 After-Effects-familiarity
-  proposal with a recommendation per item. Awaiting owner approval of §8 before
-  U-I. U-A … U-D may start now (nothing contradicts an approved decision).
+  proposal with a recommendation per item. Owner approved §8 (do 8.1/8.3/8.5
+  first, then 8.2/8.4 as small groups, after U-H) and markers (U-H, format bump
+  written only when a project has markers; write a short marker note first).
+
+- **U-A step 1: single Import command.** Removed the separate
+  `LayerImportImage` / `LayerImportVideo` actions (menu entries, action table,
+  dispatch, `import_image_dialog` / `import_video_dialog` / `import_video`, and
+  the now-unused `Dialogs::pick_image` / `pick_video`). The Layer menu now
+  offers `New Solid` / `New Adjustment Layer` and the one `Import…` command.
+  `cargo clippy -p voxy-ui -D warnings` clean; 272 `voxy-ui` tests pass.
 
 ## Next, in order
 
