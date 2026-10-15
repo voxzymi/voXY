@@ -637,7 +637,13 @@ at `743b053` (merge of #3).
           sample bugs noted for the table: DepthConverter addresses
           source pixels per component when converting, and Rectangle
           overwrites corner2's default with the colour's.
-   11. Compatibility table in `docs/ofx-plugins.md` §5.
+   11. **Done:** compatibility table in `docs/ofx-plugins.md` §5, from CI
+       run 38711933727 at `5dc78b3`: all 11 samples built and passed on
+       Windows, macOS arm64, macOS x64 and Linux; none skipped. The
+       tarball sha256 that run downloaded is now pinned.
+
+   **O-C complete.** What is left is listed at the end of
+   `docs/ofx-host.md`.
 8. O-D.
 
 ## Approved decisions

@@ -26,7 +26,7 @@ schema = 1
 [source]
 url = "https://codeload.github.com/AcademySoftwareFoundation/openfx/tar.gz/ab779510b2655b4d11a7e01e5c521f9aa8c88976"
 commit = "ab779510b2655b4d11a7e01e5c521f9aa8c88976"
-sha256 = ""
+sha256 = "66b6edc85e266f63074a18f7adae25438ee28c29aae3296fe81e727579c0d03c"
 content_sha256 = "1a496014591228fe9e12b277e61ed6cc89c91215bfea71955aef2a96696f47b7"
 paths = [
     "LICENSE.md",
