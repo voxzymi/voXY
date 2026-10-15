@@ -717,3 +717,189 @@ at `743b053` (merge of #3).
 - `recovery::Session` IDs could collide on macOS (microsecond clock), which
   made `two_sessions_never_share_a_file` fail on macOS arm64 CI. IDs now
   include a per-process counter.
+
+---
+
+# UX overhaul (voXY feel) — U-A … U-I
+
+Working branch: `claude/gifted-fermat-93dqjr`, started fresh from `origin/main`
+at `86e1edf` (merge of #6). Design note: `docs/design-ux.md`.
+
+## Done
+
+- **Step U-0: repo sync and state report.** Local `main` fast-forwarded to
+  `origin/main`; the working branch is at the same commit (0 ahead / 0 behind),
+  so it is already a fresh branch from latest main. Surveyed what exists so
+  nothing is duplicated — full table in `docs/design-ux.md` §1. Headlines:
+
+  | Area | State |
+  |---|---|
+  | Import File… | **Exists.** `Action::FileImport` (`file.import`, Ctrl/Cmd+I) opens one multi-select picker accepting every supported type; `import_paths` is one undo step; type detected from contents/extension; failures named in the status bar, no crash. Legacy `LayerImportImage` / `LayerImportVideo` menu entries still present (to remove in U-A). |
+  | OS drag-and-drop | **Exists** onto Project panel, timeline, viewport and empty state (`drops.rs`, `project_panel::os_drops`, `empty_state::pool_drop`), with highlight, label, snapping and modifiers. Missing: folder drop, content-hash reuse, paste import, background import with progress/cancel. |
+  | Effect drag-and-drop | **Exists** (`effects_panel.rs`): onto a timeline layer, onto the viewport (applies to selection), double-click applies, user presets. Missing: viewport hit-test, multi-layer, Effect-Controls stack position, empty-target message, not-allowed cursor. |
+  | Context menus | **Layer** and **effect** menus exist; Project rows have menus. Missing: empty-area menus (timeline/viewport/project) with New ▸, Apply Effect ▸ on a layer, viewport menu. |
+  | Preferences | **Exist** (`prefs.rs`): TOML in OS config dir, tolerant loader. Missing: version/migration field, Settings dialog, appearance (theme/scale/density/accent/font), behavior prefs beyond precomp/tips, interface level. |
+  | Layout / workspaces | Dock layout persists (`layout.rs`); Window menu + Reset Layout exist (`app.rs`); per-project layout in `ui_state`. Missing: named workspaces, reopen closed panels. |
+  | Shortcut editor | **Exists** with rebind, Reset/Reset All, conflict detection. Missing: search, import/export keymap, presets. |
+  | Action table | **Exists** (`actions.rs`) as the single source for menus/tooltips/shortcuts/editor. |
+  | Project panel | Tree with sort/filter/search/missing/details header (`project_view.rs`). Missing: grid/compact/thumbnail views, breadcrumbs/folder nav, smart bins, favorites, hover preview, extended details strip. |
+  | Command palette | **None.** |
+  | Markers | **Deferred** (`deferred.md`, "After Milestone F"); needs a project-format change → owner decision before building. |
+
+- **Step U-1: design note** `docs/design-ux.md` — what exists, the drop-target
+  and menu tables, the central text-selection approach, the preferences schema
+  and storage, the workspace model, and the §8 After-Effects-familiarity
+  proposal with a recommendation per item. Owner approved §8 (do 8.1/8.3/8.5
+  first, then 8.2/8.4 as small groups, after U-H) and markers (U-H, format bump
+  written only when a project has markers; write a short marker note first).
+
+- **U-A step 1: single Import command.** Removed the separate
+  `LayerImportImage` / `LayerImportVideo` actions (menu entries, action table,
+  dispatch, `import_image_dialog` / `import_video_dialog` / `import_video`, and
+  the now-unused `Dialogs::pick_image` / `pick_video`). The Layer menu now
+  offers `New Solid` / `New Adjustment Layer` and the one `Import…` command.
+  `cargo clippy -p voxy-ui -D warnings` clean; 272 `voxy-ui` tests pass.
+
+- **U-A step 2: content-hash reuse.** `probe_asset` now computes a content
+  fingerprint (`ContentHash`, algo `fnv1a64-sampled`: file size + an FNV-1a
+  hash of the whole file, or of start/middle/end 64 KiB samples when large;
+  best-effort, `None` if unreadable). `Document::asset_by_content_hash` finds a
+  matching item (lowest id, so the result is order-independent). `ImportAssets`
+  and `DropItems` reuse the existing asset instead of adding a duplicate —
+  within one import too — and report it in a new `CommandReport.reused_assets`.
+  Status lines say so ("… reused 1 already in the project") via a shared
+  `import_summary` helper. Reuse changes nothing in the document, so undo is
+  unaffected. Tests: core reuse (import + drop-as-source, batch dedup), UI
+  `content_hash` (same bytes match, one-byte change differs, missing file) and
+  `import_summary`. `cargo clippy -D warnings` clean on `voxy-core` and
+  `voxy-ui`; all core + UI tests pass.
+
+- **U-A step 3: folder drop.** `expand_dropped_paths` walks a dropped folder
+  (recursively, sorted, bounded to 10 000 entries), importing its supported
+  files and counting unsupported ones as skipped; a top-level file is kept
+  as-is and still named if it fails to probe. Wired into `import_paths`
+  (Project panel), the new `drop_files` entry (timeline / viewport OS-file
+  drops, replacing the old `drop_items_from_files` + `perform_drop` pair with a
+  shared `perform_drop_inner`) and `new_comp_from_files` (empty-state footage
+  tile). The status line reports skipped and failed counts and is never a
+  silent no-op. Tests: `expand_dropped_paths` walk/count, folder import as one
+  undo step with a "skipped N unsupported" status. clippy `-D warnings` clean;
+  276 `voxy-ui` tests pass.
+
+- **U-A step 4: paste import.** New `Action::FilePaste` (`file.paste`,
+  Ctrl/Cmd+V, in the File menu) pastes from the system clipboard: a bitmap
+  image (written to a PNG under the project's asset dir or a temp dir, then
+  imported) or newline-separated file paths / `file://` URIs. With a
+  composition open it imports and adds layers at the playhead as one undo step
+  (via `drop_files`), otherwise imports into the project; an empty or unusable
+  clipboard says so rather than doing nothing. Clipboard access is isolated in
+  a new `clipboard` module (`arboard`, already in the tree via eframe; `image`
+  promoted to a normal dep for PNG encoding); its pure parts — path parsing
+  (plain paths, `file://`, `%XX`, junk skipped) and image-to-PNG writing — are
+  unit-tested. `Ctrl/Cmd+V` keeps working inside text fields because the action
+  does not fire while typing. clippy `-D warnings` clean; 279 `voxy-ui` tests
+  pass.
+
+- **U-A step 5: background import with progress and cancel.** New `import`
+  module: `begin_import(paths, dest)` expands folders (fast), then probes each
+  file's metadata and content hash on a worker thread (the slow part), so the
+  UI never freezes. `poll_import` (called each frame) drains results, repaints
+  while running, and applies the whole import as **one undo step** only once
+  every file is probed — into the project (`ImportDest::Project`) or via a drop
+  (`ImportDest::Drop`). The status bar shows "Importing N of M…" with a
+  progress bar and a **Cancel** button; `cancel_import` drops the job so
+  **nothing is applied and the document is unchanged**. The menu Import, OS
+  drops onto the Project panel / timeline / viewport, and paste all route
+  through it. The synchronous `import_paths` is kept as a test-only path; the
+  empty-state footage tile (`new_comp_from_files`, with its agree/differ
+  prompt) stays synchronous for now. Tests: completion as one undo step, cancel
+  leaves the document unchanged, an all-unsupported folder imports nothing and
+  says so, plus the existing timeline OS-drop test pumps the job to completion.
+  clippy `-D warnings` clean; 282 `voxy-ui` tests pass; `voxy-app` builds.
+
+- **U-A step 6: drop undo proptest.** Added a `Drop` case to the
+  `history_props` edit generator (so `undo_redo_round_trip` and
+  `save_load_round_trip` now exercise random file drops too) and a dedicated
+  `random_drops_then_full_undo_restore_the_document` proptest in
+  `tests/drop.rs`: a random sequence of timeline / viewport file drops (images
+  and videos, 1–3 per drop, with sequence placement), each a command, then
+  undoing everything restores the document exactly. `cargo fmt --check`,
+  `clippy -D warnings`, and all `voxy-core` + `voxy-ui` tests pass. **U-A
+  complete** pending the per-job CI report.
+
+## Status
+
+- **U-A complete and CI green.** All six U-A steps (single Import command,
+  content-hash reuse, folder drop with skipped count, paste import, background
+  import with progress + cancel, drop/undo proptest) are on
+  `claude/gifted-fermat-93dqjr` at `eab6679`. CI run #56 (manual dispatch,
+  since branch pushes do not trigger CI) is **green on all four platforms**:
+  build + clippy + test and the determinism tables on Linux / Windows /
+  macOS arm64 / macOS x64, plus rustfmt, cargo-deny, and the OpenFX bindings
+  check. No PR opened.
+
+## U-B: effect drag-and-drop with live feedback (in progress)
+
+- **U-B step 1: multi-layer apply + compatibility + empty-target message.**
+  `effects_panel::apply_to_layers` applies an effect to several layers as
+  **one** undo step (skipping missing/incompatible ones); `apply` and
+  `apply_to_selection` route through it, so a drop with a multi-layer selection
+  already works once multi-select lands. A `can_apply(def, layer)` predicate is
+  the hook for incompatible targets (no current layer kind is incompatible — it
+  is for future audio-only layers). A drop with nothing to apply to shows
+  `"Select or drop onto a layer"` instead of doing nothing. Apply helpers now
+  take `&Arc<EffectDef>`. Tests: multi-layer one-undo-step, the empty-target
+  message, and applying to an adjustment layer. clippy `-D warnings` and
+  `fmt --check` clean; 9 `effects_panel` tests pass.
+- **U-B step 2: live feedback over the timeline.** `timeline_effect_drop`
+  replaces `drop_on_rows`: while an effect is dragged over the timeline it
+  highlights the row under the pointer (or, on an empty spot, targets the
+  selection), shows an "Add <effect> to <layer>" badge at the cursor, and sets
+  a Copy / Not-allowed cursor; **Escape cancels** the drag. On release it
+  applies to that row's layer, or to the selection on an empty spot, or says
+  "Select or drop onto a layer". Tests drive a real egui frame: drop on a row,
+  on an empty spot with a selection, and with nothing selected. clippy
+  `-D warnings` and `fmt --check` clean; 287 `voxy-ui` tests pass.
+- **U-B step 3: viewport hit-test.** New `hit` module: `hit::pick(doc, comp,
+  time, point)` returns the topmost layer under a composition point and its
+  outline (adjustment and unsized layers are not picked), pure over the
+  evaluated composition and unit-tested. `drops::comp_to_view` maps a
+  composition pixel back to the screen. `viewport_effect_drop` replaces
+  `drop_on_rect`: while dragging it hit-tests the layer under the cursor (else
+  the selection), **outlines** it, shows the "Add <effect> to <layer>" badge
+  and the Copy / Not-allowed cursor, and on release applies to that layer (or
+  the selection, or says "Select or drop onto a layer"). This introduces
+  viewport layer picking; `docs/deferred.md` updated (double-click / Alt-replace
+  can now reuse `hit::pick`). Tests: `hit::pick` (topmost / outside /
+  adjustment) and a viewport-drop frame hitting the layer under the cursor.
+  clippy `-D warnings` and `fmt --check` clean; 290 `voxy-ui` tests pass.
+- **U-B step 4: drop into the Effect Controls stack at a position.**
+  `effects_panel::apply_at` applies an effect at a given stack index (one undo
+  step); `effect_controls_drop` shows an **insert line** between effect
+  sections at the drop position (using each section's captured y-extent), with
+  the "Add <effect> here" badge and Copy / Not-allowed cursor, and on release
+  inserts there — including onto the "No effects" placeholder. Tests: `apply_at`
+  inserts at the given index, and a frame-driven drop lands between two
+  effects. clippy `-D warnings` and `fmt --check` clean; 292 `voxy-ui` tests
+  pass.
+
+**U-B complete** (B1–B4): effect drag-and-drop now has live feedback on the
+timeline, viewport hit-test, multi-layer apply, Effect-Controls positioned
+drop, the empty-target message and not-allowed cursor, Escape to cancel, and
+one undo step per drop. Pending the per-job CI report.
+
+## Design-note / deferred reconciliation
+
+- **Viewport hit-test (U-B):** `docs/deferred.md` deferred "Viewport
+  double-click and layer picking" for want of viewport hit testing. U-B's
+  viewport effect-drop needs exactly that, so the hit-test is being built now
+  (as an approved part of U-B). It also unblocks the deferred double-click /
+  Alt-replace, which stay out of scope until their own step. `deferred.md` will
+  be updated when the hit-test lands.
+
+## Open questions waiting on the owner
+
+- **§8 list:** which After-Effects-familiarity items to build (recommendation:
+  8.1/8.3/8.5 first, then 8.2/8.4 as small groups). See `design-ux.md` §8.
+- **Markers:** approve the project-format change (and its migration) before the
+  markers panel / timeline markers are built; until then they are left out of U-H.

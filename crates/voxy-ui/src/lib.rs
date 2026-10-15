@@ -5,6 +5,7 @@ mod actions;
 mod app;
 #[cfg(test)]
 mod audit;
+mod clipboard;
 mod comp_dialog;
 mod comp_draft;
 mod compat;
@@ -19,6 +20,8 @@ mod empty_state;
 mod footage;
 mod gizmo;
 mod graph_editor;
+mod hit;
+mod import;
 mod layout;
 mod media;
 mod menu;

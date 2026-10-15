@@ -8,12 +8,19 @@
 
 use std::sync::Arc;
 
-use egui::{Color32, DragAndDrop, Pos2, Rect, Sense, Stroke, Ui, vec2};
-use voxy_core::LayerId;
+use egui::{
+    Color32, Context, CursorIcon, DragAndDrop, FontId, Pos2, Rect, Sense, Stroke, Ui, vec2,
+};
 use voxy_core::command::AddEffect;
 use voxy_core::registry::{Category, EffectDef};
+use voxy_core::{Layer, LayerId};
 
 use crate::state::EditorState;
+use crate::theme::ACCENT;
+
+/// Shown when an effect is dropped with no layer under it and nothing
+/// selected.
+pub const NO_TARGET: &str = "Select or drop onto a layer";
 
 /// View state of the panel. Never a command.
 #[derive(Debug, Clone, Default)]
@@ -56,30 +63,101 @@ pub fn listing(state: &EditorState, search: &str) -> Vec<(Category, Vec<Arc<Effe
         .collect()
 }
 
+/// Whether `def` can apply to `layer`. Every current layer kind takes visual
+/// effects, so this is always `Ok`; the hook is here for layer kinds that
+/// could not (an audio-only layer, once those exist), which the drag feedback
+/// shows with a not-allowed cursor.
+#[allow(clippy::unnecessary_wraps)] // a forward-looking hook; see the doc comment.
+pub fn can_apply(_def: &EffectDef, _layer: &Layer) -> Result<(), String> {
+    Ok(())
+}
+
 /// Applies `def` to `layer` (one undo step), at the end of its stack.
-pub fn apply(state: &mut EditorState, layer: LayerId, def: Arc<EffectDef>) {
-    let name = def.name.clone();
+pub fn apply(state: &mut EditorState, layer: LayerId, def: &Arc<EffectDef>) {
+    apply_to_layers(state, &[layer], def);
+}
+
+/// Applies `def` to each of `layers` as **one** undo step, skipping layers
+/// that are gone or cannot take the effect. With no usable layer it says so
+/// and changes nothing. The last layer becomes the selection.
+pub fn apply_to_layers(state: &mut EditorState, layers: &[LayerId], def: &Arc<EffectDef>) {
+    let doc = state.history.current().clone();
+    let targets: Vec<LayerId> = layers
+        .iter()
+        .copied()
+        .filter(|&l| {
+            doc.find_layer(l)
+                .is_some_and(|(_, m)| can_apply(def, m).is_ok())
+        })
+        .collect();
+    if targets.is_empty() {
+        state.info(NO_TARGET);
+        return;
+    }
     state.last_effect = Some(def.clone());
+    let name = def.name.clone();
+    state.history.begin(format!("Add {name}"));
+    let mut done = 0usize;
+    for &layer in &targets {
+        if state
+            .history
+            .execute(AddEffect {
+                layer,
+                index: None,
+                def: def.clone(),
+            })
+            .is_ok()
+        {
+            done += 1;
+        }
+    }
+    if done == 0 {
+        state.history.rollback();
+        return;
+    }
+    state.history.commit();
+    state.selection = targets.last().copied();
+    state.info(if done == 1 {
+        format!("Added {name}")
+    } else {
+        format!("Added {name} to {done} layers")
+    });
+}
+
+/// Applies `def` to the selected layer(s), or says to pick one.
+pub fn apply_to_selection(state: &mut EditorState, def: &Arc<EffectDef>) {
+    let layers = state.selected_layer_ids();
+    apply_to_layers(state, &layers, def);
+}
+
+/// Applies `def` to `layer` at stack position `index` (`None` = end of the
+/// stack) as one undo step. Used by the Effect Controls drop.
+pub fn apply_at(
+    state: &mut EditorState,
+    layer: LayerId,
+    index: Option<usize>,
+    def: &Arc<EffectDef>,
+) {
+    let doc = state.history.current().clone();
+    let Some((_, model)) = doc.find_layer(layer) else {
+        return;
+    };
+    if can_apply(def, model).is_err() {
+        state.info(NO_TARGET);
+        return;
+    }
+    state.last_effect = Some(def.clone());
+    let name = def.name.clone();
     if state
         .execute_reported(AddEffect {
             layer,
-            index: None,
-            def,
+            index,
+            def: def.clone(),
         })
         .is_some()
     {
         state.selection = Some(layer);
         state.info(format!("Added {name}"));
-    }
-}
-
-/// Applies `def` to the selected layer, or says why it cannot.
-pub fn apply_to_selection(state: &mut EditorState, def: Arc<EffectDef>) {
-    match state.selection {
-        Some(layer) if state.history.current().find_layer(layer).is_some() => {
-            apply(state, layer, def);
-        }
-        _ => state.info("Select a layer to apply an effect to."),
     }
 }
 
@@ -174,7 +252,7 @@ pub fn show(ui: &mut Ui, state: &mut EditorState) {
                             .add(egui::Label::new(text).sense(Sense::click_and_drag()))
                             .on_hover_text(hint);
                         if r.double_clicked() {
-                            apply_to_selection(state, def.clone());
+                            apply_to_selection(state, &def);
                         }
                         if r.drag_started() {
                             DragAndDrop::set_payload(ui.ctx(), EffectDrag(def.clone()));
@@ -185,49 +263,286 @@ pub fn show(ui: &mut Ui, state: &mut EditorState) {
         });
 }
 
-/// Applies a dragged effect released over one of the timeline's layer rows.
-pub fn drop_on_rows(ui: &Ui, state: &mut EditorState) {
-    let Some(at) = released_at(ui) else { return };
+/// Live feedback and release handling for an effect dragged over the
+/// timeline. Highlights the row under the pointer (or, on an empty spot, the
+/// selection), shows an "Add <effect> to <layer>" badge and the matching
+/// cursor, and on release applies the effect as one undo step. Escape cancels.
+pub fn timeline_effect_drop(ui: &Ui, state: &mut EditorState) {
+    let ctx = ui.ctx();
+    if cancel_on_escape(ctx) {
+        return;
+    }
+    let Some(drag) = peek(ctx) else { return };
+    let def = &drag.0;
+    let area = ui.max_rect();
+    let Some(at) = ctx.input(|i| i.pointer.hover_pos()) else {
+        return;
+    };
+    if !area.contains(at) {
+        return;
+    }
+    let doc = state.history.current().clone();
     let row = state
         .timeline
         .rows
         .iter()
         .find(|(_, r)| r.contains(at))
-        .map(|(id, _)| *id);
-    if let Some(layer) = row
-        && let Some(EffectDrag(def)) = take(ui)
-    {
-        apply(state, layer, def);
-    }
-}
+        .map(|(id, r)| (*id, *r));
 
-/// Applies a dragged effect released over `rect` (the viewport) to the
-/// selected layer.
-pub fn drop_on_rect(ui: &Ui, state: &mut EditorState, rect: Rect) {
-    let Some(at) = released_at(ui) else { return };
-    if rect.contains(at)
-        && let Some(EffectDrag(def)) = take(ui)
-    {
-        apply_to_selection(state, def);
-    }
-}
-
-/// Where an effect drag was released this frame, if one was.
-fn released_at(ui: &Ui) -> Option<Pos2> {
-    if !DragAndDrop::has_payload_of_type::<EffectDrag>(ui.ctx()) {
-        return None;
-    }
-    ui.input(|i| {
-        if i.pointer.any_released() {
-            i.pointer.interact_pos()
-        } else {
-            None
+    // Decide the target, the highlight, the label and whether it may apply.
+    let (target, highlight, label, allowed) = match row {
+        Some((layer, rect)) => {
+            let (ok, name) = doc
+                .find_layer(layer)
+                .map_or((false, String::new()), |(_, m)| {
+                    (can_apply(def, m).is_ok(), m.name.clone())
+                });
+            let label = if ok {
+                format!("Add {} to {name}", def.name)
+            } else {
+                format!("Can’t add {} to {name}", def.name)
+            };
+            (Target::Layer(layer), Some(rect), label, ok)
         }
-    })
+        None => match state
+            .selection
+            .and_then(|l| doc.find_layer(l).map(|(_, m)| m.name.clone()))
+        {
+            Some(name) => (
+                Target::Selection,
+                None,
+                format!("Add {} to {name}", def.name),
+                true,
+            ),
+            None => (Target::Selection, None, NO_TARGET.to_owned(), false),
+        },
+    };
+
+    if let Some(rect) = highlight {
+        let p = ui.painter_at(area);
+        let col = if allowed {
+            ACCENT
+        } else {
+            ui.visuals().error_fg_color
+        };
+        p.rect_filled(rect, 2.0, col.linear_multiply(0.18));
+        p.rect_stroke(rect, 2.0, Stroke::new(1.5, col), egui::StrokeKind::Inside);
+    }
+    drag_badge(ctx, at, &label, allowed);
+    ctx.set_cursor_icon(if allowed {
+        CursorIcon::Copy
+    } else {
+        CursorIcon::NotAllowed
+    });
+
+    if ctx.input(|i| i.pointer.any_released())
+        && let Some(EffectDrag(def)) = take(ctx)
+    {
+        match target {
+            Target::Layer(layer) if allowed => apply(state, layer, &def),
+            // Incompatible layer: the badge already said why.
+            Target::Layer(_) => {}
+            // Empty spot: apply to the selection, or say there is none.
+            Target::Selection => apply_to_selection(state, &def),
+        }
+    }
 }
 
-fn take(ui: &Ui) -> Option<EffectDrag> {
-    DragAndDrop::take_payload::<EffectDrag>(ui.ctx()).map(|p| (*p).clone())
+/// Where a released effect drag landed on the timeline.
+enum Target {
+    Layer(LayerId),
+    Selection,
+}
+
+/// Live feedback and release handling for an effect dragged over the
+/// viewport. Hit-tests the layer under the pointer, outlines it, shows the
+/// "Add <effect> to <layer>" badge and the matching cursor, and on release
+/// applies to that layer (or the selection where the pointer hits no layer).
+/// Escape cancels.
+pub fn viewport_effect_drop(
+    ui: &Ui,
+    state: &mut EditorState,
+    comp: voxy_core::CompId,
+    size: [u32; 2],
+    panel: Rect,
+) {
+    let ctx = ui.ctx();
+    if cancel_on_escape(ctx) {
+        return;
+    }
+    let Some(drag) = peek(ctx) else { return };
+    let def = &drag.0;
+    let Some(at) = ctx
+        .input(|i| i.pointer.hover_pos())
+        .filter(|p| panel.contains(*p))
+    else {
+        return;
+    };
+    let Some(point) = crate::drops::view_to_comp(panel, size, at) else {
+        return;
+    };
+    let doc = state.history.current().clone();
+
+    // The layer under the pointer, else the selection, with its outline.
+    let picked = crate::hit::pick(&doc, comp, state.time, point);
+    let (target, quad) = match picked {
+        Some(p) => (Some(p.layer), Some(p.quad)),
+        None => match state.selection.filter(|&l| doc.find_layer(l).is_some()) {
+            Some(l) => (Some(l), crate::hit::layer_quad(&doc, comp, state.time, l)),
+            None => (None, None),
+        },
+    };
+    let allowed = target.is_some_and(|l| {
+        doc.find_layer(l)
+            .is_some_and(|(_, m)| can_apply(def, m).is_ok())
+    });
+    let label = match target.and_then(|l| doc.find_layer(l).map(|(_, m)| m.name.clone())) {
+        Some(name) if allowed => format!("Add {} to {name}", def.name),
+        Some(name) => format!("Can’t add {} to {name}", def.name),
+        None => NO_TARGET.to_owned(),
+    };
+
+    if let Some(q) = quad {
+        let col = if allowed {
+            ACCENT
+        } else {
+            ui.visuals().error_fg_color
+        };
+        let pts: Vec<Pos2> = q
+            .iter()
+            .map(|p| crate::drops::comp_to_view(panel, size, *p))
+            .collect();
+        ui.painter_at(panel)
+            .add(egui::Shape::closed_line(pts, Stroke::new(2.0, col)));
+    }
+    drag_badge(ctx, at, &label, allowed);
+    ctx.set_cursor_icon(if allowed {
+        CursorIcon::Copy
+    } else {
+        CursorIcon::NotAllowed
+    });
+
+    if ctx.input(|i| i.pointer.any_released())
+        && let Some(EffectDrag(def)) = take(ctx)
+    {
+        match target {
+            Some(layer) if allowed => apply(state, layer, &def),
+            Some(_) => {}
+            None => state.info(NO_TARGET),
+        }
+    }
+}
+
+/// Live feedback and release handling for an effect dragged over the Effect
+/// Controls stack of `layer`. `spans` are the top/bottom y of each effect's
+/// section (empty when the layer has none); `section` is the whole stack
+/// area. Shows an insert line at the drop position and applies the effect
+/// there on release. Escape cancels.
+pub fn effect_controls_drop(
+    ui: &Ui,
+    state: &mut EditorState,
+    layer: LayerId,
+    spans: &[(f32, f32)],
+    section: Rect,
+) {
+    let ctx = ui.ctx();
+    if cancel_on_escape(ctx) {
+        return;
+    }
+    let Some(drag) = peek(ctx) else { return };
+    let def = &drag.0;
+    let Some(at) = ctx
+        .input(|i| i.pointer.hover_pos())
+        .filter(|p| section.contains(*p))
+    else {
+        return;
+    };
+    let doc = state.history.current().clone();
+    let allowed = doc
+        .find_layer(layer)
+        .is_some_and(|(_, m)| can_apply(def, m).is_ok());
+
+    // The stack position: after every effect whose midpoint is above the
+    // pointer. `spans` is in stack order.
+    let index = spans.iter().filter(|(t, b)| (t + b) / 2.0 < at.y).count();
+    let line_y = if spans.is_empty() {
+        section.top()
+    } else if index == 0 {
+        spans[0].0
+    } else if index >= spans.len() {
+        spans[spans.len() - 1].1
+    } else {
+        spans[index].0
+    };
+
+    let col = if allowed {
+        ACCENT
+    } else {
+        ui.visuals().error_fg_color
+    };
+    ui.painter_at(section)
+        .hline(section.x_range(), line_y, Stroke::new(2.0, col));
+    let label = if allowed {
+        format!("Add {} here", def.name)
+    } else {
+        format!("Can’t add {} here", def.name)
+    };
+    drag_badge(ctx, at, &label, allowed);
+    ctx.set_cursor_icon(if allowed {
+        CursorIcon::Copy
+    } else {
+        CursorIcon::NotAllowed
+    });
+
+    if ctx.input(|i| i.pointer.any_released())
+        && let Some(EffectDrag(def)) = take(ctx)
+        && allowed
+    {
+        apply_at(state, layer, Some(index), &def);
+    }
+}
+
+/// The effect drag in progress, without taking it.
+fn peek(ctx: &Context) -> Option<std::sync::Arc<EffectDrag>> {
+    DragAndDrop::payload::<EffectDrag>(ctx)
+}
+
+/// Clears an effect drag on Escape. Returns `true` if it did.
+fn cancel_on_escape(ctx: &Context) -> bool {
+    if DragAndDrop::has_payload_of_type::<EffectDrag>(ctx)
+        && ctx.input(|i| i.key_pressed(egui::Key::Escape))
+    {
+        DragAndDrop::clear_payload(ctx);
+        return true;
+    }
+    false
+}
+
+/// A floating label at the pointer naming what the drop will do.
+fn drag_badge(ctx: &Context, at: Pos2, text: &str, allowed: bool) {
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Tooltip,
+        egui::Id::new("effect-drag-badge"),
+    ));
+    let origin = at + vec2(14.0, 8.0);
+    let galley =
+        painter.layout_no_wrap(text.to_owned(), FontId::proportional(13.0), Color32::WHITE);
+    let pad = vec2(6.0, 4.0);
+    let bg = if allowed {
+        ACCENT
+    } else {
+        Color32::from_rgb(170, 60, 60)
+    };
+    painter.rect_filled(
+        Rect::from_min_size(origin, galley.size() + pad * 2.0),
+        4.0,
+        bg,
+    );
+    painter.galley(origin + pad, galley, Color32::WHITE);
+}
+
+fn take(ctx: &Context) -> Option<EffectDrag> {
+    DragAndDrop::take_payload::<EffectDrag>(ctx).map(|p| (*p).clone())
 }
 
 /// The presets group's glyph: two stacked cards.
@@ -383,10 +698,10 @@ mod tests {
         let def = listing(&s, "invert")[0].1[0].clone();
         s.selection = None;
         let before = s.history.revision();
-        apply_to_selection(&mut s, def.clone());
+        apply_to_selection(&mut s, &def);
         assert_eq!(s.history.revision(), before, "nothing selected");
         s.selection = Some(layer);
-        apply_to_selection(&mut s, def);
+        apply_to_selection(&mut s, &def);
         let l = s
             .history
             .current()
@@ -409,13 +724,289 @@ mod tests {
     }
 
     #[test]
+    fn applying_to_several_layers_is_one_undo_step() {
+        let (mut s, first) = state_with_layer();
+        let comp = s.comp_id().expect("comp");
+        s.execute(AddSolidLayer {
+            comp,
+            name: None,
+            color: LinearRgba::WHITE,
+            index: 0,
+        });
+        let second = s.history.current().comp(comp).expect("comp").layers[0].id;
+        let blur = listing(&s, "gaussian")[0].1[0].clone();
+
+        apply_to_layers(&mut s, &[first, second], &blur);
+        let count = |s: &EditorState, l| {
+            s.history
+                .current()
+                .find_layer(l)
+                .expect("layer")
+                .1
+                .effects
+                .len()
+        };
+        assert_eq!(count(&s, first), 1);
+        assert_eq!(count(&s, second), 1);
+        assert!(
+            s.status.as_ref().unwrap().text.contains("2 layers"),
+            "{:?}",
+            s.status
+        );
+        // One undo clears both.
+        assert!(s.history.undo());
+        assert_eq!(count(&s, first), 0);
+        assert_eq!(count(&s, second), 0);
+    }
+
+    #[test]
+    fn dropping_with_no_target_says_select_or_drop() {
+        let (mut s, _) = state_with_layer();
+        let def = listing(&s, "invert")[0].1[0].clone();
+        s.selection = None;
+        let before = s.history.revision();
+        apply_to_layers(&mut s, &[], &def);
+        assert_eq!(s.history.revision(), before, "nothing changed");
+        assert_eq!(s.status.as_ref().unwrap().text, NO_TARGET);
+    }
+
+    #[test]
+    fn effects_apply_to_an_adjustment_layer() {
+        use voxy_core::command::AddAdjustmentLayer;
+        let (mut s, _) = state_with_layer();
+        let comp = s.comp_id().expect("comp");
+        s.execute(AddAdjustmentLayer {
+            comp,
+            name: None,
+            index: 0,
+        });
+        let adj = s.history.current().comp(comp).expect("comp").layers[0].id;
+        let (_, model) = s.history.current().find_layer(adj).expect("layer");
+        let blur = listing(&s, "gaussian")[0].1[0].clone();
+        assert!(can_apply(&blur, model).is_ok());
+        apply(&mut s, adj, &blur);
+        assert_eq!(
+            s.history
+                .current()
+                .find_layer(adj)
+                .expect("layer")
+                .1
+                .effects
+                .len(),
+            1
+        );
+    }
+
+    /// Runs one egui frame with an effect drag released at `at` over the
+    /// timeline and returns, having applied the drop.
+    fn run_effect_drop(s: &mut EditorState, def: &Arc<EffectDef>, at: Pos2) {
+        let ctx = Context::default();
+        let input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(400.0, 400.0))),
+            events: vec![
+                egui::Event::PointerMoved(at),
+                egui::Event::PointerButton {
+                    pos: at,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(input, |ui| {
+            DragAndDrop::set_payload(ui.ctx(), EffectDrag(def.clone()));
+            timeline_effect_drop(ui, s);
+        });
+        out.textures_delta.clear();
+    }
+
+    fn fx_count(s: &EditorState, layer: LayerId) -> usize {
+        s.history
+            .current()
+            .find_layer(layer)
+            .expect("layer")
+            .1
+            .effects
+            .len()
+    }
+
+    #[test]
+    fn dropping_an_effect_on_a_timeline_row_applies_to_that_layer() {
+        let (mut s, layer) = state_with_layer();
+        let def = listing(&s, "invert")[0].1[0].clone();
+        let rect = Rect::from_min_size(Pos2::new(0.0, 20.0), vec2(200.0, 18.0));
+        s.timeline.rows = vec![(layer, rect)];
+        s.selection = None;
+        run_effect_drop(&mut s, &def, rect.center());
+        assert_eq!(fx_count(&s, layer), 1, "applied to the row's layer");
+    }
+
+    #[test]
+    fn dropping_on_an_empty_spot_uses_the_selection_or_says_to_pick_one() {
+        let (mut s, layer) = state_with_layer();
+        let def = listing(&s, "invert")[0].1[0].clone();
+        s.timeline.rows = vec![]; // pointer will miss every row
+        let empty = Pos2::new(100.0, 100.0);
+
+        // With a selection: applies to it.
+        s.selection = Some(layer);
+        run_effect_drop(&mut s, &def, empty);
+        assert_eq!(fx_count(&s, layer), 1);
+
+        // With nothing selected: says so, changes nothing.
+        s.selection = None;
+        let before = s.history.revision();
+        run_effect_drop(&mut s, &def, empty);
+        assert_eq!(s.history.revision(), before);
+        assert_eq!(s.status.as_ref().unwrap().text, NO_TARGET);
+    }
+
+    /// Runs one egui frame with an effect drag released over the viewport at
+    /// composition-pixel `comp_point`.
+    fn run_viewport_drop(
+        s: &mut EditorState,
+        def: &Arc<EffectDef>,
+        comp: voxy_core::CompId,
+        size: [u32; 2],
+        comp_point: voxy_core::glam::DVec2,
+    ) {
+        let screen = Rect::from_min_size(Pos2::ZERO, vec2(400.0, 400.0));
+        let at = crate::drops::comp_to_view(screen, size, comp_point);
+        let input = egui::RawInput {
+            screen_rect: Some(screen),
+            events: vec![
+                egui::Event::PointerMoved(at),
+                egui::Event::PointerButton {
+                    pos: at,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+            ..Default::default()
+        };
+        let ctx = Context::default();
+        let mut full = ctx.run_ui(input, |ui| {
+            DragAndDrop::set_payload(ui.ctx(), EffectDrag(def.clone()));
+            let panel = ui.max_rect();
+            viewport_effect_drop(ui, s, comp, size, panel);
+        });
+        full.textures_delta.clear();
+    }
+
+    #[test]
+    fn dropping_an_effect_on_the_viewport_hits_the_layer_under_the_cursor() {
+        let (mut s, layer) = state_with_layer();
+        let comp = s.comp_id().expect("comp");
+        let (w, h) = {
+            let c = s.comp().expect("comp");
+            (c.width, c.height)
+        };
+        let def = listing(&s, "invert")[0].1[0].clone();
+        s.selection = None;
+        // The centre of the comp is inside the solid that fills it.
+        run_viewport_drop(
+            &mut s,
+            &def,
+            comp,
+            [w, h],
+            voxy_core::glam::DVec2::new(f64::from(w) / 2.0, f64::from(h) / 2.0),
+        );
+        assert_eq!(
+            fx_count(&s, layer),
+            1,
+            "applied to the layer under the cursor"
+        );
+    }
+
+    #[test]
+    fn apply_at_inserts_at_the_given_stack_position() {
+        let (mut s, layer) = state_with_layer();
+        let blur = listing(&s, "gaussian")[0].1[0].clone();
+        let invert = listing(&s, "invert")[0].1[0].clone();
+        let box_blur = listing(&s, "box")[0].1[0].clone();
+        apply(&mut s, layer, &blur);
+        apply(&mut s, layer, &invert);
+        // Insert between the two.
+        apply_at(&mut s, layer, Some(1), &box_blur);
+        s.selection = Some(layer);
+        let ids: Vec<_> = s
+            .selected_layer_effects()
+            .iter()
+            .map(|e| e.type_id.clone())
+            .collect();
+        assert_eq!(
+            ids,
+            vec![
+                blur.type_id.clone(),
+                box_blur.type_id.clone(),
+                invert.type_id.clone()
+            ]
+        );
+        assert!(s.history.undo(), "one undo");
+        assert_eq!(s.selected_layer_effects().len(), 2);
+    }
+
+    #[test]
+    fn dropping_into_the_effect_controls_stack_inserts_at_the_drop_position() {
+        let (mut s, layer) = state_with_layer();
+        let blur = listing(&s, "gaussian")[0].1[0].clone();
+        let invert = listing(&s, "invert")[0].1[0].clone();
+        let box_blur = listing(&s, "box")[0].1[0].clone();
+        apply(&mut s, layer, &blur);
+        apply(&mut s, layer, &invert);
+
+        // Two effect sections stacked vertically; drop in the second one's
+        // top half resolves to index 1 (between the two).
+        let spans = vec![(20.0f32, 40.0f32), (40.0f32, 60.0f32)];
+        let section = Rect::from_min_max(Pos2::new(0.0, 20.0), Pos2::new(200.0, 60.0));
+        let at = Pos2::new(100.0, 45.0);
+        let input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(400.0, 400.0))),
+            events: vec![
+                egui::Event::PointerMoved(at),
+                egui::Event::PointerButton {
+                    pos: at,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+            ..Default::default()
+        };
+        let ctx = Context::default();
+        let mut out = ctx.run_ui(input, |ui| {
+            DragAndDrop::set_payload(ui.ctx(), EffectDrag(box_blur.clone()));
+            effect_controls_drop(ui, &mut s, layer, &spans, section);
+        });
+        out.textures_delta.clear();
+
+        s.selection = Some(layer);
+        let ids: Vec<_> = s
+            .selected_layer_effects()
+            .iter()
+            .map(|e| e.type_id.clone())
+            .collect();
+        assert_eq!(
+            ids,
+            vec![
+                blur.type_id.clone(),
+                box_blur.type_id.clone(),
+                invert.type_id.clone()
+            ],
+            "inserted between the two effects"
+        );
+    }
+
+    #[test]
     fn effect_actions_act_on_the_selected_effect_one_step_each() {
         use crate::actions::Action;
         let (mut s, layer) = state_with_layer();
         let blur = listing(&s, "gaussian")[0].1[0].clone();
         let invert = listing(&s, "invert")[0].1[0].clone();
-        apply(&mut s, layer, blur);
-        apply(&mut s, layer, invert);
+        apply(&mut s, layer, &blur);
+        apply(&mut s, layer, &invert);
         let effects = |s: &EditorState| s.selected_layer_effects();
         let ids: Vec<_> = effects(&s).iter().map(|e| e.id).collect();
 
@@ -463,7 +1054,7 @@ mod tests {
         });
         let second = s.history.current().comp(comp).expect("comp").layers[0].id;
         let blur = listing(&s, "gaussian")[0].1[0].clone();
-        apply(&mut s, first, blur);
+        apply(&mut s, first, &blur);
         s.selection = Some(first);
         let stack = s.selected_layer_effects();
         s.save_effect_preset("Dreamy", stack.clone());
@@ -490,7 +1081,7 @@ mod tests {
         use crate::actions::Action;
         let (mut s, layer) = state_with_layer();
         let blur = listing(&s, "gaussian")[0].1[0].clone();
-        apply(&mut s, layer, blur);
+        apply(&mut s, layer, &blur);
         s.selection = Some(layer);
         let fx = s.selected_layer_effects()[0].id;
         let revision = s.history.revision();
@@ -516,7 +1107,7 @@ mod tests {
     fn importing_a_lut_sets_the_parameter_in_one_step() {
         let (mut s, layer) = state_with_layer();
         let lut = listing(&s, "apply lut")[0].1[0].clone();
-        apply(&mut s, layer, lut);
+        apply(&mut s, layer, &lut);
         s.selection = Some(layer);
         let prop = s.selected_layer_effects()[0].params[0].id;
         let dir = tempfile::tempdir().expect("dir");

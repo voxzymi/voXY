@@ -12,22 +12,22 @@ use voxy_core::command::{
 };
 use voxy_core::command::{
     AddImageLayer, AddSolidLayer, AddSourceLayer, Anchor, ApplyEasePreset, CreateComposition,
-    CreateFolder, DuplicateComposition, MoveKeyframes, MoveLayer, MoveToFolder, PrecomposeLayers,
-    PrecomposeMode, RemoveItems, RemoveKeyframes, RemoveLayers, RemoveMode, RenameComposition,
-    RenameLayer, ResizeMode, SetAnimated, SetCompositionSettings, SetEase, SetInterpolation,
-    SetLayerTiming, SetLayerVisible, SetPrecompTiming, SetProperty, SetSpatialTangents,
-    SetWorkingSpace, UnprecomposeLayer,
+    CreateFolder, DropItem, DropItems, DropTarget, DuplicateComposition, MoveKeyframes, MoveLayer,
+    MoveToFolder, Placement, PrecomposeLayers, PrecomposeMode, RemoveItems, RemoveKeyframes,
+    RemoveLayers, RemoveMode, RenameComposition, RenameLayer, ResizeMode, SetAnimated,
+    SetCompositionSettings, SetEase, SetInterpolation, SetLayerTiming, SetLayerVisible,
+    SetPrecompTiming, SetProperty, SetSpatialTangents, SetWorkingSpace, UnprecomposeLayer,
 };
 use voxy_core::glam::{DVec2, DVec3};
 use voxy_core::registry::{EffectDef, builtins};
 use voxy_core::shapes::Range;
-use voxy_core::{BlendMode, EffectMatte, MatteChannel, ValueKind};
 use voxy_core::{
-    BounceParams, CompId, CompSettings, Document, EaseHandle, EasePreset, FrameRate, History,
-    Interp, JumpMode, Layer, LinearRgba, OscillationParams, PoolItem, PropId, SourceRef,
-    SpatialTangents, SpringParams, SteppedRampParams, StepsParams, Time, Value, WorkingSpace,
-    persist,
+    Asset, AssetKind, BounceParams, CompId, CompSettings, Document, EaseHandle, EasePreset,
+    FrameRate, History, Interp, JumpMode, Layer, LinearRgba, OscillationParams, PoolItem, PropId,
+    SourceRef, SpatialTangents, SpringParams, SteppedRampParams, StepsParams, Time, Value,
+    WorkingSpace, persist,
 };
+use voxy_core::{BlendMode, EffectMatte, MatteChannel, ValueKind};
 
 /// An edit described independently of the IDs that exist at run time; layer
 /// and property choices are indices resolved against the current document.
@@ -35,6 +35,11 @@ use voxy_core::{
 enum Edit {
     AddSolid(f32, f32, f32),
     AddImage(u32, u32),
+    /// A drop of 1..=3 imported files onto the timeline or viewport:
+    /// `(is_video, width, height)` per file, then the drop time (ms), the
+    /// timeline index, whether it targets the viewport, and whether Ctrl
+    /// sequences the items.
+    Drop(Vec<(bool, u32, u32)>, i64, usize, bool, bool),
     Remove(usize),
     Rename(usize, String),
     Move(usize, usize),
@@ -133,6 +138,14 @@ fn edit() -> impl Strategy<Value = Edit> {
     prop_oneof![
         (unit.clone(), unit.clone(), unit).prop_map(|(r, g, b)| Edit::AddSolid(r, g, b)),
         (1u32..4096, 1u32..4096).prop_map(|(w, h)| Edit::AddImage(w, h)),
+        (
+            prop::collection::vec((any::<bool>(), 1u32..2048, 1u32..2048), 1..4),
+            -2000i64..12_000,
+            0usize..8,
+            any::<bool>(),
+            any::<bool>(),
+        )
+            .prop_map(|(files, t, i, viewport, seq)| Edit::Drop(files, t, i, viewport, seq)),
         any::<usize>().prop_map(Edit::Remove),
         (any::<usize>(), "[a-zA-Z0-9 ]{0,12}").prop_map(|(i, s)| Edit::Rename(i, s)),
         (any::<usize>(), 0usize..8).prop_map(|(i, to)| Edit::Move(i, to)),
@@ -503,6 +516,51 @@ fn apply(h: &mut History, e: &Edit, focus: &mut Option<CompId>) {
             pixel_size: [*w, *hh],
             index: 0,
         }),
+        Edit::Drop(files, time_ms, index, viewport, sequence) => {
+            let items: Vec<DropItem> = files
+                .iter()
+                .enumerate()
+                .map(|(k, (video, w, h))| {
+                    let name = format!("drop{k}.{}", if *video { "mp4" } else { "png" });
+                    let path = format!("media/{name}");
+                    let asset = if *video {
+                        Asset {
+                            pixel_size: Some([*w, *h]),
+                            duration: Some(Time::from_secs(2)),
+                            frame_rate: Some(FrameRate::new(24, 1).expect("valid fps")),
+                            ..Asset::new(AssetKind::Video, name, path)
+                        }
+                    } else {
+                        Asset {
+                            pixel_size: Some([*w, *h]),
+                            ..Asset::new(AssetKind::Image, name, path)
+                        }
+                    };
+                    DropItem::File(asset)
+                })
+                .collect();
+            let target = if *viewport {
+                DropTarget::Viewport {
+                    comp,
+                    time: Time::from_millis(*time_ms),
+                    pos: DVec2::new(0.0, 0.0),
+                }
+            } else {
+                DropTarget::Timeline {
+                    comp,
+                    time: Time::from_millis(*time_ms),
+                    index: *index,
+                }
+            };
+            h.execute(DropItems {
+                target,
+                items,
+                placement: Placement {
+                    sequence: *sequence,
+                },
+                folder: None,
+            })
+        }
         Edit::Remove(i) => match pick(*i) {
             Some(l) => h.execute(RemoveLayers { layers: vec![l.id] }),
             None => Ok(()),

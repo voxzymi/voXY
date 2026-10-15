@@ -20,8 +20,6 @@ pub const VIDEO_EXTENSIONS: &[&str] = &[
 pub trait Dialogs: Debug + Send {
     /// Any number of image and video files to import.
     fn pick_media(&self) -> Vec<PathBuf>;
-    fn pick_image(&self) -> Option<PathBuf>;
-    fn pick_video(&self) -> Option<PathBuf>;
     /// One image or video file to relink to.
     fn pick_relink(&self) -> Option<PathBuf>;
     /// One LUT file, for the LUT effect's "Import LUT…".
@@ -61,20 +59,6 @@ impl Dialogs for NativeDialogs {
             .unwrap_or_default()
     }
 
-    fn pick_image(&self) -> Option<PathBuf> {
-        rfd::FileDialog::new()
-            .set_title("Import Image")
-            .add_filter("Images", IMAGE_EXTENSIONS)
-            .pick_file()
-    }
-
-    fn pick_video(&self) -> Option<PathBuf> {
-        rfd::FileDialog::new()
-            .set_title("Import Video")
-            .add_filter("Video", VIDEO_EXTENSIONS)
-            .pick_file()
-    }
-
     fn pick_relink(&self) -> Option<PathBuf> {
         rfd::FileDialog::new()
             .set_title("Relink")
@@ -107,12 +91,6 @@ pub struct NoDialogs;
 impl Dialogs for NoDialogs {
     fn pick_media(&self) -> Vec<PathBuf> {
         Vec::new()
-    }
-    fn pick_image(&self) -> Option<PathBuf> {
-        None
-    }
-    fn pick_video(&self) -> Option<PathBuf> {
-        None
     }
     fn pick_relink(&self) -> Option<PathBuf> {
         None

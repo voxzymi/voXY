@@ -71,6 +71,7 @@ pub enum Action {
     FileSave,
     FileSaveAs,
     FileImport,
+    FilePaste,
     FileQuit,
     CompositionSettings,
     CompositionGoToParent,
@@ -80,8 +81,6 @@ pub enum Action {
     SelectionClear,
     LayerNewSolid,
     LayerNewAdjustment,
-    LayerImportImage,
-    LayerImportVideo,
     LayerDelete,
     TransportPlayPause,
     TransportStart,
@@ -186,6 +185,7 @@ impl Action {
         Action::FileSave,
         Action::FileSaveAs,
         Action::FileImport,
+        Action::FilePaste,
         Action::FileQuit,
         Action::CompositionSettings,
         Action::CompositionGoToParent,
@@ -195,8 +195,6 @@ impl Action {
         Action::SelectionClear,
         Action::LayerNewSolid,
         Action::LayerNewAdjustment,
-        Action::LayerImportImage,
-        Action::LayerImportVideo,
         Action::LayerDelete,
         Action::TransportPlayPause,
         Action::TransportStart,
@@ -309,6 +307,13 @@ impl Action {
                     const { &[cmd(Key::I)] },
                 )
             },
+            Action::FilePaste => def(
+                "file.paste",
+                "Paste",
+                Nothing,
+                Global,
+                const { &[cmd(Key::V)] },
+            ),
             Action::FileQuit => ActionDef {
                 fires_while_typing: true,
                 ..def(
@@ -369,20 +374,6 @@ impl Action {
             Action::LayerNewAdjustment => def(
                 "layer.new_adjustment",
                 "New Adjustment Layer",
-                Composition,
-                Global,
-                &[],
-            ),
-            Action::LayerImportImage => def(
-                "layer.import_image",
-                "Import Image…",
-                Composition,
-                Global,
-                &[],
-            ),
-            Action::LayerImportVideo => def(
-                "layer.import_video",
-                "Import Video…",
                 Composition,
                 Global,
                 &[],

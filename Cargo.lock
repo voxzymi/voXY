@@ -3961,6 +3961,7 @@ dependencies = [
 name = "voxy-ui"
 version = "0.1.0"
 dependencies = [
+ "arboard",
  "eframe",
  "egui",
  "egui-wgpu",

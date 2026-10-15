@@ -205,6 +205,7 @@ impl VoxyApp {
                 });
                 self.item(ui, Action::FileOpen);
                 self.item(ui, Action::FileImport);
+                self.item(ui, Action::FilePaste);
                 ui.separator();
                 self.item(ui, Action::FileSave);
                 self.item(ui, Action::FileSaveAs);
@@ -230,8 +231,8 @@ impl VoxyApp {
             ui.menu_button("Layer", |ui| {
                 self.item(ui, Action::LayerNewSolid);
                 self.item(ui, Action::LayerNewAdjustment);
-                self.item(ui, Action::LayerImportImage);
-                self.item(ui, Action::LayerImportVideo);
+                ui.separator();
+                self.item(ui, Action::FileImport);
                 ui.separator();
                 self.item(ui, Action::LayerDelete);
                 ui.separator();
@@ -329,7 +330,26 @@ impl VoxyApp {
         });
     }
 
-    fn status_bar(&self, ui: &mut Ui) {
+    fn status_bar(&mut self, ui: &mut Ui) {
+        // A running background import shows its progress and a Cancel button,
+        // ahead of everything else.
+        if let Some((done, total)) = self
+            .state
+            .import_job
+            .as_ref()
+            .map(crate::import::ImportJob::progress)
+        {
+            ui.horizontal(|ui| {
+                if ui.button("Cancel").clicked() {
+                    self.state.cancel_import();
+                }
+                ui.label(format!("Importing {done} of {total}…"));
+                if total > 0 {
+                    ui.add(egui::ProgressBar::new(done as f32 / total as f32).desired_width(120.0));
+                }
+            });
+            return;
+        }
         ui.horizontal(|ui| {
             let dirty = if self.state.history.is_dirty() {
                 " •"
@@ -537,6 +557,10 @@ impl eframe::App for VoxyApp {
             ctx.request_repaint();
         }
         self.state.sync_ofx_sequence();
+
+        // Drive any background import: drains probe results, applies the
+        // import when every file is in, and repaints while it runs.
+        self.state.poll_import(&ctx);
 
         if let Some(text) = self.state.outgoing_clipboard.take() {
             ctx.copy_text(text);

@@ -428,12 +428,22 @@ impl Command for DropItems {
                     if asset.path.trim().is_empty() {
                         return Err(CommandError::Invalid("a media path cannot be empty".into()));
                     }
-                    let mut asset = asset.clone();
-                    asset.name = validate_name(&asset.name)?;
-                    asset.folder = self.folder;
-                    let id = doc.add_asset(asset);
-                    report.created_assets.push(id);
-                    SourceRef::Asset(id)
+                    // Reuse an item already in the project (or one added
+                    // earlier in this same drop) with the same content, so
+                    // the layer points at the existing footage.
+                    if let Some(hash) = &asset.content_hash
+                        && let Some(existing) = doc.asset_by_content_hash(hash)
+                    {
+                        report.reused_assets.push(existing);
+                        SourceRef::Asset(existing)
+                    } else {
+                        let mut asset = asset.clone();
+                        asset.name = validate_name(&asset.name)?;
+                        asset.folder = self.folder;
+                        let id = doc.add_asset(asset);
+                        report.created_assets.push(id);
+                        SourceRef::Asset(id)
+                    }
                 }
             });
         }

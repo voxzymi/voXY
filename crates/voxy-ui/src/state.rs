@@ -9,10 +9,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use voxy_core::command::{
-    AddImageLayer, AddSolidLayer, AddVideoLayer, CreateComposition, CreateFolder,
-    DuplicateComposition, ImportAssets, MoveToFolder, RemoveItems, RemoveLayers, RemoveMode,
-    RenameComposition, RenameFolder, RenameMedia, ReplaceMedia, ResizeMode, SetAssetPath,
-    SetCompositionSettings,
+    AddSolidLayer, CreateComposition, CreateFolder, DuplicateComposition, ImportAssets,
+    MoveToFolder, RemoveItems, RemoveLayers, RemoveMode, RenameComposition, RenameFolder,
+    RenameMedia, ReplaceMedia, ResizeMode, SetAssetPath, SetCompositionSettings,
 };
 use voxy_core::{
     Asset, AssetId, AssetKind, Command, CommandReport, CompId, CompSettings, Composition, Document,
@@ -182,6 +181,9 @@ pub struct EditorState {
     /// are the live fields above; the other tabs keep theirs in the
     /// workspace (see `workspace.rs`).
     pub workspace: crate::workspace::Workspace,
+    /// A background import in progress (probing files off the UI thread),
+    /// or `None`. The document is only touched when it finishes.
+    pub import_job: Option<crate::import::ImportJob>,
 }
 
 impl EditorState {
@@ -227,6 +229,7 @@ impl EditorState {
             preview_counter: 0,
             last_create: None,
             workspace: crate::workspace::Workspace::default(),
+            import_job: None,
         };
         state.open_default_tab();
         state
@@ -845,62 +848,6 @@ impl EditorState {
         self.select_top_layer();
     }
 
-    pub fn import_image_dialog(&mut self) {
-        let Some(path) = self.dialogs.pick_image() else {
-            return;
-        };
-        match voxy_media::image_dimensions(&path) {
-            Ok((w, h)) => {
-                let Some(comp) = self.require_comp() else {
-                    return;
-                };
-                let stored = portable_path(&path, self.asset_root().as_deref());
-                self.execute(AddImageLayer {
-                    comp,
-                    path: stored,
-                    pixel_size: [w, h],
-                    index: 0,
-                });
-                self.select_top_layer();
-            }
-            Err(e) => self.error(format!("Could not import {}: {e}", path.display())),
-        }
-    }
-
-    pub fn import_video_dialog(&mut self) {
-        if let Some(path) = self.dialogs.pick_video() {
-            self.import_video(&path);
-        }
-    }
-
-    /// Adds a layer showing the video at `path`.
-    pub fn import_video(&mut self, path: &Path) {
-        let info = match voxy_media::video::probe(path) {
-            Ok(info) => info,
-            Err(e) => {
-                self.error(format!("Could not import {}: {e}", path.display()));
-                return;
-            }
-        };
-        let Some(video) = info.video else {
-            self.error(format!("{} has no video stream", path.display()));
-            return;
-        };
-        let Some(comp) = self.require_comp() else {
-            return;
-        };
-        let stored = portable_path(path, self.asset_root().as_deref());
-        self.execute(AddVideoLayer {
-            comp,
-            path: stored,
-            pixel_size: [video.width, video.height],
-            duration: video.duration.or(info.duration),
-            frame_rate: video.frame_rate,
-            index: 0,
-        });
-        self.select_top_layer();
-    }
-
     /// Deletes selected keyframes if there are any, otherwise the selected layer.
     pub fn delete_selection(&mut self) {
         if crate::timeline::delete_selected_keys(self) {
@@ -1430,46 +1377,90 @@ impl EditorState {
         let paths = self.dialogs.pick_media();
         // Cancelling the picker changes nothing, not even the status bar.
         if !paths.is_empty() {
-            self.import_paths(&paths);
+            self.begin_import(&paths, crate::import::ImportDest::Project);
         }
     }
 
-    /// Adds files to the project as one undo step. No composition is
-    /// created or changed. Files that cannot be read are skipped and named
-    /// in the status bar.
+    /// Adds files to the project synchronously as one undo step. The app
+    /// imports in the background (see [`crate::import`]); this stays as the
+    /// direct path that the import tests drive.
+    #[cfg(test)]
     pub fn import_paths(&mut self, paths: &[PathBuf]) {
+        let (files, skipped) = expand_dropped_paths(paths);
         let root = self.asset_root();
         let mut assets = Vec::new();
         let mut failures = Vec::new();
-        for path in paths {
+        for path in &files {
             match probe_asset(path, root.as_deref()) {
                 Ok(asset) => assets.push(asset),
                 Err(e) => failures.push(format!("{}: {e}", path.display())),
             }
         }
+        self.apply_import(assets, skipped, &failures);
+    }
+
+    /// Imports already-probed assets into the project as one undo step and
+    /// reports the result (shared by the synchronous [`Self::import_paths`]
+    /// and the background importer). `skipped` and `failures` are files that
+    /// were left out while gathering, so the status line can name them.
+    pub(crate) fn apply_import(&mut self, assets: Vec<Asset>, skipped: usize, failures: &[String]) {
         if assets.is_empty() {
-            if !failures.is_empty() {
-                self.error(format!("Could not import {}", failures.join("; ")));
+            if !failures.is_empty() || skipped > 0 {
+                self.error(import_summary(0, 0, skipped, failures));
             }
             return;
         }
         let folder = self.target_folder();
-        let count = assets.len();
         let Some(report) = self.execute_reported(ImportAssets { assets, folder }) else {
             return;
         };
         self.show_created(&report);
         self.project.missing.invalidate();
+        let text = import_summary(
+            report.created_assets.len(),
+            report.reused_assets.len(),
+            skipped,
+            failures,
+        );
         if failures.is_empty() {
-            self.info(format!(
-                "Imported {count} {}",
-                if count == 1 { "file" } else { "files" }
-            ));
+            self.info(text);
         } else {
-            self.error(format!(
-                "Imported {count}; could not import {}",
-                failures.join("; ")
-            ));
+            self.error(text);
+        }
+    }
+
+    /// Pastes from the clipboard (`Ctrl/Cmd+V`): a bitmap image or file
+    /// paths. With a composition open it imports and adds layers at the
+    /// playhead as one undo step; otherwise it imports into the project.
+    /// Always says something, never a silent no-op.
+    pub fn paste_import(&mut self) {
+        let dir = self.asset_root();
+        let paths = match crate::clipboard::read_clipboard_imports(dir.as_deref()) {
+            Ok(paths) => paths,
+            Err(e) => {
+                self.error(format!("Could not read the clipboard: {e}"));
+                return;
+            }
+        };
+        if paths.is_empty() {
+            self.info("The clipboard has no image or files to import");
+            return;
+        }
+        if let Some(comp) = self.comp_id() {
+            let target = voxy_core::command::DropTarget::Timeline {
+                comp,
+                time: self.time,
+                index: 0,
+            };
+            self.begin_import(
+                &paths,
+                crate::import::ImportDest::Drop {
+                    target,
+                    placement: voxy_core::command::Placement::default(),
+                },
+            );
+        } else {
+            self.begin_import(&paths, crate::import::ImportDest::Project);
         }
     }
 
@@ -1648,7 +1639,7 @@ impl EditorState {
 
     // ----------------------------------------------------------- reveal
 
-    fn selected_layer_ids(&self) -> Vec<LayerId> {
+    pub(crate) fn selected_layer_ids(&self) -> Vec<LayerId> {
         self.selection.into_iter().collect()
     }
 
@@ -1923,6 +1914,7 @@ impl EditorState {
                 self.save_as_dialog();
             }
             Action::FileImport => self.import_dialog(),
+            Action::FilePaste => self.paste_import(),
             Action::EditUndo => {
                 self.undo();
             }
@@ -1941,8 +1933,6 @@ impl EditorState {
             }
             Action::LayerNewSolid => self.add_solid(),
             Action::LayerNewAdjustment => self.add_adjustment(),
-            Action::LayerImportImage => self.import_image_dialog(),
-            Action::LayerImportVideo => self.import_video_dialog(),
             Action::LayerDelete => self.delete_selection(),
             Action::TransportPlayPause => self.toggle_playback(),
             Action::TransportStart => self.time = Time::ZERO,
@@ -2048,7 +2038,7 @@ impl EditorState {
         match (action, target) {
             (Action::EffectApplyLast, _) => {
                 if let Some(def) = self.last_effect.clone() {
-                    crate::effects_panel::apply(self, layer, def);
+                    crate::effects_panel::apply(self, layer, &def);
                 }
             }
             (Action::EffectCopy, Some((_, fx, _, _))) => self.effect_clipboard = vec![fx],
@@ -2341,34 +2331,167 @@ fn media_kind(path: &Path) -> Option<AssetKind> {
 
 /// Reads a media file's facts into an [`Asset`] (path stored relative to
 /// `root` when inside it). Fails with a short reason.
+/// Expands dropped paths for import: top-level files are kept as-is (an
+/// unsupported one is named later, when probing fails), while a dropped
+/// folder contributes its supported files and reports the rest as skipped.
+/// Folders are walked in sorted order, within a bounded number of entries so
+/// a huge tree cannot stall the drop.
+pub(crate) fn expand_dropped_paths(paths: &[PathBuf]) -> (Vec<PathBuf>, usize) {
+    const MAX_ENTRIES: usize = 10_000;
+    let mut files = Vec::new();
+    let mut skipped = 0usize;
+    let mut budget = MAX_ENTRIES;
+    for p in paths {
+        if p.is_dir() {
+            collect_dir(p, &mut files, &mut skipped, &mut budget);
+        } else {
+            files.push(p.clone());
+        }
+    }
+    (files, skipped)
+}
+
+/// Adds the supported files under `dir` (recursively, sorted) to `files` and
+/// counts unsupported files in `skipped`, stopping once `budget` runs out.
+fn collect_dir(dir: &Path, files: &mut Vec<PathBuf>, skipped: &mut usize, budget: &mut usize) {
+    let Ok(read) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut entries: Vec<PathBuf> = read.flatten().map(|e| e.path()).collect();
+    entries.sort();
+    for path in entries {
+        if *budget == 0 {
+            return;
+        }
+        *budget -= 1;
+        if path.is_dir() {
+            collect_dir(&path, files, skipped, budget);
+        } else if media_kind(&path).is_some() {
+            files.push(path);
+        } else {
+            *skipped += 1;
+        }
+    }
+}
+
+/// A status line for an import: how many files were added, reused (already
+/// in the project by content), skipped (unsupported, e.g. inside a dropped
+/// folder) and could not be read. Reads naturally and never stays silent.
+pub(crate) fn import_summary(
+    created: usize,
+    reused: usize,
+    skipped: usize,
+    failures: &[String],
+) -> String {
+    let files = |n: usize| if n == 1 { "file" } else { "files" };
+    let mut parts: Vec<String> = Vec::new();
+    if created > 0 {
+        parts.push(format!("imported {created} {}", files(created)));
+    }
+    if reused > 0 {
+        parts.push(format!("reused {reused} already in the project"));
+    }
+    if skipped > 0 {
+        parts.push(format!("skipped {skipped} unsupported {}", files(skipped)));
+    }
+    if !failures.is_empty() {
+        parts.push(format!("could not import {}", failures.join("; ")));
+    }
+    if parts.is_empty() {
+        return "Nothing to import".to_owned();
+    }
+    let mut s = parts.join("; ");
+    if let Some(first) = s.get_mut(0..1) {
+        first.make_ascii_uppercase();
+    }
+    s
+}
+
 pub(crate) fn probe_asset(path: &Path, root: Option<&Path>) -> Result<Asset, String> {
     let stored = portable_path(path, root);
     let name = path
         .file_name()
         .map_or_else(|| stored.clone(), |n| n.to_string_lossy().into_owned());
-    match media_kind(path).ok_or("unsupported file type")? {
+    let mut asset = match media_kind(path).ok_or("unsupported file type")? {
         AssetKind::Image => {
             let (w, h) = voxy_media::image_dimensions(path).map_err(|e| e.to_string())?;
-            Ok(Asset {
+            Asset {
                 pixel_size: Some([w, h]),
                 ..Asset::new(AssetKind::Image, name, stored)
-            })
+            }
         }
         AssetKind::Video => {
             let info = voxy_media::video::probe(path).map_err(|e| e.to_string())?;
             let video = info.video.ok_or("no video stream")?;
-            Ok(Asset {
+            Asset {
                 pixel_size: Some([video.width, video.height]),
                 duration: video.duration.or(info.duration),
                 frame_rate: video.frame_rate,
                 ..Asset::new(AssetKind::Video, name, stored)
-            })
+            }
         }
         AssetKind::Lut => {
             read_lut(path)?;
-            Ok(Asset::new(AssetKind::Lut, name, stored))
+            Asset::new(AssetKind::Lut, name, stored)
         }
+    };
+    // A content fingerprint, so importing the same file twice reuses the
+    // first item. Best-effort: if the file cannot be read for it, the asset
+    // just imports without a hash and is never matched as a duplicate.
+    asset.content_hash = content_hash(path);
+    Ok(asset)
+}
+
+/// Bytes sampled from each of the start, middle and end of a large file.
+const HASH_SAMPLE: u64 = 64 * 1024;
+
+/// A cheap content fingerprint: the file size and an FNV-1a 64-bit hash of
+/// the whole file (when small) or of sampled chunks (when large). Two files
+/// with the same fingerprint are treated as the same footage on import.
+/// `None` if the file cannot be read.
+pub(crate) fn content_hash(path: &Path) -> Option<voxy_core::ContentHash> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let size = std::fs::metadata(path).ok()?.len();
+    let mut file = std::fs::File::open(path).ok()?;
+
+    // FNV-1a 64-bit over the sampled bytes.
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut fold = |bytes: &[u8]| {
+        for &b in bytes {
+            hash ^= u64::from(b);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    };
+
+    let mut buf = vec![0u8; HASH_SAMPLE as usize];
+    let mut sample_at = |file: &mut std::fs::File, off: u64, fold: &mut dyn FnMut(&[u8])| {
+        if file.seek(SeekFrom::Start(off)).is_err() {
+            return;
+        }
+        let mut read = 0usize;
+        while read < buf.len() {
+            match file.read(&mut buf[read..]) {
+                Ok(n) if n > 0 => read += n,
+                Ok(_) | Err(_) => break,
+            }
+        }
+        fold(&buf[..read]);
+    };
+
+    if size <= 3 * HASH_SAMPLE {
+        sample_at(&mut file, 0, &mut fold);
+    } else {
+        sample_at(&mut file, 0, &mut fold);
+        sample_at(&mut file, size / 2, &mut fold);
+        sample_at(&mut file, size - HASH_SAMPLE, &mut fold);
     }
+
+    Some(voxy_core::ContentHash {
+        algo: "fnv1a64-sampled".to_owned(),
+        size,
+        digest: format!("{hash:016x}"),
+    })
 }
 
 /// The largest `.cube` file read (a 129³ table is about 60 MB of text).
@@ -2811,7 +2934,16 @@ mod tests {
     }
 
     fn write_png(path: &Path) {
-        image::RgbaImage::new(2, 3).save(path).unwrap();
+        // Vary one pixel by file name so two PNGs are distinct files and are
+        // not merged by content-hash reuse.
+        let mut img = image::RgbaImage::new(2, 3);
+        let tint = path.file_name().map_or(0, |n| {
+            n.as_encoded_bytes()
+                .iter()
+                .fold(0u8, |a, &b| a.wrapping_add(b))
+        });
+        img.put_pixel(0, 0, image::Rgba([tint, tint, tint, 255]));
+        img.save(path).unwrap();
     }
 
     #[test]
@@ -2938,6 +3070,29 @@ mod tests {
         assert!(
             s.history.current().assets.iter().next().is_none(),
             "one undo"
+        );
+    }
+
+    #[test]
+    fn dropping_a_folder_imports_supported_files_and_reports_skipped() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write_png(&root.join("a.png"));
+        write_png(&root.join("b.png"));
+        std::fs::write(root.join("notes.txt"), b"x").unwrap();
+        let mut s = state();
+        s.import_paths(&[root.to_path_buf()]);
+        let doc = s.history.current();
+        assert_eq!(doc.assets.iter().count(), 2, "both PNGs imported");
+        let status = s.status.as_ref().unwrap();
+        assert!(
+            !status.is_error && status.text.contains("skipped 1 unsupported"),
+            "{status:?}"
+        );
+        s.history.undo();
+        assert!(
+            s.history.current().assets.iter().next().is_none(),
+            "one undo removes the whole folder import"
         );
     }
 
@@ -3840,12 +3995,6 @@ mod tests {
         fn pick_media(&self) -> Vec<PathBuf> {
             Vec::new()
         }
-        fn pick_image(&self) -> Option<PathBuf> {
-            None
-        }
-        fn pick_video(&self) -> Option<PathBuf> {
-            None
-        }
         fn pick_relink(&self) -> Option<PathBuf> {
             None
         }
@@ -3889,5 +4038,74 @@ mod tests {
             !s.transport.is_playing(),
             "playback stopped with the switch"
         );
+    }
+
+    #[test]
+    fn content_hash_matches_same_bytes_and_differs_on_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.bin");
+        let b = dir.path().join("b.bin");
+        let c = dir.path().join("c.bin");
+        std::fs::write(&a, vec![7u8; 500_000]).unwrap();
+        std::fs::write(&b, vec![7u8; 500_000]).unwrap(); // identical bytes
+        let mut changed = vec![7u8; 500_000];
+        *changed.last_mut().unwrap() = 8; // one byte differs, at the end
+        std::fs::write(&c, &changed).unwrap();
+
+        let ha = content_hash(&a).unwrap();
+        let hb = content_hash(&b).unwrap();
+        let hc = content_hash(&c).unwrap();
+        assert_eq!(ha, hb, "identical files hash the same");
+        assert_ne!(ha, hc, "a one-byte change is detected");
+        assert_eq!(ha.algo, "fnv1a64-sampled");
+        assert_eq!(ha.size, 500_000);
+        assert!(content_hash(dir.path().join("missing.bin").as_path()).is_none());
+    }
+
+    #[test]
+    fn expand_dropped_paths_walks_folders_and_counts_unsupported() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(root.join("a.png"), b"a").unwrap();
+        std::fs::write(root.join("b.mp4"), b"b").unwrap();
+        std::fs::write(root.join("notes.txt"), b"x").unwrap();
+        std::fs::write(root.join("readme.md"), b"y").unwrap();
+        let sub = root.join("clips");
+        std::fs::create_dir(&sub).unwrap();
+        std::fs::write(sub.join("c.png"), b"c").unwrap();
+        std::fs::write(sub.join("data.bin"), b"z").unwrap();
+
+        // Dropping the folder: 3 supported files, 3 unsupported skipped.
+        let (files, skipped) = expand_dropped_paths(&[root.to_path_buf()]);
+        assert_eq!(files.len(), 3, "a.png, b.mp4 and clips/c.png");
+        assert_eq!(skipped, 3, "notes.txt, readme.md and clips/data.bin");
+
+        // A top-level file is kept as-is even if unsupported (named later).
+        let (files, skipped) = expand_dropped_paths(&[root.join("notes.txt")]);
+        assert_eq!(files, vec![root.join("notes.txt")]);
+        assert_eq!(skipped, 0);
+    }
+
+    #[test]
+    fn import_summary_reads_naturally() {
+        assert_eq!(import_summary(3, 0, 0, &[]), "Imported 3 files");
+        assert_eq!(import_summary(1, 0, 0, &[]), "Imported 1 file");
+        assert_eq!(
+            import_summary(2, 1, 0, &[]),
+            "Imported 2 files; reused 1 already in the project"
+        );
+        assert_eq!(
+            import_summary(0, 1, 0, &[]),
+            "Reused 1 already in the project"
+        );
+        assert_eq!(
+            import_summary(4, 0, 2, &[]),
+            "Imported 4 files; skipped 2 unsupported files"
+        );
+        assert_eq!(
+            import_summary(0, 0, 0, &["x.psd: unsupported file type".into()]),
+            "Could not import x.psd: unsupported file type"
+        );
+        assert_eq!(import_summary(0, 0, 0, &[]), "Nothing to import");
     }
 }

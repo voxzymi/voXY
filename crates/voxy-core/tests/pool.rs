@@ -1391,6 +1391,76 @@ fn import_adds_media_only_and_one_undo_removes_it() {
     assert_eq!(h.current(), &start);
 }
 
+fn hashed(name: &str, path: &str, digest: &str) -> Asset {
+    Asset {
+        content_hash: Some(voxy_core::ContentHash {
+            algo: "fnv1a64-sampled".into(),
+            size: 1234,
+            digest: digest.into(),
+        }),
+        ..Asset::new(AssetKind::Image, name, path)
+    }
+}
+
+#[test]
+fn importing_the_same_content_reuses_the_item() {
+    let mut h = History::new(Document::empty("Fresh"));
+    let first = h
+        .execute_reported(ImportAssets {
+            assets: vec![hashed("a.png", "a.png", "deadbeef")],
+            folder: None,
+        })
+        .unwrap();
+    assert_eq!(first.created_assets.len(), 1);
+    assert_eq!(first.reused_assets, Vec::<AssetId>::new());
+    let existing = first.created_assets[0];
+
+    // The same content from another path: reused, not duplicated.
+    let before = h.current().clone();
+    let second = h
+        .execute_reported(ImportAssets {
+            assets: vec![hashed("copy.png", "elsewhere/copy.png", "deadbeef")],
+            folder: None,
+        })
+        .unwrap();
+    assert_eq!(second.created_assets, Vec::new());
+    assert_eq!(second.reused_assets, vec![existing]);
+    assert_eq!(
+        h.current().assets.iter().count(),
+        1,
+        "no duplicate asset was added"
+    );
+    assert_eq!(h.current(), &before, "reusing an item changes nothing");
+
+    // Different content is still added.
+    let third = h
+        .execute_reported(ImportAssets {
+            assets: vec![hashed("b.png", "b.png", "feedface")],
+            folder: None,
+        })
+        .unwrap();
+    assert_eq!(third.created_assets.len(), 1);
+    assert_eq!(third.reused_assets, Vec::<AssetId>::new());
+    assert_eq!(h.current().assets.iter().count(), 2);
+}
+
+#[test]
+fn duplicate_content_in_one_import_is_reused_within_the_batch() {
+    let mut h = History::new(Document::empty("Fresh"));
+    let r = h
+        .execute_reported(ImportAssets {
+            assets: vec![
+                hashed("a.png", "a.png", "abc123"),
+                hashed("a-copy.png", "a-copy.png", "abc123"),
+            ],
+            folder: None,
+        })
+        .unwrap();
+    assert_eq!(r.created_assets.len(), 1, "only the first is added");
+    assert_eq!(r.reused_assets.len(), 1, "the second reuses the first");
+    assert_eq!(h.current().assets.iter().count(), 1);
+}
+
 #[test]
 fn import_into_a_folder_and_rejects_bad_input() {
     let mut h = History::new(Document::empty("Fresh"));

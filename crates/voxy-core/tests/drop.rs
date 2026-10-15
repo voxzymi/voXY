@@ -3,6 +3,7 @@
 
 #![allow(clippy::many_single_char_names)] // a, b, c, h, l, p read best short in these scenarios.
 
+use proptest::prelude::*;
 use voxy_core::command::{
     AddSourceLayer, CreateComposition, CreateFolder, DropItem, DropItems, DropTarget, Placement,
     Plan, resolve_drop,
@@ -45,6 +46,17 @@ fn still(name: &str, w: u32, h: u32) -> Asset {
     Asset {
         pixel_size: Some([w, h]),
         ..Asset::new(AssetKind::Image, name.to_owned(), format!("media/{name}"))
+    }
+}
+
+fn still_hashed(name: &str, digest: &str) -> Asset {
+    Asset {
+        content_hash: Some(voxy_core::ContentHash {
+            algo: "fnv1a64-sampled".into(),
+            size: 256,
+            digest: digest.into(),
+        }),
+        ..still(name, 320, 180)
     }
 }
 
@@ -493,6 +505,45 @@ fn files_are_imported_created_and_placed_in_one_undo_step() {
 }
 
 #[test]
+fn dropping_a_file_already_in_the_project_reuses_it_as_the_layer_source() {
+    let mut h = history();
+    let c = main_id(&h);
+    // Import once; the asset is now in the project.
+    let existing = import(&mut h, vec![still_hashed("pic.png", "cafef00d")])[0];
+
+    // Drop a file with the same content: no new asset, the layer points at
+    // the existing one, and it is reported as reused.
+    let before_assets = h.current().assets.iter().count();
+    let r = h
+        .execute_reported(DropItems {
+            target: timeline(c, 1.0, 0),
+            items: vec![DropItem::File(still_hashed("copy.png", "cafef00d"))],
+            placement: Placement::default(),
+            folder: None,
+        })
+        .expect("test setup");
+    assert_eq!(
+        r.created_assets,
+        Vec::<AssetId>::new(),
+        "no duplicate asset"
+    );
+    assert_eq!(r.reused_assets, vec![existing]);
+    assert_eq!(r.created_layers.len(), 1);
+    assert_eq!(h.current().assets.iter().count(), before_assets);
+    let layer = h
+        .current()
+        .comp(c)
+        .expect("test setup")
+        .layer(r.created_layers[0])
+        .expect("test setup")
+        .clone();
+    assert!(
+        matches!(layer.kind.source(), Some(SourceRef::Asset(a)) if a == existing),
+        "the layer reuses the existing asset"
+    );
+}
+
+#[test]
 fn dropping_files_on_a_timeline_imports_and_places_them() {
     let mut h = history();
     let c = main_id(&h);
@@ -598,5 +649,73 @@ fn the_preview_matches_the_result() {
             assert_eq!(comp.layers.len(), before + planned.len());
             h.undo();
         }
+    }
+}
+
+proptest! {
+    /// A random sequence of file drops, each a command, followed by undoing
+    /// all of them restores the document to exactly what it was.
+    #[test]
+    fn random_drops_then_full_undo_restore_the_document(
+        drops in prop::collection::vec(
+            (
+                prop::collection::vec((any::<bool>(), 1u32..1024, 1u32..1024), 1..4),
+                -1000i64..11_000,
+                0usize..6,
+                any::<bool>(),
+                any::<bool>(),
+            ),
+            0..25,
+        ),
+    ) {
+        let mut h = history();
+        let c = main_id(&h);
+        let initial = h.current().clone();
+        for (files, time_ms, index, viewport, sequence) in &drops {
+            let items: Vec<DropItem> = files
+                .iter()
+                .enumerate()
+                .map(|(k, (video, w, hh))| {
+                    let name = format!("drop{k}.{}", if *video { "mp4" } else { "png" });
+                    let path = format!("media/{name}");
+                    let asset = if *video {
+                        Asset {
+                            pixel_size: Some([*w, *hh]),
+                            duration: Some(Time::from_secs(2)),
+                            frame_rate: Some(FrameRate::new(24, 1).expect("valid fps")),
+                            ..Asset::new(AssetKind::Video, name, path)
+                        }
+                    } else {
+                        Asset {
+                            pixel_size: Some([*w, *hh]),
+                            ..Asset::new(AssetKind::Image, name, path)
+                        }
+                    };
+                    DropItem::File(asset)
+                })
+                .collect();
+            let target = if *viewport {
+                DropTarget::Viewport {
+                    comp: c,
+                    time: Time::from_millis(*time_ms),
+                    pos: DVec2::new(0.0, 0.0),
+                }
+            } else {
+                DropTarget::Timeline {
+                    comp: c,
+                    time: Time::from_millis(*time_ms),
+                    index: *index,
+                }
+            };
+            // A drop is one undoable command; a rejected one changes nothing.
+            let _ = h.execute(DropItems {
+                target,
+                items,
+                placement: Placement { sequence: *sequence },
+                folder: None,
+            });
+        }
+        while h.undo() {}
+        prop_assert_eq!(&**h.current(), &*initial);
     }
 }

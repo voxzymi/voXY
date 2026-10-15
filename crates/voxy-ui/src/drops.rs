@@ -116,25 +116,32 @@ pub fn row_at(rows: &[Rect], y: f32) -> Option<usize> {
 impl EditorState {
     /// Probes dropped or picked files for a drop. Files that cannot be read
     /// are named in the status bar; the rest are returned.
-    pub fn drop_items_from_files(&mut self, paths: &[PathBuf]) -> Vec<DropItem> {
-        let root = self.asset_root();
-        let mut items = Vec::new();
-        let mut failures = Vec::new();
-        for path in paths {
-            match crate::state::probe_asset(path, root.as_deref()) {
-                Ok(asset) => items.push(DropItem::File(asset)),
-                Err(e) => failures.push(format!("{}: {e}", path.display())),
-            }
-        }
-        if !failures.is_empty() {
-            self.error(format!("Could not read {}", failures.join("; ")));
-        }
-        items
+    /// Imports files dropped from the operating system and adds them with a
+    /// drop, as one undo step. The slow per-file probing runs in the
+    /// background (see [`crate::import`]); a dropped folder contributes its
+    /// supported files and counts the rest as skipped, and unreadable or
+    /// corrupt files are named. Never a silent no-op.
+    pub fn drop_files(&mut self, target: DropTarget, paths: &[PathBuf], placement: Placement) {
+        self.begin_import(paths, crate::import::ImportDest::Drop { target, placement });
     }
 
-    /// Runs a drop as one undo step and reports what happened. A blocked drop
-    /// says why in the status bar and changes nothing.
+    /// Runs a drop of already-resolved items (a Project-panel drag) as one
+    /// undo step and reports what happened.
     pub fn perform_drop(&mut self, target: DropTarget, items: Vec<DropItem>, placement: Placement) {
+        self.perform_drop_inner(target, items, placement, 0, &[]);
+    }
+
+    /// Shared drop execution. `skipped` and `failures` describe files left
+    /// out while gathering an OS-file drop, so the single status line can
+    /// mention them alongside what was placed.
+    pub(crate) fn perform_drop_inner(
+        &mut self,
+        target: DropTarget,
+        items: Vec<DropItem>,
+        placement: Placement,
+        skipped: usize,
+        failures: &[String],
+    ) {
         if items.is_empty() {
             return;
         }
@@ -180,6 +187,17 @@ impl EditorState {
                 }
             )
         };
+        let reused = report.reused_assets.len();
+        if reused > 0 {
+            text = format!("{text} (reused {reused} already in the project)");
+        }
+        if skipped > 0 {
+            let files = if skipped == 1 { "file" } else { "files" };
+            text = format!("{text}; skipped {skipped} unsupported {files}");
+        }
+        if !failures.is_empty() {
+            text = format!("{text}; could not import {}", failures.join("; "));
+        }
         for w in &report.warnings {
             text.push(' ');
             text.push_str(w);
@@ -300,6 +318,15 @@ pub fn view_to_comp(panel: Rect, size: [u32; 2], p: Pos2) -> Option<voxy_core::g
     ))
 }
 
+/// The screen point of composition pixel `point`, the inverse of
+/// [`view_to_comp`] (same fit). Used to outline a layer over the viewport.
+pub fn comp_to_view(panel: Rect, size: [u32; 2], point: voxy_core::glam::DVec2) -> Pos2 {
+    let (w, h) = (size[0] as f32, size[1] as f32);
+    let scale = (panel.width() / w).min(panel.height() / h);
+    let image = Rect::from_center_size(panel.center(), vec2(w, h) * scale);
+    image.min + vec2(point.x as f32, point.y as f32) * scale
+}
+
 /// Items dragged over the viewport (or files dropped on it): a marker where
 /// the layers will be centered, and the drop on release. New layers go on
 /// top at the playhead.
@@ -335,8 +362,7 @@ pub fn viewport_drop(
         pos,
     };
     if !files.is_empty() {
-        let items = state.drop_items_from_files(&files);
-        state.perform_drop(target, items, mods.placement());
+        state.drop_files(target, &files, mods.placement());
         return;
     }
     let Some(items) = dragged else { return };
@@ -811,6 +837,14 @@ mod tests {
         input.dropped_files = vec![Arc::new(Dropped(path))];
         let mut out = ctx.run_ui(input, |ui| crate::timeline::show(ui, &mut s));
         out.textures_delta.clear();
+        // The drop imports in the background; pump it to completion.
+        for _ in 0..2000 {
+            s.poll_import(&ctx);
+            if s.import_job.is_none() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
         let doc = s.history.current();
         assert_eq!(doc.assets.iter().count(), 1, "imported");
         assert_eq!(doc.comp(comp).expect("comp").layers.len(), 2, "and placed");
