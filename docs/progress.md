@@ -827,16 +827,28 @@ at `86e1edf` (merge of #6). Design note: `docs/design-ux.md`.
   `clippy -D warnings`, and all `voxy-core` + `voxy-ui` tests pass. **U-A
   complete** pending the per-job CI report.
 
-## Next, in order
+## Status
 
-- **U-A:** single Import File… (remove the separate Image/Video entries),
-  folder drop with skipped count, content-hash reuse ("reused …"), paste import
-  (Ctrl/Cmd+V), background import with progress + cancel.
-- **U-B:** effect drag-and-drop gaps (viewport hit-test, multi-layer,
-  Effect-Controls stack position, empty-target message, not-allowed cursor).
-- **U-C:** central text-selection fix + guard test.
-- **U-D:** empty-area context menus, New-layer-from-menu placement, Apply Effect ▸.
-- **U-E … U-I:** per `docs/design-ux.md` (U-I waits for the §8 approval).
+- **U-A complete and CI green.** All six U-A steps (single Import command,
+  content-hash reuse, folder drop with skipped count, paste import, background
+  import with progress + cancel, drop/undo proptest) are on
+  `claude/gifted-fermat-93dqjr` at `eab6679`. CI run #56 (manual dispatch,
+  since branch pushes do not trigger CI) is **green on all four platforms**:
+  build + clippy + test and the determinism tables on Linux / Windows /
+  macOS arm64 / macOS x64, plus rustfmt, cargo-deny, and the OpenFX bindings
+  check. No PR opened.
+
+## Next step (single)
+
+- **U-B: effect drag-and-drop with live feedback.** Fill the gaps over the
+  existing effect drag (`effects_panel.rs`): viewport **hit-test** so a drop
+  lands on the layer under the cursor; apply to **multiple selected layers**;
+  drop into the **Effect Controls** stack at a position; show **"Select or
+  drop onto a layer"** when nothing is targeted; and a **not-allowed cursor**
+  over an incompatible layer (e.g. a visual effect on an audio-only layer).
+  One undo step per drop; Escape cancels. Then U-C, U-D as in
+  `docs/design-ux.md` (U-I waits for the §8 approval, already given; markers in
+  U-H, format bump approved).
 
 ## Open questions waiting on the owner
 
