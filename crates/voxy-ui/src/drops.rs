@@ -116,28 +116,13 @@ pub fn row_at(rows: &[Rect], y: f32) -> Option<usize> {
 impl EditorState {
     /// Probes dropped or picked files for a drop. Files that cannot be read
     /// are named in the status bar; the rest are returned.
-    /// Imports files dropped from the operating system and runs the drop as
-    /// one undo step. A dropped folder contributes its supported files;
-    /// unsupported files inside it are counted as skipped, and unreadable or
-    /// corrupt files named by path. Never a silent no-op.
+    /// Imports files dropped from the operating system and adds them with a
+    /// drop, as one undo step. The slow per-file probing runs in the
+    /// background (see [`crate::import`]); a dropped folder contributes its
+    /// supported files and counts the rest as skipped, and unreadable or
+    /// corrupt files are named. Never a silent no-op.
     pub fn drop_files(&mut self, target: DropTarget, paths: &[PathBuf], placement: Placement) {
-        let (files, skipped) = crate::state::expand_dropped_paths(paths);
-        let root = self.asset_root();
-        let mut items = Vec::new();
-        let mut failures = Vec::new();
-        for path in &files {
-            match crate::state::probe_asset(path, root.as_deref()) {
-                Ok(asset) => items.push(DropItem::File(asset)),
-                Err(e) => failures.push(format!("{}: {e}", path.display())),
-            }
-        }
-        if items.is_empty() {
-            if !failures.is_empty() || skipped > 0 {
-                self.error(crate::state::import_summary(0, 0, skipped, &failures));
-            }
-            return;
-        }
-        self.perform_drop_inner(target, items, placement, skipped, &failures);
+        self.begin_import(paths, crate::import::ImportDest::Drop { target, placement });
     }
 
     /// Runs a drop of already-resolved items (a Project-panel drag) as one
@@ -149,7 +134,7 @@ impl EditorState {
     /// Shared drop execution. `skipped` and `failures` describe files left
     /// out while gathering an OS-file drop, so the single status line can
     /// mention them alongside what was placed.
-    fn perform_drop_inner(
+    pub(crate) fn perform_drop_inner(
         &mut self,
         target: DropTarget,
         items: Vec<DropItem>,
@@ -843,6 +828,14 @@ mod tests {
         input.dropped_files = vec![Arc::new(Dropped(path))];
         let mut out = ctx.run_ui(input, |ui| crate::timeline::show(ui, &mut s));
         out.textures_delta.clear();
+        // The drop imports in the background; pump it to completion.
+        for _ in 0..2000 {
+            s.poll_import(&ctx);
+            if s.import_job.is_none() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
         let doc = s.history.current();
         assert_eq!(doc.assets.iter().count(), 1, "imported");
         assert_eq!(doc.comp(comp).expect("comp").layers.len(), 2, "and placed");

@@ -182,6 +182,9 @@ pub struct EditorState {
     /// are the live fields above; the other tabs keep theirs in the
     /// workspace (see `workspace.rs`).
     pub workspace: crate::workspace::Workspace,
+    /// A background import in progress (probing files off the UI thread),
+    /// or `None`. The document is only touched when it finishes.
+    pub import_job: Option<crate::import::ImportJob>,
 }
 
 impl EditorState {
@@ -227,6 +230,7 @@ impl EditorState {
             preview_counter: 0,
             last_create: None,
             workspace: crate::workspace::Workspace::default(),
+            import_job: None,
         };
         state.open_default_tab();
         state
@@ -1374,13 +1378,14 @@ impl EditorState {
         let paths = self.dialogs.pick_media();
         // Cancelling the picker changes nothing, not even the status bar.
         if !paths.is_empty() {
-            self.import_paths(&paths);
+            self.begin_import(&paths, crate::import::ImportDest::Project);
         }
     }
 
-    /// Adds files to the project as one undo step. No composition is
-    /// created or changed. Files that cannot be read are skipped and named
-    /// in the status bar.
+    /// Adds files to the project synchronously as one undo step. The app
+    /// imports in the background (see [`crate::import`]); this stays as the
+    /// direct path that the import tests drive.
+    #[cfg(test)]
     pub fn import_paths(&mut self, paths: &[PathBuf]) {
         let (files, skipped) = expand_dropped_paths(paths);
         let root = self.asset_root();
@@ -1392,9 +1397,17 @@ impl EditorState {
                 Err(e) => failures.push(format!("{}: {e}", path.display())),
             }
         }
+        self.apply_import(assets, skipped, &failures);
+    }
+
+    /// Imports already-probed assets into the project as one undo step and
+    /// reports the result (shared by the synchronous [`Self::import_paths`]
+    /// and the background importer). `skipped` and `failures` are files that
+    /// were left out while gathering, so the status line can name them.
+    pub(crate) fn apply_import(&mut self, assets: Vec<Asset>, skipped: usize, failures: &[String]) {
         if assets.is_empty() {
             if !failures.is_empty() || skipped > 0 {
-                self.error(import_summary(0, 0, skipped, &failures));
+                self.error(import_summary(0, 0, skipped, failures));
             }
             return;
         }
@@ -1408,7 +1421,7 @@ impl EditorState {
             report.created_assets.len(),
             report.reused_assets.len(),
             skipped,
-            &failures,
+            failures,
         );
         if failures.is_empty() {
             self.info(text);
@@ -1440,9 +1453,15 @@ impl EditorState {
                 time: self.time,
                 index: 0,
             };
-            self.drop_files(target, &paths, voxy_core::command::Placement::default());
+            self.begin_import(
+                &paths,
+                crate::import::ImportDest::Drop {
+                    target,
+                    placement: voxy_core::command::Placement::default(),
+                },
+            );
         } else {
-            self.import_paths(&paths);
+            self.begin_import(&paths, crate::import::ImportDest::Project);
         }
     }
 

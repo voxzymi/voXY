@@ -800,6 +800,23 @@ at `86e1edf` (merge of #6). Design note: `docs/design-ux.md`.
   does not fire while typing. clippy `-D warnings` clean; 279 `voxy-ui` tests
   pass.
 
+- **U-A step 5: background import with progress and cancel.** New `import`
+  module: `begin_import(paths, dest)` expands folders (fast), then probes each
+  file's metadata and content hash on a worker thread (the slow part), so the
+  UI never freezes. `poll_import` (called each frame) drains results, repaints
+  while running, and applies the whole import as **one undo step** only once
+  every file is probed — into the project (`ImportDest::Project`) or via a drop
+  (`ImportDest::Drop`). The status bar shows "Importing N of M…" with a
+  progress bar and a **Cancel** button; `cancel_import` drops the job so
+  **nothing is applied and the document is unchanged**. The menu Import, OS
+  drops onto the Project panel / timeline / viewport, and paste all route
+  through it. The synchronous `import_paths` is kept as a test-only path; the
+  empty-state footage tile (`new_comp_from_files`, with its agree/differ
+  prompt) stays synchronous for now. Tests: completion as one undo step, cancel
+  leaves the document unchanged, an all-unsupported folder imports nothing and
+  says so, plus the existing timeline OS-drop test pumps the job to completion.
+  clippy `-D warnings` clean; 282 `voxy-ui` tests pass; `voxy-app` builds.
+
 ## Next, in order
 
 - **U-A:** single Import File… (remove the separate Image/Video entries),

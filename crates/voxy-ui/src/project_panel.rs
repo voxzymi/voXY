@@ -798,7 +798,7 @@ fn os_drops(ui: &mut Ui, state: &mut EditorState, panel: Rect) {
             .map(|f| f.path().to_path_buf())
             .collect();
         if !paths.is_empty() {
-            state.import_paths(&paths);
+            state.begin_import(&paths, crate::import::ImportDest::Project);
         }
     }
 }
