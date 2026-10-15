@@ -156,6 +156,9 @@ fn kernel_shader(kernel: Kernel) -> &'static str {
 /// reach past its input.
 const MAX_EXTERNAL_GROWTH: f64 = 4096.0;
 
+/// An effect's drawn layer inputs: parameter name, texture and view.
+type LayerTextures = Vec<(Arc<str>, wgpu::Texture, wgpu::TextureView)>;
+
 type Prepared = (SourceBind, Option<DVec2>, [f32; 4], u32);
 
 /// What a chain's source samples, once prepared.
@@ -208,12 +211,11 @@ impl Compositor {
         )?;
         // The layers the effects read (Q-E1), prepared the same way; one
         // that cannot be drawn reads as transparent.
-        let inputs: Vec<Option<Prepared>> = chain
-            .effects
-            .iter()
-            .map(|n| {
-                let input = n.input.as_ref()?;
-                self.prepare_source(
+        let mut inputs: Vec<Vec<Option<Prepared>>> = Vec::new();
+        for n in &chain.effects {
+            let mut prepared = Vec::new();
+            for (_, input) in &n.inputs {
+                prepared.push(self.prepare_source(
                     device,
                     queue,
                     &mut encoder,
@@ -224,9 +226,10 @@ impl Compositor {
                     space,
                     depth,
                     report,
-                )
-            })
-            .collect();
+                ));
+            }
+            inputs.push(prepared);
+        }
         let size = size.filter(|s| s.x > 0.0 && s.y > 0.0)?;
 
         let nodes: Vec<(Kernel, &voxy_core::EvaluatedEffect)> = chain
@@ -453,8 +456,9 @@ impl Compositor {
 
     /// Draws each prepared layer input into a texture of `texels`, through
     /// `texel_from_layer` (the effect layer's pixels to texels) and its own
-    /// placement. Input draws have their own uniform buffer, so they never
-    /// disturb a composite in progress (adjustment layers run mid-way).
+    /// placement; per effect, the inputs that could be drawn. Input draws
+    /// have their own uniform buffer, so they never disturb a composite in
+    /// progress (adjustment layers run mid-way).
     #[allow(clippy::too_many_arguments)]
     fn draw_inputs(
         &mut self,
@@ -462,10 +466,10 @@ impl Compositor {
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         effects: &[crate::plan::EffectNode],
-        inputs: &[Option<Prepared>],
+        inputs: &[Vec<Option<Prepared>>],
         texels: (u32, u32),
         texel_from_layer: DAffine2,
-    ) -> Vec<Option<(wgpu::Texture, wgpu::TextureView)>> {
+    ) -> Vec<LayerTextures> {
         let clip_from_texel = DAffine2::from_mat2_translation(
             DMat2::from_diagonal(DVec2::new(
                 2.0 / f64::from(texels.0),
@@ -473,10 +477,27 @@ impl Compositor {
             )),
             DVec2::new(-1.0, 1.0),
         );
+        // Every (effect, input) pair, flattened, with its prepared source.
+        let pairs: Vec<(
+            usize,
+            &Arc<str>,
+            &crate::plan::LayerInput,
+            &Option<Prepared>,
+        )> = effects
+            .iter()
+            .zip(inputs)
+            .enumerate()
+            .flat_map(|(i, (node, prepared))| {
+                node.inputs
+                    .iter()
+                    .zip(prepared)
+                    .map(move |((name, input), p)| (i, name, &**input, p))
+            })
+            .collect();
         let mut bytes = Vec::new();
         let mut draws = Vec::new();
-        for (node, prepared) in effects.iter().zip(inputs) {
-            let (Some(input), Some((_, Some(size), color, mode))) = (&node.input, prepared) else {
+        for (_, _, input, prepared) in &pairs {
+            let Some((_, Some(size), color, mode)) = prepared else {
                 draws.push(None);
                 continue;
             };
@@ -508,16 +529,15 @@ impl Compositor {
             bytes.resize(offset as usize + self.uniform_stride as usize, 0);
             draws.push(Some(offset));
         }
+        let mut out: Vec<LayerTextures> = effects.iter().map(|_| Vec::new()).collect();
         if bytes.is_empty() {
-            return draws.iter().map(|_| None).collect();
+            return out;
         }
         self.ensure_input_uniforms(device, bytes.len() as u64);
         let (buffer, uniforms, _) = self.input_uniforms.as_ref().expect("ensured");
         queue.write_buffer(buffer, 0, &bytes);
-        let mut out = Vec::new();
-        for (prepared, offset) in inputs.iter().zip(draws) {
+        for ((index, name, _, prepared), offset) in pairs.iter().zip(draws) {
             let (Some((bind, ..)), Some(offset)) = (prepared, offset) else {
-                out.push(None);
                 continue;
             };
             let texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -557,7 +577,7 @@ impl Compositor {
                 pass.set_bind_group(1, self.source_group(bind), &[]);
                 pass.draw(0..6, 0..1);
             }
-            out.push(Some((texture, view)));
+            out[*index].push((Arc::clone(name), texture, view));
         }
         out
     }
@@ -628,12 +648,11 @@ impl Compositor {
         let texel_scale = f64::from(size.0) / comp.x.max(1.0);
         // Nested compositions among the inputs were rendered before the
         // composite started (it must not be disturbed now).
-        let inputs: Vec<Option<Prepared>> = chain
-            .effects
-            .iter()
-            .map(|n| {
-                let input = n.input.as_ref()?;
-                self.prepare_source(
+        let mut inputs: Vec<Vec<Option<Prepared>>> = Vec::new();
+        for n in &chain.effects {
+            let mut prepared = Vec::new();
+            for (_, input) in &n.inputs {
+                prepared.push(self.prepare_source(
                     device,
                     queue,
                     &mut encoder,
@@ -644,9 +663,10 @@ impl Compositor {
                     chain.working_space,
                     depth,
                     report,
-                )
-            })
-            .collect();
+                ));
+            }
+            inputs.push(prepared);
+        }
         let input_textures = self.draw_inputs(
             device,
             queue,
@@ -692,7 +712,7 @@ impl Compositor {
         encoder: &mut wgpu::CommandEncoder,
         entry: &mut ChainEntry,
         effects: &[crate::plan::EffectNode],
-        inputs: &[Option<(wgpu::Texture, wgpu::TextureView)>],
+        inputs: &[LayerTextures],
         ctx: PassContext,
         texels: (u32, u32),
         assets: &AssetTable,
@@ -782,16 +802,18 @@ impl Compositor {
                         .find(|&t| t != cur)
                         .expect("a free texture");
                     let node = &effects[*index];
-                    let layer = node
-                        .kernel
-                        .layer_param(&node.effect)
-                        .zip(inputs.get(*index).and_then(Option::as_ref).map(|(t, _)| t));
+                    let layers: Vec<(&str, &wgpu::Texture)> = inputs
+                        .get(*index)
+                        .into_iter()
+                        .flatten()
+                        .map(|(n, t, _)| (&**n, t))
+                        .collect();
                     match self.external_step(
                         device,
                         queue,
                         encoder,
                         (&entry.textures[cur], &entry.textures[next]),
-                        layer,
+                        &layers,
                         entry.size,
                         &node.effect,
                         &ctx,
@@ -813,8 +835,8 @@ impl Compositor {
                     .expect("a free texture");
                 let layer_in = inputs
                     .get(*index)
-                    .and_then(Option::as_ref)
-                    .map_or(&self.blank_view, |(_, v)| v);
+                    .and_then(|v| v.first())
+                    .map_or(&self.blank_view, |(_, _, v)| v);
                 let input = self.effect_input(
                     device,
                     &entry.views[cur],
@@ -965,7 +987,7 @@ impl Compositor {
     }
 
     /// Runs an external effect on the CPU: reads `textures.0` back (with
-    /// the layer it reads, if any), hands it to the provider, and writes
+    /// the layers it reads), hands it to the provider, and writes
     /// the result into `textures.1`. On an error nothing is written and
     /// the caller passes the image through.
     #[allow(clippy::too_many_arguments)]
@@ -975,7 +997,7 @@ impl Compositor {
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         textures: (&wgpu::Texture, &wgpu::Texture),
-        layer: Option<(&str, &wgpu::Texture)>,
+        layers: &[(&str, &wgpu::Texture)],
         size: (u32, u32),
         fx: &voxy_core::EvaluatedEffect,
         ctx: &PassContext,
@@ -988,13 +1010,13 @@ impl Compositor {
         }
         let (w, h) = size;
         let mut read: Vec<&wgpu::Texture> = vec![textures.0];
-        read.extend(layer.map(|(_, t)| t));
+        read.extend(layers.iter().map(|(_, t)| *t));
         let mut images = Self::read_back(device, queue, encoder, &read, size)?.into_iter();
         let pixels = images.next().unwrap_or_default();
-        let layers = layer
-            .zip(images.next())
-            .map(|((name, _), p)| (Arc::from(name), p))
-            .into_iter()
+        let layers = layers
+            .iter()
+            .zip(images)
+            .map(|((name, _), p)| (Arc::from(*name), p))
             .collect();
         let mut frame = voxy_core::external::CpuFrame {
             width: w,

@@ -329,9 +329,8 @@ the next chain texture; GPU effects after it continue as usual.
   extra clips) are fed from the layer
   their `voxy.clip.<name>` parameter names, drawn into a buffer the size
   and placement of the effect's own, read back alongside it, and sent in
-  shared memory at their clip's preferred depth. The renderer gives one
-  effect one layer for now, so only the first extra clip receives one;
-  the others see transparency.
+  shared memory at their clip's preferred depth. Every extra clip gets
+  its own layer (O-C step 5b).
 - A crash, hang or protocol error blocks the plugin for the session (other
   plugins of the bundle get a fresh sandbox); a plugin that returns an
   error status is reported but not blocked.
@@ -357,5 +356,5 @@ back from the editor), key times, push buttons, sequence-render
 calls during export and playback, cancelling a
 render from the editor, timeouts in Preferences, and instance clean-up when
 an effect is deleted. The generator, transition and general contexts
-arrived in O-C (several layer inputs per effect still to come). Then
+arrived in O-C. Then
 interacts (O-D) and parametric parameters.

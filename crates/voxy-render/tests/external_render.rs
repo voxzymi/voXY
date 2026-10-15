@@ -293,47 +293,12 @@ impl ExternalEffects for CopyB {
     }
 }
 
-#[test]
-fn an_external_effect_reads_the_layer_its_clip_parameter_names() {
-    if gpu().is_none() {
-        return;
-    }
-    let mut doc = scene();
-    let comp = doc.main_comp.unwrap();
-    // A blue solid below the orange one, and a definition whose extra
-    // clip reads it.
-    AddSolidLayer {
-        comp,
-        name: None,
-        color: LinearRgba::from_srgb8(20, 60, 200, 255),
-        index: 1,
-    }
-    .apply(&mut doc)
-    .unwrap();
-    let layers = doc.main().unwrap().layers.clone();
-    let (a, b) = (&layers[0], &layers[1]);
-    if let voxy_core::LayerKind::Solid { size, .. } = &b.kind {
-        for (prop, v) in [
-            (size.id, Value::Vec2(DVec2::splat(4.0))),
-            (b.transform.anchor.id, Value::Vec2(DVec2::ZERO)),
-            (b.transform.position.id, Value::Vec2(DVec2::ZERO)),
-        ] {
-            SetProperty {
-                prop,
-                time: Time::ZERO,
-                value: v,
-            }
-            .apply(&mut doc)
-            .unwrap();
-        }
-    }
-    let tid = EffectTypeId::new(TYPE);
-    let mut with_clip = def();
-    with_clip.params = Arc::new([voxy_core::registry::EffectParamDef {
-        name: "voxy.clip.SourceTo".into(),
+fn clip_param(tid: &EffectTypeId, name: &str) -> voxy_core::registry::EffectParamDef {
+    voxy_core::registry::EffectParamDef {
+        name: name.into(),
         desc: Arc::new(voxy_core::PropertyDesc {
-            key: tid.param_key("voxy.clip.SourceTo").into(),
-            label: "Transition To".into(),
+            key: tid.param_key(name).into(),
+            label: name.into(),
             kind: voxy_core::ValueKind::Layer,
             default: Value::Layer(None),
             range: None,
@@ -347,7 +312,57 @@ fn an_external_effect_reads_the_layer_its_clip_parameter_names() {
         gizmo: None,
         hint: None,
         flags: voxy_core::registry::ParamFlags::default(),
-    }]);
+    }
+}
+
+/// Adds a 4×4 solid of `color` at the origin below the others.
+fn add_solid(doc: &mut Document, color: LinearRgba) -> voxy_core::LayerId {
+    let comp = doc.main_comp.unwrap();
+    let index = doc.main().unwrap().layers.len();
+    AddSolidLayer {
+        comp,
+        name: None,
+        color,
+        index,
+    }
+    .apply(doc)
+    .unwrap();
+    let l = doc.main().unwrap().layers[index].clone();
+    if let voxy_core::LayerKind::Solid { size, .. } = &l.kind {
+        for (prop, v) in [
+            (size.id, Value::Vec2(DVec2::splat(4.0))),
+            (l.transform.anchor.id, Value::Vec2(DVec2::ZERO)),
+            (l.transform.position.id, Value::Vec2(DVec2::ZERO)),
+        ] {
+            SetProperty {
+                prop,
+                time: Time::ZERO,
+                value: v,
+            }
+            .apply(doc)
+            .unwrap();
+        }
+    }
+    l.id
+}
+
+#[test]
+fn an_external_effect_reads_every_layer_its_clip_parameters_name() {
+    if gpu().is_none() {
+        return;
+    }
+    let mut doc = scene();
+    let a = doc.main().unwrap().layers[0].clone();
+    let b = add_solid(&mut doc, LinearRgba::from_srgb8(20, 60, 200, 255));
+    let c = add_solid(&mut doc, LinearRgba::from_srgb8(200, 200, 20, 255));
+    // A definition with three extra clips: two name layers, one none.
+    let tid = EffectTypeId::new(TYPE);
+    let mut with_clips = def();
+    with_clips.params = Arc::new([
+        clip_param(&tid, "voxy.clip.First"),
+        clip_param(&tid, "voxy.clip.Unset"),
+        clip_param(&tid, "voxy.clip.Second"),
+    ]);
     voxy_core::command::RemoveEffects {
         layer: a.id,
         ids: vec![a.effects[0].id],
@@ -357,22 +372,29 @@ fn an_external_effect_reads_the_layer_its_clip_parameter_names() {
     AddEffect {
         layer: a.id,
         index: None,
-        def: Arc::new(with_clip),
+        def: Arc::new(with_clips),
     }
     .apply(&mut doc)
     .unwrap();
     let fx = doc.find_layer(a.id).unwrap().1.effects[0].clone();
-    SetProperty {
-        prop: fx.param("voxy.clip.SourceTo").unwrap().id,
-        time: Time::ZERO,
-        value: Value::Layer(Some(b.id)),
+    for (name, layer) in [("voxy.clip.First", b), ("voxy.clip.Second", c)] {
+        SetProperty {
+            prop: fx.param(name).unwrap().id,
+            time: Time::ZERO,
+            value: Value::Layer(Some(layer)),
+        }
+        .apply(&mut doc)
+        .unwrap();
     }
-    .apply(&mut doc)
-    .unwrap();
 
+    // The provider sees both layers, in parameter order, and copies the
+    // last one (the yellow C) over its input.
     let copy = Arc::new(CopyB::default());
     let (img, report) = render(&doc, Some(copy.clone() as Arc<dyn ExternalEffects>));
     assert_eq!(report.external_errors, vec![]);
-    assert_eq!(*copy.0.lock().unwrap(), vec!["voxy.clip.SourceTo"]);
-    assert!(close(px(&img), [20, 60, 200, 255]), "{:?}", px(&img));
+    assert_eq!(
+        *copy.0.lock().unwrap(),
+        vec!["voxy.clip.First", "voxy.clip.Second"]
+    );
+    assert!(close(px(&img), [200, 200, 20, 255]), "{:?}", px(&img));
 }

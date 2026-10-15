@@ -565,8 +565,12 @@ at `743b053` (merge of #3).
       (the effect matte masks instead). New test plugin
       `org.voxy.test.Matte` (extra clip, optional mask that must stay
       unconnected).
-   5b. Several layer inputs per effect (today only an effect's first
-       extra clip receives a layer).
+   5b. **Done:** several layer inputs per effect. `EffectNode::inputs`
+       lists every referenced active layer by parameter name (GPU kernels
+       read the first, as before); OpenFX effects get all of them. The
+       chain content key now hashes the input parameter names too
+       (in-memory cache only; goldens unchanged). GPU test with three
+       clip parameters, one unset.
    6. Parameter values at other times and key times (editor queries).
    7. Push buttons, InstanceChanged, and plugin edits as undoable
       commands.

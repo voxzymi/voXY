@@ -751,7 +751,7 @@ mod keys {
                     layer_progress: 0.0,
                 },
                 seed: 0,
-                input: None,
+                inputs: Vec::new(),
             }],
             scale,
             WorkingSpace::Linear,
@@ -1816,7 +1816,7 @@ mod layer_inputs {
                 .iter()
                 .find_map(|dr| match &dr.source {
                     voxy_render::DrawSource::Chain { chain, .. } => {
-                        assert!(chain.effects[0].input.is_some());
+                        assert_eq!(chain.effects[0].inputs.len(), 1);
                         Some(chain.content_key())
                     }
                     _ => None,

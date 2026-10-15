@@ -565,17 +565,18 @@ impl Kernel {
         )
     }
 
-    /// The layer-reference parameter of `fx` naming the layer it reads:
-    /// [`Kernel::layer_input`], or for an OpenFX effect its first extra
-    /// clip's parameter.
-    pub fn layer_param(self, fx: &EvaluatedEffect) -> Option<&str> {
+    /// The layer-reference parameters of `fx` naming the layers it reads:
+    /// [`Kernel::layer_input`], or for an OpenFX effect each extra clip's
+    /// parameter, in order.
+    pub fn layer_params(self, fx: &EvaluatedEffect) -> Vec<&str> {
         match self {
             Kernel::External => fx
                 .params
                 .iter()
                 .map(|(n, _)| &**n)
-                .find(|n| n.starts_with(voxy_core::external::CLIP_PARAM_PREFIX)),
-            k => k.layer_input(),
+                .filter(|n| n.starts_with(voxy_core::external::CLIP_PARAM_PREFIX))
+                .collect(),
+            k => k.layer_input().into_iter().collect(),
         }
     }
 
