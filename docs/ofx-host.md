@@ -301,6 +301,10 @@ the next chain texture; GPU effects after it continue as usual.
   parameter values at the frame, then the frame through shared memory,
   rows flipped to OpenFX's bottom-up order and converted to the preferred
   depth. The mapping grows by replacement when a frame does not fit.
+- The plugin is told the frame being rendered (O-C fix: O-B's planner
+  cleared it, as it does for GPU kernels that ignore time, so plugins
+  always saw frame 0). An OpenFX effect's chain is therefore cached per
+  frame.
 - Parameter key times are not sent yet.
 - Identity (O-C): before each render the host asks IsIdentity. When the
   plugin names `Source` at the render time, Render is skipped and the

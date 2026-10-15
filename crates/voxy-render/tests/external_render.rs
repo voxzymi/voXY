@@ -230,3 +230,47 @@ fn the_providers_region_of_definition_grows_the_layer() {
         assert_eq!(*p, [255; 4]);
     }
 }
+
+/// Records the frame each render is told.
+#[derive(Debug, Default)]
+struct Frames(std::sync::Mutex<Vec<i64>>);
+
+impl ExternalEffects for Frames {
+    fn supports(&self, type_id: &EffectTypeId) -> bool {
+        type_id.as_str() == TYPE
+    }
+
+    fn render(&self, fx: &EvaluatedEffect, _: &mut CpuFrame) -> Result<(), String> {
+        self.0.lock().unwrap().push(fx.frame);
+        Ok(())
+    }
+}
+
+#[test]
+fn a_plugin_is_told_the_frame() {
+    if gpu().is_none() {
+        return;
+    }
+    let doc = scene();
+    let rate = doc.main().unwrap().frame_rate;
+    let frames = Arc::new(Frames::default());
+    let gpu = gpu().unwrap();
+    let mut c = Compositor::new(&gpu.device);
+    c.set_external(Some(frames.clone() as Arc<dyn ExternalEffects>));
+    for n in [3, 3, 7] {
+        let req = FrameRequest::export(doc.main_comp.unwrap(), rate.frame_to_time(n));
+        let eval = voxy_core::evaluate(&doc, req.comp, req.time).unwrap();
+        let plan = RenderPlan::build(&eval, &req.settings);
+        c.render_to_image(
+            &gpu.device,
+            &gpu.queue,
+            &doc.assets,
+            &NoVideo,
+            &plan,
+            req.alpha,
+        )
+        .unwrap();
+    }
+    // Frame 3's result is reused the second time.
+    assert_eq!(*frames.0.lock().unwrap(), vec![3, 7]);
+}

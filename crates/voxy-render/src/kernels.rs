@@ -541,10 +541,11 @@ impl Kernel {
     }
 
     /// Whether the output of `fx` depends on the frame number (animated
-    /// seeded randomness). Only then is the frame part of the cache key, so
-    /// static effects render once.
+    /// seeded randomness, or an OpenFX plugin, which is told the time).
+    /// Only then is the frame part of the cache key, so static effects
+    /// render once.
     pub fn uses_frame(self, fx: &EvaluatedEffect) -> bool {
-        self == Kernel::Grain && flag(fx, "animate")
+        (self == Kernel::Grain && flag(fx, "animate")) || self == Kernel::External
     }
 
     /// The layer-reference parameter naming the layer the kernel reads.

@@ -548,6 +548,10 @@ at `743b053` (merge of #3).
       RoD, ROI and identity). Tests: RoD through the sandbox, an off-origin
       buffer blurred correctly, and a GPU test where a provider's RoD
       widens a layer past its edge.
+   3b. **Done (fix of an O-B bug):** the render planner cleared every
+       non-seeded effect's frame number, OpenFX ones included, so plugins
+       always rendered at time 0. OpenFX effects now keep the frame (and
+       their chains are cached per frame). GPU test added.
    4. Transition context (`SourceTo` as a layer reference, `Transition` as
       progress).
    5. General context (extra clips as layer references).
