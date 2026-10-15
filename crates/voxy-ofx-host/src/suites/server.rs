@@ -532,14 +532,17 @@ impl Server {
         let mut rods = HashMap::new();
         for (name, s) in inputs {
             images.insert(name.clone(), read(s)?);
+            // The clip's region in canonical coordinates: its pixel bounds
+            // over the render scale.
             let b = s.bounds;
+            let (sx, sy) = (scale[0].max(1e-9), scale[1].max(1e-9));
             rods.insert(
                 name.clone(),
                 [
-                    f64::from(b[0]),
-                    f64::from(b[1]),
-                    f64::from(b[2]),
-                    f64::from(b[3]),
+                    f64::from(b[0]) / sx,
+                    f64::from(b[1]) / sy,
+                    f64::from(b[2]) / sx,
+                    f64::from(b[3]) / sy,
                 ],
             );
         }

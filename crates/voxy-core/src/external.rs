@@ -23,9 +23,19 @@ pub struct CpuFrame {
     pub origin: DVec2,
     /// Buffer pixels per layer pixel (preview resolution).
     pub texel_scale: f64,
+    /// The layer's own content size in layer pixels, from its origin (the
+    /// OpenFX host's project size).
+    pub layer_size: DVec2,
     pub space: WorkingSpace,
     /// `width × height × 4` values.
     pub pixels: Vec<f32>,
+}
+
+/// A rectangle in layer pixels (y down), `min` inclusive, `max` exclusive.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Region {
+    pub min: DVec2,
+    pub max: DVec2,
 }
 
 /// Runs external effects. Implementations must be safe to call from the
@@ -39,4 +49,17 @@ pub trait ExternalEffects: Send + Sync + Debug {
     /// place on `frame`. On an error the renderer passes the image through
     /// and reports the message.
     fn render(&self, fx: &EvaluatedEffect, frame: &mut CpuFrame) -> Result<(), String>;
+
+    /// How far `fx`'s output reaches, given its input's region (layer
+    /// pixels) and the layer's size. The renderer keeps the input region
+    /// too, as one buffer holds every stage. The default is the input.
+    fn region_of_definition(
+        &self,
+        fx: &EvaluatedEffect,
+        input: Region,
+        layer_size: DVec2,
+    ) -> Region {
+        let _ = (fx, layer_size);
+        input
+    }
 }

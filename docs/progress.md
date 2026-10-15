@@ -540,8 +540,14 @@ at `743b053` (merge of #3).
       `Source` at the frame, Render is skipped and the input passes
       through (tested with the crash plugin at gain 1, which never
       crashes). Other clips or times render instead, for now.
-   3. The plugin's regions of definition and interest in chain planning,
-      and absolute image coordinates.
+   3. **Done:** the plugin's region of definition grows the chain buffer
+      (`ExternalEffects::region_of_definition`, capped at 4096 px past
+      the input); regions of interest are covered by always passing the
+      whole buffer; images carry absolute OpenFX coordinates (project =
+      layer, y up). New test plugin `org.voxy.test.Blur` (box blur with
+      RoD, ROI and identity). Tests: RoD through the sandbox, an off-origin
+      buffer blurred correctly, and a GPU test where a provider's RoD
+      widens a layer past its edge.
    4. Transition context (`SourceTo` as a layer reference, `Transition` as
       progress).
    5. General context (extra clips as layer references).

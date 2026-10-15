@@ -12,7 +12,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use voxy_core::external::{CpuFrame, ExternalEffects};
+use voxy_core::external::{CpuFrame, ExternalEffects, Region};
+use voxy_core::glam::DVec2;
 use voxy_core::registry::EffectDef;
 use voxy_core::{EffectId, EffectTypeId, EvaluatedEffect};
 
@@ -45,6 +46,8 @@ struct PluginEntry {
 struct Live {
     bundle_index: usize,
     instance: u32,
+    /// The layer size the instance's project was created with.
+    layer_size: DVec2,
     source: (Depth, Components),
     output: (Depth, Components),
 }
@@ -76,11 +79,11 @@ pub struct ScanResult {
     pub problems: Vec<(String, String)>,
 }
 
-fn slot_for(offset: u64, w: u32, h: u32, (depth, components): (Depth, Components)) -> ImageSlot {
-    let row = w as usize * components.count() * depth.bytes();
+fn slot_for(offset: u64, bounds: RectI, (depth, components): (Depth, Components)) -> ImageSlot {
+    let row = (bounds.x2 - bounds.x1) as usize * components.count() * depth.bytes();
     ImageSlot {
         offset,
-        bounds: [0, 0, w as i32, h as i32],
+        bounds: [bounds.x1, bounds.y1, bounds.x2, bounds.y2],
         row_bytes: row as u32,
         depth,
         components,
@@ -320,7 +323,13 @@ impl Inner {
             .collect()
     }
 
-    fn render(&mut self, fx: &EvaluatedEffect, frame: &mut CpuFrame) -> Result<(), String> {
+    /// Runs `f` against `fx`'s plugin: refused when the plugin is missing
+    /// or blocked; a sandbox failure blocks it.
+    fn with_plugin<T>(
+        &mut self,
+        fx: &EvaluatedEffect,
+        f: impl FnOnce(&mut Self, usize, &PluginEntry) -> Result<Result<T, String>, SandboxError>,
+    ) -> Result<T, String> {
         let entry = self
             .plugins
             .get(&fx.type_id)
@@ -330,13 +339,147 @@ impl Inner {
             return Err(b.reason);
         }
         let index = self.bundle_index(&entry.bundle);
-        match self.render_in(index, &entry, fx, frame) {
+        match f(self, index, &entry) {
             Ok(r) => r,
             Err(e) => {
                 let b = self.blocklist.record(&entry.identifier, &e);
                 Err(b.reason)
             }
         }
+    }
+
+    /// `fx`'s plugin instance for a layer of `layer_size`, created (with
+    /// its clip preferences) if it has none in a live sandbox, or if the
+    /// layer's size changed (the project size is fixed per instance).
+    fn instance(
+        &mut self,
+        index: usize,
+        entry: &PluginEntry,
+        fx: &EvaluatedEffect,
+        layer_size: DVec2,
+    ) -> Result<Result<Live, String>, SandboxError> {
+        let alive = self
+            .sandboxes
+            .get(&index)
+            .is_some_and(|s| s.dead().is_none());
+        match self.instances.get(&fx.id).copied() {
+            Some(l) if l.bundle_index == index && alive && l.layer_size == layer_size => {
+                return Ok(Ok(l));
+            }
+            Some(l) if l.bundle_index == index && alive => {
+                self.instances.remove(&fx.id);
+                self.sandbox(index)?.request(Request::DestroyInstance {
+                    instance: l.instance,
+                })?;
+            }
+            _ => {}
+        }
+        let instance = self.next_instance;
+        self.next_instance += 1;
+        let sb = self.sandbox(index)?;
+        match sb.request(Request::CreateInstance {
+            instance,
+            plugin: entry.identifier.clone(),
+            context: entry.context.clone(),
+            project: Project {
+                size: layer_size.to_array(),
+                extent: layer_size.to_array(),
+                ..Project::default()
+            },
+            params: Self::snapshot(entry, fx),
+        })? {
+            Reply::Done { .. } => {}
+            Reply::Failed { action, status, .. } => {
+                return Ok(Err(format!(
+                    "the plugin refused {action} (status {status})"
+                )));
+            }
+            other => return Ok(Err(format!("unexpected reply {other:?}"))),
+        }
+        let prefs = sb.request(Request::ClipPreferences { instance })?;
+        let (mut source, mut output) = (
+            (Depth::Float, Components::Rgba),
+            (Depth::Float, Components::Rgba),
+        );
+        if let Reply::ClipPreferences { clips, .. } = prefs {
+            for (name, d, c) in clips {
+                match name.as_str() {
+                    SOURCE => source = (d, c),
+                    "Output" => output = (d, c),
+                    _ => {}
+                }
+            }
+        }
+        let l = Live {
+            bundle_index: index,
+            instance,
+            layer_size,
+            source,
+            output,
+        };
+        self.instances.insert(fx.id, l);
+        Ok(Ok(l))
+    }
+
+    /// The live instance with `fx`'s parameters at its frame.
+    fn prepared(
+        &mut self,
+        index: usize,
+        entry: &PluginEntry,
+        fx: &EvaluatedEffect,
+        layer_size: DVec2,
+    ) -> Result<Result<Live, String>, SandboxError> {
+        let live = match self.instance(index, entry, fx, layer_size)? {
+            Ok(l) => l,
+            Err(e) => return Ok(Err(e)),
+        };
+        self.sandbox(index)?.request(Request::SetParams {
+            instance: live.instance,
+            time: fx.frame as f64,
+            params: Self::snapshot(entry, fx),
+        })?;
+        Ok(Ok(live))
+    }
+
+    fn region_of_definition(
+        &mut self,
+        fx: &EvaluatedEffect,
+        input: Region,
+        layer_size: DVec2,
+    ) -> Result<Region, String> {
+        self.with_plugin(fx, |this, index, entry| {
+            let live = match this.prepared(index, entry, fx, layer_size)? {
+                Ok(l) => l,
+                Err(e) => return Ok(Err(e)),
+            };
+            let h = layer_size.y;
+            let inputs = if entry.has_source {
+                vec![(SOURCE.to_owned(), canonical(input, h))]
+            } else {
+                Vec::new()
+            };
+            Ok(
+                match this.sandbox(index)?.request(Request::RegionOfDefinition {
+                    instance: live.instance,
+                    time: fx.frame as f64,
+                    // Regions are canonical; the scale does not change them.
+                    scale: [1.0, 1.0],
+                    inputs,
+                })? {
+                    Reply::Region(r) => Ok(from_canonical(r, h)),
+                    Reply::Failed { action, status, .. } => {
+                        Err(format!("the plugin failed {action} (status {status})"))
+                    }
+                    other => Err(format!("unexpected reply {other:?}")),
+                },
+            )
+        })
+    }
+
+    fn render(&mut self, fx: &EvaluatedEffect, frame: &mut CpuFrame) -> Result<(), String> {
+        self.with_plugin(fx, |this, index, entry| {
+            this.render_in(index, entry, fx, frame)
+        })
     }
 
     /// The render, with sandbox failures as the outer error and plugin
@@ -349,87 +492,34 @@ impl Inner {
         frame: &mut CpuFrame,
     ) -> Result<Result<(), String>, SandboxError> {
         let (w, h) = (frame.width, frame.height);
+        let s = frame.texel_scale;
         let time = fx.frame as f64;
-        let params = Self::snapshot(entry, fx);
-        let project = Project {
-            size: [f64::from(w), f64::from(h)],
-            extent: [f64::from(w), f64::from(h)],
-            ..Project::default()
+        let layer_size = layer_size_of(frame);
+        let live = match self.prepared(index, entry, fx, layer_size)? {
+            Ok(l) => l,
+            Err(e) => return Ok(Err(e)),
         };
-        let live = match self.instances.get(&fx.id).copied() {
-            Some(l)
-                if l.bundle_index == index
-                    && self
-                        .sandboxes
-                        .get(&index)
-                        .is_some_and(|s| s.dead().is_none()) =>
-            {
-                l
-            }
-            _ => {
-                let instance = self.next_instance;
-                self.next_instance += 1;
-                let sb = self.sandbox(index)?;
-                match sb.request(Request::CreateInstance {
-                    instance,
-                    plugin: entry.identifier.clone(),
-                    context: entry.context.clone(),
-                    project,
-                    params: params.clone(),
-                })? {
-                    Reply::Done { .. } => {}
-                    Reply::Failed { action, status, .. } => {
-                        return Ok(Err(format!(
-                            "the plugin refused {action} (status {status})"
-                        )));
-                    }
-                    other => return Ok(Err(format!("unexpected reply {other:?}"))),
-                }
-                let prefs = sb.request(Request::ClipPreferences { instance })?;
-                let (mut source, mut output) = (
-                    (Depth::Float, Components::Rgba),
-                    (Depth::Float, Components::Rgba),
-                );
-                if let Reply::ClipPreferences { clips, .. } = prefs {
-                    for (name, d, c) in clips {
-                        match name.as_str() {
-                            SOURCE => source = (d, c),
-                            "Output" => output = (d, c),
-                            _ => {}
-                        }
-                    }
-                }
-                let l = Live {
-                    bundle_index: index,
-                    instance,
-                    source,
-                    output,
-                };
-                self.instances.insert(fx.id, l);
-                l
-            }
-        };
-        let session_len =
+        // The buffer in the plugin's pixel coordinates: canonical (y up,
+        // the project being the layer) times the render scale.
+        let x0 = (frame.origin.x * s).round() as i32;
+        let y1 = ((layer_size.y - frame.origin.y) * s).round() as i32;
+        let bounds = RectI::new(x0, y1 - h as i32, x0 + w as i32, y1);
+        let window = [bounds.x1, bounds.y1, bounds.x2, bounds.y2];
+        let scale = [s, s];
+        let image_len =
             |d: (Depth, Components)| w as usize * h as usize * d.1.count() * d.0.bytes();
         let source_len = if entry.has_source {
-            session_len(live.source)
+            image_len(live.source)
         } else {
             0
         };
-        let need = HEADER + source_len + session_len(live.output) + 2 * crate::shm::ALIGN;
+        let need = HEADER + source_len + image_len(live.output) + 2 * crate::shm::ALIGN;
         let dir = self.session.path().to_path_buf();
         let sb = self.sandbox(index)?;
         sb.ensure_mapping(&dir, need)?;
-        sb.request(Request::SetParams {
-            instance: live.instance,
-            time,
-            params,
-        })?;
         // An identity skips Render: the input passes through. An identity
         // on another clip or time needs images the editor does not send
         // yet, so the plugin renders instead.
-        let window = [0, 0, w as i32, h as i32];
-        let scale = [frame.texel_scale, frame.texel_scale];
         if entry.has_source
             && let Reply::Identity(Some((clip, at))) = sb.request(Request::IsIdentity {
                 instance: live.instance,
@@ -443,11 +533,10 @@ impl Inner {
             return Ok(Ok(()));
         }
         let mut slots = Slots::new(sb.shm.len());
-        let (Some(src), Some(dst)) = (slots.take(source_len), slots.take(session_len(live.output)))
+        let (Some(src), Some(dst)) = (slots.take(source_len), slots.take(image_len(live.output)))
         else {
             return Ok(Err("the image does not fit the shared memory".into()));
         };
-        let bounds = RectI::new(0, 0, w as i32, h as i32);
         let mut inputs = Vec::new();
         if entry.has_source {
             let bottom_up = flip_rows(&frame.pixels, w, h);
@@ -460,7 +549,7 @@ impl Inner {
             )
             .ok_or_else(|| SandboxError::Protocol("bad input image".into()))?;
             sb.shm.write_from(src, &input.raw());
-            inputs.push((SOURCE.into(), slot_for(src, w, h, live.source)));
+            inputs.push((SOURCE.into(), slot_for(src, bounds, live.source)));
         }
         let reply = sb.request(Request::Render {
             instance: live.instance,
@@ -468,7 +557,7 @@ impl Inner {
             window,
             scale,
             inputs,
-            output: slot_for(dst, w, h, live.output),
+            output: slot_for(dst, bounds, live.output),
         })?;
         match reply {
             Reply::Done { .. } => {}
@@ -477,7 +566,7 @@ impl Inner {
             }
             other => return Ok(Err(format!("unexpected reply {other:?}"))),
         }
-        let mut bytes = vec![0u8; session_len(live.output)];
+        let mut bytes = vec![0u8; image_len(live.output)];
         sb.shm.read_into(dst, &mut bytes);
         let out = Image::from_raw(
             bounds,
@@ -492,6 +581,29 @@ impl Inner {
     }
 }
 
+/// The layer's size, or the buffer's in layer pixels when it is unknown.
+fn layer_size_of(frame: &CpuFrame) -> DVec2 {
+    if frame.layer_size.x > 0.0 && frame.layer_size.y > 0.0 {
+        frame.layer_size
+    } else {
+        DVec2::new(f64::from(frame.width), f64::from(frame.height)) / frame.texel_scale.max(1e-9)
+    }
+}
+
+/// A layer region in OpenFX canonical coordinates (`[x1, y1, x2, y2]`, y up
+/// from the layer's bottom edge), for a layer `h` pixels tall.
+fn canonical(r: Region, h: f64) -> [f64; 4] {
+    [r.min.x, h - r.max.y, r.max.x, h - r.min.y]
+}
+
+/// The inverse of [`canonical`].
+fn from_canonical(c: [f64; 4], h: f64) -> Region {
+    Region {
+        min: DVec2::new(c[0], h - c[3]),
+        max: DVec2::new(c[2], h - c[1]),
+    }
+}
+
 impl ExternalEffects for OfxRuntime {
     fn supports(&self, type_id: &EffectTypeId) -> bool {
         self.lock().plugins.contains_key(type_id)
@@ -499,6 +611,19 @@ impl ExternalEffects for OfxRuntime {
 
     fn render(&self, fx: &EvaluatedEffect, frame: &mut CpuFrame) -> Result<(), String> {
         self.lock().render(fx, frame)
+    }
+
+    /// The plugin's `GetRegionOfDefinition`; the input when it fails (the
+    /// render then reports the failure).
+    fn region_of_definition(
+        &self,
+        fx: &EvaluatedEffect,
+        input: Region,
+        layer_size: DVec2,
+    ) -> Region {
+        self.lock()
+            .region_of_definition(fx, input, layer_size)
+            .unwrap_or(input)
     }
 }
 

@@ -276,8 +276,24 @@ the next chain texture; GPU effects after it continue as usual.
 - Without a provider, for a type it does not run, or when the plugin
   fails, the image passes through and the render report lists the effect
   with the reason (for the effect header's error badge).
-- The region of definition stays the input's for now; the plugin's own
-  GetRegionOfDefinition and GetRegionsOfInterest join in a later step.
+- Region of definition (O-C): when the chain is planned, each OpenFX
+  effect's GetRegionOfDefinition is asked with its input's region, and the
+  chain buffer grows to hold it (it always keeps the input too, as one
+  buffer holds every stage; at most 4096 layer pixels past the input, so
+  an infinite region from a generator cannot blow up the buffer). A
+  failure there falls back to the input region; the render then reports
+  it.
+- Region of interest: the plugin is always given the whole chain buffer,
+  which contains its input's full region of definition, so any region it
+  asks for is covered (pixels outside the input's region are transparent,
+  as OpenFX defines). The host therefore does not need GetRegionsOfInterest
+  to size anything and does not call it during renders.
+- Coordinates (O-C): the project is the layer (size and extent = the
+  layer's content size, offset 0). Canonical coordinates are layer pixels
+  with y up from the layer's bottom edge; images carry their real bounds
+  (canonical × render scale), so a buffer that starts off the layer's
+  origin, or a region grown past it, is seen where it is. A layer that
+  changes size gets a new instance.
 - The provider is `runtime::OfxRuntime`. One sandbox per bundle, started
   on first use and again after it dies; one plugin instance per voXY
   effect, created on its first render with the depth and components the
@@ -285,10 +301,7 @@ the next chain texture; GPU effects after it continue as usual.
   parameter values at the frame, then the frame through shared memory,
   rows flipped to OpenFX's bottom-up order and converted to the preferred
   depth. The mapping grows by replacement when a frame does not fit.
-- For now the image's bounds start at (0, 0) and the project is the
-  buffer's size, so plugins that depend on absolute position see the
-  layer's buffer, not the composition. Parameter key times are not sent
-  yet.
+- Parameter key times are not sent yet.
 - Identity (O-C): before each render the host asks IsIdentity. When the
   plugin names `Source` at the render time, Render is skipped and the
   input passes through. An identity on another clip or time renders
@@ -314,8 +327,7 @@ the next chain texture; GPU effects after it continue as usual.
 ## Still to be written (O-A to O-D)
 
 Left after O-B: parameter values at other times than the frame (asked
-back from the editor), key times, the plugin's own regions of definition
-and interest, absolute image coordinates, push buttons, sequence-render
+back from the editor), key times, push buttons, sequence-render
 calls during export and playback, cancelling a
 render from the editor, timeouts in Preferences, and instance clean-up when
 an effect is deleted. The generator context arrived in O-C step 1. Then

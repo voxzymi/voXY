@@ -152,6 +152,10 @@ fn kernel_shader(kernel: Kernel) -> &'static str {
 
 /// A draw source ready to draw: what to bind, its size, colour and shader
 /// mode.
+/// How far (layer pixels) an external effect's region of definition may
+/// reach past its input.
+const MAX_EXTERNAL_GROWTH: f64 = 4096.0;
+
 type Prepared = (SourceBind, Option<DVec2>, [f32; 4], u32);
 
 /// What a chain's source samples, once prepared.
@@ -230,7 +234,7 @@ impl Compositor {
             .iter()
             .map(|n| (n.kernel, &n.effect))
             .collect();
-        let rod = chain_rod(&nodes, Rect::of_size(size), Rect::of_size(size)).round_out();
+        let rod = self.chain_rod(&nodes, size).round_out();
         if rod.is_empty() {
             return None;
         }
@@ -839,6 +843,36 @@ impl Compositor {
         (cur, lut_missing)
     }
 
+    /// The chain's region of definition (layer pixels): the source grown
+    /// by every effect in order. External effects ask their provider
+    /// (design §6.9); the region always keeps the input too.
+    fn chain_rod(&self, nodes: &[(Kernel, &voxy_core::EvaluatedEffect)], size: DVec2) -> Rect {
+        let layer = Rect::of_size(size);
+        let Some(ext) = self.external.as_ref() else {
+            return chain_rod(nodes, layer, layer);
+        };
+        nodes.iter().fold(layer, |r, (k, fx)| {
+            if *k == Kernel::External && ext.supports(&fx.type_id) {
+                let input = voxy_core::external::Region {
+                    min: r.min,
+                    max: r.max,
+                };
+                let out = ext.region_of_definition(fx, input, size);
+                // A runaway region (some generators report an infinite
+                // one) is kept within reach of the input.
+                let out = Rect::new(out.min, out.max)
+                    .intersect(&r.pad(DVec2::splat(MAX_EXTERNAL_GROWTH)));
+                if out.min.is_finite() && out.max.is_finite() && !out.is_empty() {
+                    r.union(&out)
+                } else {
+                    r
+                }
+            } else {
+                k.rod(fx, r, layer)
+            }
+        })
+    }
+
     /// Runs an external effect on the CPU: reads `textures.0` back (the
     /// commands so far are submitted first), hands it to the provider, and
     /// writes the result into `textures.1`. On an error nothing is written
@@ -923,6 +957,7 @@ impl Compositor {
             height: h,
             origin: ctx.origin,
             texel_scale: ctx.texel_scale,
+            layer_size: ctx.layer_size,
             space: ctx.space,
             pixels,
         };

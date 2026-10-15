@@ -10,7 +10,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use voxy_core::external::{CpuFrame, ExternalEffects};
+use voxy_core::external::{CpuFrame, ExternalEffects, Region};
 use voxy_core::glam::DVec2;
 use voxy_core::{EffectId, EvaluatedEffect, Value, WorkingSpace};
 use voxy_ofx_host::client::Timeouts;
@@ -47,6 +47,7 @@ fn frame() -> CpuFrame {
         height: 2,
         origin: DVec2::ZERO,
         texel_scale: 1.0,
+        layer_size: DVec2::new(3.0, 2.0),
         space: WorkingSpace::Linear,
         pixels,
     }
@@ -66,7 +67,13 @@ fn scan_render_block_and_retry() {
     names.sort_unstable();
     assert_eq!(
         names,
-        ["Test Gain", "Test Gain", "Test Gain", "Test Solid"],
+        [
+            "Test Blur",
+            "Test Gain",
+            "Test Gain",
+            "Test Gain",
+            "Test Solid"
+        ],
         "gain, crash, hang share the description"
     );
     assert_eq!(scan.problems, vec![]);
@@ -239,4 +246,76 @@ fn an_identity_passes_the_input_through_without_rendering() {
         rt.render(&effect(1, "org.voxy.test.Crash", 2.0), &mut frame())
             .is_err()
     );
+}
+
+fn blur(id: u64, radius: f64) -> EvaluatedEffect {
+    EvaluatedEffect {
+        id: EffectId(id),
+        type_id: plugin_type("org.voxy.test.Blur"),
+        version: 1,
+        params: vec![(Arc::from("radius"), Value::Scalar(radius))],
+        matte: None,
+        frame: 0,
+        layer_progress: 0.0,
+    }
+}
+
+#[test]
+fn the_plugins_region_of_definition_and_absolute_coordinates() {
+    let tmp = tempfile::tempdir().unwrap();
+    let bundle = common::bundle(tmp.path());
+    let rt = OfxRuntime::new(Path::new(EXE), tmp.path(), Timeouts::default()).unwrap();
+    rt.scan(std::slice::from_ref(&bundle));
+    let layer = DVec2::new(4.0, 3.0);
+    let input = Region {
+        min: DVec2::ZERO,
+        max: layer,
+    };
+    // Grown by the radius, in layer pixels (y down).
+    assert_eq!(
+        rt.region_of_definition(&blur(1, 2.0), input, layer),
+        Region {
+            min: DVec2::splat(-2.0),
+            max: DVec2::new(6.0, 5.0),
+        }
+    );
+    // A region off the layer's origin maps through canonical (y up) and
+    // back unchanged.
+    let off = Region {
+        min: DVec2::new(1.0, -1.0),
+        max: DVec2::new(3.0, 2.0),
+    };
+    assert_eq!(
+        rt.region_of_definition(&blur(1, 1.0), off, layer),
+        Region {
+            min: DVec2::new(0.0, -2.0),
+            max: DVec2::new(4.0, 3.0),
+        }
+    );
+    // Not a plugin's effect: the input.
+    assert_eq!(
+        rt.region_of_definition(&effect(5, "nope", 1.0), off, layer),
+        off
+    );
+
+    // A dot at layer (2, 1) in a buffer covering layer x 1..4, y 0..3 (not
+    // at the layer's origin). The blur (radius 1) spreads it over the 3×3
+    // box around it, which is the whole buffer.
+    let (w, h) = (3u32, 3u32);
+    let mut pixels = vec![0.0f32; (w * h * 4) as usize];
+    let dot = ((w + 1) * 4) as usize; // buffer (1, 1) = layer (2, 1)
+    pixels[dot..dot + 4].copy_from_slice(&[9.0, 9.0, 9.0, 9.0]);
+    let mut f = CpuFrame {
+        width: w,
+        height: h,
+        origin: DVec2::new(1.0, 0.0),
+        texel_scale: 1.0,
+        layer_size: layer,
+        space: WorkingSpace::Linear,
+        pixels,
+    };
+    rt.render(&blur(2, 1.0), &mut f).unwrap();
+    for px in f.pixels.as_chunks::<4>().0 {
+        assert_eq!(*px, [1.0; 4], "every pixel averages the dot over 9");
+    }
 }
