@@ -185,11 +185,9 @@ fn check_fixtures(root: &Path, file: &File) -> Result<()> {
         bail!("ofx-fixtures.toml: the source needs its content_sha256");
     }
     for f in &fixtures.fixture {
-        let Some(c) = file
-            .credit
-            .iter()
-            .find(|c| c.id == f.credit && c.usage == Usage::Fixture && c.status == Status::Approved)
-        else {
+        let Some(c) = file.credit.iter().find(|c| {
+            c.id == f.credit && c.usage == Usage::Fixture && c.status == Status::Approved
+        }) else {
             bail!(
                 "ofx-fixtures.toml: {} is not an approved fixture in credits.toml",
                 f.credit
