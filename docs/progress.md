@@ -606,9 +606,24 @@ at `743b053` (merge of #3).
       context than the saved one gives a placeholder (data kept). base64
       moved into `voxy-core`. Tests: round trip, damaged values, context
       change, missing then reinstalled plugin.
-   10. Conformance suite: the approved BSD-3 samples (#1 to #11) plus our
-       blur, transform and keyer test plugins; Describe, mapping, goldens,
-       identity.
+   10. Conformance suite.
+       1. **Done (10a):** the harness
+          (`voxy-ofx-sandbox/tests/conformance.rs`): through the real
+          sandbox, every fixture plugin describes and maps with no
+          problems and passes registry validation; each case renders a
+          fixed 32×24 pattern (a second one for layer inputs) and matches
+          its PNG golden in `tests/golden/ofx/` (±1 per 8-bit channel,
+          `VOXY_UPDATE_GOLDEN=1` rewrites); identity cases must return the
+          input exactly; every case renders the same twice (a fresh
+          instance too). Fixtures: our own plugins, now with
+          `org.voxy.test.Transform` and `org.voxy.test.Keyer` (with the
+          blur, the P-0 Q2 trio). Goldens were checked by eye before
+          being kept. CI at `8a5423a` (run 38709449721) green on every job
+          that finished; macOS arm64 tests were still running.
+       2. **Blocked (10b):** the approved BSD-3 samples (#1 to #11). This
+          session's safety classifier refuses reading or building
+          third-party plugin source ("untrusted code integration"), so
+          the fixture build (Q-C1) waits for the owner's go-ahead.
    11. Compatibility table in `docs/ofx-plugins.md` §5.
 8. O-D.
 

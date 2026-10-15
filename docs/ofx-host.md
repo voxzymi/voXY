@@ -385,6 +385,17 @@ the next chain texture; GPU effects after it continue as usual.
   not send `InstanceChanged`; plugin edits made outside `InstanceChanged`
   (in Render, for example, which the spec does not allow) are dropped.
 
+## Conformance suite (O-C)
+
+`cargo test -p voxy-ofx-sandbox --test conformance` runs every fixture
+plugin through the real sandbox: Describe and mapping without problems,
+registry validation of each definition, rendering a fixed pattern
+against PNG goldens in `tests/golden/ofx/` (±1 per 8-bit channel;
+`VOXY_UPDATE_GOLDEN=1` rewrites them), exact identities, and the same
+result twice (also from a fresh instance). The fixtures are voXY's own
+test plugins; the approved BSD-3 OpenFX samples join when their build
+lands.
+
 ## Messages in the editor (O-B)
 
 - An OpenFX effect that the last frame passed through (plugin failed,

@@ -3835,6 +3835,7 @@ dependencies = [
 name = "voxy-ofx-sandbox"
 version = "0.1.0"
 dependencies = [
+ "image",
  "tempfile",
  "voxy-core",
  "voxy-ofx-host",

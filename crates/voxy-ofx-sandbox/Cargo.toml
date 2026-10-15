@@ -19,3 +19,4 @@ voxy-ofx-host.workspace = true
 voxy-core.workspace = true
 voxy-ofx-testplugins = { path = "../voxy-ofx-testplugins" }
 tempfile.workspace = true
+image.workspace = true

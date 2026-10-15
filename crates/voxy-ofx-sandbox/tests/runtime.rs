@@ -75,9 +75,11 @@ fn scan_render_block_and_retry() {
             "Test Gain",
             "Test Gain",
             "Test Gain",
+            "Test Keyer",
             "Test Lag",
             "Test Matte",
-            "Test Solid"
+            "Test Solid",
+            "Test Transform"
         ],
         "gain, crash, hang share the description"
     );

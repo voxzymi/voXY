@@ -169,7 +169,9 @@ fn a_bundle_describes_and_renders_out_of_process() {
             "org.voxy.test.Blur",
             "org.voxy.test.Fade",
             "org.voxy.test.Matte",
-            "org.voxy.test.Lag"
+            "org.voxy.test.Lag",
+            "org.voxy.test.Transform",
+            "org.voxy.test.Keyer"
         ]
     );
     assert_eq!(d.plugins[0].props.string("OfxPropLabel"), Some("Test Gain"));

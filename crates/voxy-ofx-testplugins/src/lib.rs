@@ -15,6 +15,8 @@
 //!   and a mask clip.
 //! - `org.voxy.test.Lag`: reads its parameter one frame back and counts its
 //!   keys.
+//! - `org.voxy.test.Transform`, `org.voxy.test.Keyer`: with the blur, our
+//!   own transform and keyer fixtures for the conformance suite (P-0 Q2).
 
 // A test fixture: a missing suite entry may panic (and abort) loudly.
 #![allow(
@@ -31,15 +33,19 @@ use voxy_ofx_sys as ofx;
 
 mod blur;
 mod fade;
+mod keyer;
 mod lag;
 mod matte;
 mod solid;
+mod transform;
 
 pub use blur::BLUR;
 pub use fade::FADE;
+pub use keyer::KEYER;
 pub use lag::LAG;
 pub use matte::MATTE;
 pub use solid::SOLID;
+pub use transform::TRANSFORM;
 
 static HOST: AtomicPtr<ofx::OfxHost> = AtomicPtr::new(std::ptr::null_mut());
 static PROPS: AtomicPtr<ofx::OfxPropertySuiteV1> = AtomicPtr::new(std::ptr::null_mut());
@@ -470,7 +476,9 @@ pub static HANG: StaticPlugin = StaticPlugin(ofx::OfxPlugin {
 });
 
 /// The bundle's plugins, in `OfxGetPlugin` order.
-pub static ALL: [&StaticPlugin; 8] = [&GAIN, &CRASH, &HANG, &SOLID, &BLUR, &FADE, &MATTE, &LAG];
+pub static ALL: [&StaticPlugin; 10] = [
+    &GAIN, &CRASH, &HANG, &SOLID, &BLUR, &FADE, &MATTE, &LAG, &TRANSFORM, &KEYER,
+];
 
 /// The OpenFX export: how many plugins the binary holds.
 #[unsafe(no_mangle)]
