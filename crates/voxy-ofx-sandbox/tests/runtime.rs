@@ -50,6 +50,7 @@ fn frame() -> CpuFrame {
         layer_size: DVec2::new(3.0, 2.0),
         space: WorkingSpace::Linear,
         pixels,
+        layers: Vec::new(),
     }
 }
 
@@ -69,6 +70,7 @@ fn scan_render_block_and_retry() {
         names,
         [
             "Test Blur",
+            "Test Fade",
             "Test Gain",
             "Test Gain",
             "Test Gain",
@@ -313,9 +315,74 @@ fn the_plugins_region_of_definition_and_absolute_coordinates() {
         layer_size: layer,
         space: WorkingSpace::Linear,
         pixels,
+        layers: Vec::new(),
     };
     rt.render(&blur(2, 1.0), &mut f).unwrap();
     for px in f.pixels.as_chunks::<4>().0 {
         assert_eq!(*px, [1.0; 4], "every pixel averages the dot over 9");
+    }
+}
+
+fn fade(id: u64, auto: bool, transition: f64, progress: f64) -> EvaluatedEffect {
+    EvaluatedEffect {
+        id: EffectId(id),
+        type_id: plugin_type("org.voxy.test.Fade"),
+        version: 1,
+        params: vec![
+            (Arc::from("Transition"), Value::Scalar(transition)),
+            (Arc::from("voxy.auto"), Value::Bool(auto)),
+            (Arc::from("voxy.clip.SourceTo"), Value::Layer(None)),
+        ],
+        matte: None,
+        frame: 0,
+        layer_progress: progress,
+    }
+}
+
+#[test]
+fn a_transition_mixes_its_input_into_the_layer_it_names() {
+    let tmp = tempfile::tempdir().unwrap();
+    let bundle = common::bundle(tmp.path());
+    let rt = OfxRuntime::new(Path::new(EXE), tmp.path(), Timeouts::default()).unwrap();
+    let scan = rt.scan(std::slice::from_ref(&bundle));
+    let def = scan
+        .definitions
+        .iter()
+        .find(|d| d.type_id == plugin_type("org.voxy.test.Fade"))
+        .unwrap();
+    assert_eq!(def.category, voxy_core::registry::Category::Transition);
+    assert_eq!(
+        def.params.iter().map(|p| &*p.name).collect::<Vec<_>>(),
+        ["Transition", "voxy.auto", "voxy.clip.SourceTo"]
+    );
+
+    let a = frame();
+    let with_b = |f: &mut CpuFrame| {
+        f.layers = vec![(Arc::from("voxy.clip.SourceTo"), vec![1.0; f.pixels.len()])];
+    };
+    // Auto off: Transition 0.25.
+    let mut f = frame();
+    with_b(&mut f);
+    rt.render(&fade(1, false, 0.25, 0.9), &mut f).unwrap();
+    for (out, a) in f.pixels.iter().zip(&a.pixels) {
+        assert!((out - (a * 0.75 + 0.25)).abs() < 1e-6, "{out} from {a}");
+    }
+    // Auto on: the layer's progress (0.5) wins over Transition.
+    let mut f = frame();
+    with_b(&mut f);
+    rt.render(&fade(1, true, 0.25, 0.5), &mut f).unwrap();
+    for (out, a) in f.pixels.iter().zip(&a.pixels) {
+        assert!((out - (a * 0.5 + 0.5)).abs() < 1e-6);
+    }
+    // At 1 the plugin is an identity on SourceTo: B is passed through.
+    let mut f = frame();
+    with_b(&mut f);
+    rt.render(&fade(1, true, 0.0, 1.0), &mut f).unwrap();
+    assert_eq!(f.pixels, vec![1.0; a.pixels.len()]);
+    // No B layer: a fade to transparency.
+    let mut f = frame();
+    rt.render(&fade(1, false, 0.5, 0.0), &mut f).unwrap();
+    for (out, a) in f.pixels.iter().zip(&a.pixels) {
+        assert!((out - a * 0.5).abs() < 1e-6);
     }
 }

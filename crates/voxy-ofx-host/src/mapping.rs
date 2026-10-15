@@ -7,6 +7,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use voxy_core::external::{AUTO_PARAM, CLIP_PARAM_PREFIX, RESERVED_PREFIX};
 use voxy_core::glam::{DVec2, DVec3};
 use voxy_core::registry::{
     Category, EffectDef, EffectOrigin, EffectParamDef, EffectSpace, ParamFlags, ParamGroup,
@@ -252,13 +253,15 @@ impl std::fmt::Display for MapError {
 impl std::error::Error for MapError {}
 
 /// The contexts voXY maps, in order of preference.
-pub const MAPPED_CONTEXTS: [&[u8]; 2] = [
+pub const MAPPED_CONTEXTS: [&[u8]; 3] = [
     ofx::kOfxImageEffectContextFilter,
+    ofx::kOfxImageEffectContextTransition,
     ofx::kOfxImageEffectContextGenerator,
 ];
 
-/// The context a plugin runs in as a voXY effect: filter if it has one,
-/// otherwise generator (its output replaces the effect's input).
+/// The context a plugin runs in as a voXY effect: the first it has of
+/// filter, transition and generator (whose output replaces the effect's
+/// input).
 pub fn mapped_context(plugin: &PluginDesc) -> Option<&ContextDesc> {
     MAPPED_CONTEXTS
         .iter()
@@ -287,10 +290,25 @@ pub fn effect_def(plugin: &PluginDesc, binary: &Path, index: u32) -> Result<Effe
     let (groups, group_of) = groups(ctx);
     let mut params = Vec::new();
     for d in &ctx.params {
+        if d.name.starts_with(RESERVED_PREFIX) {
+            return Err(MapError::Param {
+                name: d.name.clone(),
+                why: format!("names starting with {RESERVED_PREFIX} are voXY's"),
+            });
+        }
         if let Some(def) = param_def(&tid, d, &group_of)? {
             params.push(def);
         }
     }
+    let transition = ctx.context == ofx_str(ofx::kOfxImageEffectContextTransition);
+    if transition {
+        params.extend(transition_params(&tid));
+    }
+    let category = if transition {
+        Category::Transition
+    } else {
+        category
+    };
     Ok(EffectDef {
         type_id: tid,
         version: plugin.version.0,
@@ -306,6 +324,49 @@ pub fn effect_def(plugin: &PluginDesc, binary: &Path, index: u32) -> Result<Effe
             index,
         },
     })
+}
+
+/// The parameters voXY adds to a transition (design §5, §6.4): Auto, and
+/// the layer that is `SourceTo`.
+fn transition_params(tid: &EffectTypeId) -> [EffectParamDef; 2] {
+    let def = |name: &str, label: &str, kind, default, hint: &str| EffectParamDef {
+        name: name.into(),
+        desc: Arc::new(PropertyDesc {
+            key: tid.param_key(name).into(),
+            label: label.into(),
+            kind,
+            default,
+            range: None,
+            soft_range: None,
+            unit: Unit::None,
+            animatable: true,
+            spatial: false,
+        }),
+        choices: None,
+        group: None,
+        gizmo: None,
+        hint: Some(hint.into()),
+        flags: ParamFlags::default(),
+    };
+    [
+        def(
+            AUTO_PARAM,
+            "Auto",
+            ValueKind::Bool,
+            Value::Bool(true),
+            "Run the transition over the layer's whole duration, instead of following Transition.",
+        ),
+        def(
+            &format!(
+                "{CLIP_PARAM_PREFIX}{}",
+                ofx_str(ofx::kOfxImageEffectTransitionSourceToClipName)
+            ),
+            "Transition To",
+            ValueKind::Layer,
+            Value::Layer(None),
+            "The layer to show at the end. Its own effects are not used.",
+        ),
+    ]
 }
 
 /// Group parameters become collapsible groups, in definition order (a

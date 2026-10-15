@@ -72,8 +72,7 @@ Checked against OpenFX 1.5.1, "Packaging OFX Plug-ins".
 
 - API version 1.5, name `org.voxy.voXY`, label `voXY`, version from the
   crate.
-- Contexts: filter and generator so far; transition and general arrive in
-  O-C. Pixel depths: float, short, byte (float preferred). Components:
+- Contexts: filter, generator and transition; general arrives in O-C. Pixel depths: float, short, byte (float preferred). Components:
   RGBA, RGB, Alpha.
 - Multi-resolution, tiles and temporal clip access: yes. Overlays: no
   (interacts arrive in O-D). Multiple clip depths or pixel aspects,
@@ -235,9 +234,8 @@ closes (then it unloads everything and exits 0).
 
 ## Plugins as voXY effects (O-B, `voxy_ofx_host::mapping`)
 
-Each plugin's filter context, or its generator context when it has no
-filter context (O-C), becomes an effect definition
-`ofx:<pluginIdentifier>`, version = the plugin's major version (a newer
+Each plugin's first context of filter, transition (O-C) and generator
+(O-C) becomes an effect definition `ofx:<pluginIdentifier>`, version = the plugin's major version (a newer
 minor version loads normally). Name: the plugin's label (or identifier);
 category: its grouping (or "OpenFX"); description: its description.
 
@@ -258,8 +256,16 @@ category: its grouping (or "OpenFX"); description: its description.
 | Parametric | refused at define time (not supported yet) |
 
 - A generator has no `Source` clip: its output replaces the effect's
-  input (best on a solid or adjustment layer, design §6.4). A plugin with
-  both contexts runs as a filter.
+  input (best on a solid or adjustment layer, design §6.4).
+- A transition (design §5, §6.4) is listed under Transitions. The effect's
+  input is `SourceFrom`. voXY adds two parameters: **Auto**
+  (`voxy.auto`, on by default), which sets the plugin's `Transition`
+  parameter to the layer's progress through its duration, and
+  **Transition To** (`voxy.clip.SourceTo`), a layer reference whose plain
+  source (Q-E1) is `SourceTo`; no layer means transparency. With Auto off
+  the plugin's own `Transition` parameter is used as keyed.
+- Parameters voXY adds start with `voxy.`; a plugin parameter with such a
+  name is refused at mapping time, so the names cannot collide.
 - Hard range from Min/Max unless they are the "no limit" defaults; the
   display range from DisplayMin/Max, kept inside the hard range.
 - Animatable follows `kOfxParamPropAnimates`; secret parameters are
@@ -307,9 +313,14 @@ the next chain texture; GPU effects after it continue as usual.
   frame.
 - Parameter key times are not sent yet.
 - Identity (O-C): before each render the host asks IsIdentity. When the
-  plugin names `Source` at the render time, Render is skipped and the
-  input passes through. An identity on another clip or time renders
-  instead, until the editor can send images from other times.
+  plugin names one of its inputs at the render time, Render is skipped
+  and that input passes through (a transition at 1 shows `SourceTo`). An
+  identity at another time renders instead, until the editor can send
+  images from other times.
+- Extra input clips (a transition's `SourceTo`) are fed from the layer
+  their `voxy.clip.<name>` parameter names, drawn into a buffer the size
+  and placement of the effect's own, read back alongside it, and sent in
+  shared memory at their clip's preferred depth.
 - A crash, hang or protocol error blocks the plugin for the session (other
   plugins of the bundle get a fresh sandbox); a plugin that returns an
   error status is reported but not blocked.
@@ -334,6 +345,6 @@ Left after O-B: parameter values at other times than the frame (asked
 back from the editor), key times, push buttons, sequence-render
 calls during export and playback, cancelling a
 render from the editor, timeouts in Preferences, and instance clean-up when
-an effect is deleted. The generator context arrived in O-C step 1. Then
-the transition and general contexts (O-C),
+an effect is deleted. The generator and transition contexts arrived in
+O-C. Then the general context (O-C),
 interacts (O-D) and parametric parameters.

@@ -274,3 +274,105 @@ fn a_plugin_is_told_the_frame() {
     // Frame 3's result is reused the second time.
     assert_eq!(*frames.0.lock().unwrap(), vec![3, 7]);
 }
+
+/// Replaces its input with the layer it reads.
+#[derive(Debug, Default)]
+struct CopyB(std::sync::Mutex<Vec<String>>);
+
+impl ExternalEffects for CopyB {
+    fn supports(&self, type_id: &EffectTypeId) -> bool {
+        type_id.as_str() == TYPE
+    }
+
+    fn render(&self, _fx: &EvaluatedEffect, frame: &mut CpuFrame) -> Result<(), String> {
+        for (name, pixels) in &frame.layers {
+            self.0.lock().unwrap().push(name.to_string());
+            frame.pixels.clone_from(pixels);
+        }
+        Ok(())
+    }
+}
+
+#[test]
+fn an_external_effect_reads_the_layer_its_clip_parameter_names() {
+    if gpu().is_none() {
+        return;
+    }
+    let mut doc = scene();
+    let comp = doc.main_comp.unwrap();
+    // A blue solid below the orange one, and a definition whose extra
+    // clip reads it.
+    AddSolidLayer {
+        comp,
+        name: None,
+        color: LinearRgba::from_srgb8(20, 60, 200, 255),
+        index: 1,
+    }
+    .apply(&mut doc)
+    .unwrap();
+    let layers = doc.main().unwrap().layers.clone();
+    let (a, b) = (&layers[0], &layers[1]);
+    if let voxy_core::LayerKind::Solid { size, .. } = &b.kind {
+        for (prop, v) in [
+            (size.id, Value::Vec2(DVec2::splat(4.0))),
+            (b.transform.anchor.id, Value::Vec2(DVec2::ZERO)),
+            (b.transform.position.id, Value::Vec2(DVec2::ZERO)),
+        ] {
+            SetProperty {
+                prop,
+                time: Time::ZERO,
+                value: v,
+            }
+            .apply(&mut doc)
+            .unwrap();
+        }
+    }
+    let tid = EffectTypeId::new(TYPE);
+    let mut with_clip = def();
+    with_clip.params = Arc::new([voxy_core::registry::EffectParamDef {
+        name: "voxy.clip.SourceTo".into(),
+        desc: Arc::new(voxy_core::PropertyDesc {
+            key: tid.param_key("voxy.clip.SourceTo").into(),
+            label: "Transition To".into(),
+            kind: voxy_core::ValueKind::Layer,
+            default: Value::Layer(None),
+            range: None,
+            soft_range: None,
+            unit: voxy_core::Unit::None,
+            animatable: true,
+            spatial: false,
+        }),
+        choices: None,
+        group: None,
+        gizmo: None,
+        hint: None,
+        flags: voxy_core::registry::ParamFlags::default(),
+    }]);
+    voxy_core::command::RemoveEffects {
+        layer: a.id,
+        ids: vec![a.effects[0].id],
+    }
+    .apply(&mut doc)
+    .unwrap();
+    AddEffect {
+        layer: a.id,
+        index: None,
+        def: Arc::new(with_clip),
+    }
+    .apply(&mut doc)
+    .unwrap();
+    let fx = doc.find_layer(a.id).unwrap().1.effects[0].clone();
+    SetProperty {
+        prop: fx.param("voxy.clip.SourceTo").unwrap().id,
+        time: Time::ZERO,
+        value: Value::Layer(Some(b.id)),
+    }
+    .apply(&mut doc)
+    .unwrap();
+
+    let copy = Arc::new(CopyB::default());
+    let (img, report) = render(&doc, Some(copy.clone() as Arc<dyn ExternalEffects>));
+    assert_eq!(report.external_errors, vec![]);
+    assert_eq!(*copy.0.lock().unwrap(), vec!["voxy.clip.SourceTo"]);
+    assert!(close(px(&img), [20, 60, 200, 255]), "{:?}", px(&img));
+}

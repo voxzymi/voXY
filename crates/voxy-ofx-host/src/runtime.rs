@@ -12,10 +12,10 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use voxy_core::external::{CpuFrame, ExternalEffects, Region};
+use voxy_core::external::{AUTO_PARAM, CLIP_PARAM_PREFIX, CpuFrame, ExternalEffects, Region};
 use voxy_core::glam::DVec2;
 use voxy_core::registry::EffectDef;
-use voxy_core::{EffectId, EffectTypeId, EvaluatedEffect};
+use voxy_core::{EffectId, EffectTypeId, EvaluatedEffect, Value};
 
 use crate::cache::{BinaryKey, DescribeCache};
 use crate::client::{Blocked, Blocklist, Sandbox, SandboxError, Timeouts};
@@ -23,7 +23,8 @@ use crate::discovery::{Arch, Os, bundle_binaries};
 use crate::effect::Project;
 use crate::image::{Components, Depth, Image, Premult, RectI};
 use crate::mapping::{effect_def, mapped_context, to_param_value, type_id};
-use crate::params::ParamKind;
+use crate::params::{ParamKind, ParamValue};
+use crate::props::ofx_str;
 use crate::protocol::{ImageSlot, ParamSnapshot, PluginDesc, Reply, Request};
 use crate::shm::{HEADER, SessionDir, Slots};
 
@@ -36,20 +37,36 @@ struct PluginEntry {
     identifier: String,
     /// The OpenFX context the effect runs in.
     context: String,
-    /// Whether that context has a `Source` clip (not a generator).
-    has_source: bool,
+    /// The clip the effect's input goes to (`Source`, or a transition's
+    /// `SourceFrom`); none for a generator.
+    main: Option<String>,
+    /// The other input clips, each fed by the layer-reference parameter
+    /// `voxy.clip.<name>` (a transition's `SourceTo`).
+    extra: Vec<String>,
+    /// A transition: its `Transition` parameter follows Auto.
+    transition: bool,
     /// Each parameter's OpenFX type, by name.
     kinds: HashMap<String, ParamKind>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct Live {
     bundle_index: usize,
     instance: u32,
     /// The layer size the instance's project was created with.
     layer_size: DVec2,
-    source: (Depth, Components),
-    output: (Depth, Components),
+    /// Each clip's preferred depth and components (from
+    /// `GetClipPreferences`); float RGBA when it gave none.
+    clips: HashMap<String, (Depth, Components)>,
+}
+
+impl Live {
+    fn format(&self, clip: &str) -> (Depth, Components) {
+        self.clips
+            .get(clip)
+            .copied()
+            .unwrap_or((Depth::Float, Components::Rgba))
+    }
 }
 
 #[derive(Debug)]
@@ -256,11 +273,25 @@ impl OfxRuntime {
 
 fn entry(bundle: &Path, p: &PluginDesc) -> PluginEntry {
     let ctx = mapped_context(p);
+    let clips: Vec<String> = ctx
+        .map(|c| c.clips.iter().map(|k| k.name.clone()).collect())
+        .unwrap_or_default();
+    let main = [SOURCE, SOURCE_FROM]
+        .into_iter()
+        .find(|m| clips.iter().any(|c| c == m))
+        .map(str::to_owned);
     PluginEntry {
         bundle: bundle.to_path_buf(),
         identifier: p.identifier.clone(),
         context: ctx.map(|c| c.context.clone()).unwrap_or_default(),
-        has_source: ctx.is_some_and(|c| c.clips.iter().any(|k| k.name == SOURCE)),
+        extra: clips
+            .iter()
+            .filter(|c| Some(*c) != main.as_ref() && *c != OUTPUT)
+            .cloned()
+            .collect(),
+        main,
+        transition: ctx
+            .is_some_and(|c| c.context == ofx_str(voxy_ofx_sys::kOfxImageEffectContextTransition)),
         kinds: ctx
             .map(|c| c.params.iter().map(|d| (d.name.clone(), d.kind)).collect())
             .unwrap_or_default(),
@@ -269,6 +300,11 @@ fn entry(bundle: &Path, p: &PluginDesc) -> PluginEntry {
 
 /// The filter context's input clip.
 const SOURCE: &str = "Source";
+/// The transition context's input clip.
+const SOURCE_FROM: &str = "SourceFrom";
+const OUTPUT: &str = "Output";
+/// The transition context's progress parameter.
+const TRANSITION: &str = "Transition";
 
 impl Inner {
     fn bundle_index(&mut self, bundle: &Path) -> usize {
@@ -310,13 +346,20 @@ impl Inner {
     }
 
     fn snapshot(entry: &PluginEntry, fx: &EvaluatedEffect) -> Vec<ParamSnapshot> {
+        // A transition on Auto runs over the layer's duration (design §5).
+        let auto = entry.transition && fx.param(AUTO_PARAM) == Some(&Value::Bool(true));
         fx.params
             .iter()
             .filter_map(|(name, v)| {
                 let kind = entry.kinds.get(&**name)?;
+                let value = if auto && &**name == TRANSITION {
+                    ParamValue::Doubles(vec![fx.layer_progress])
+                } else {
+                    to_param_value(*kind, v)?
+                };
                 Some(ParamSnapshot {
                     name: name.to_string(),
-                    value: to_param_value(*kind, v)?,
+                    value,
                     keys: Vec::new(),
                 })
             })
@@ -362,7 +405,7 @@ impl Inner {
             .sandboxes
             .get(&index)
             .is_some_and(|s| s.dead().is_none());
-        match self.instances.get(&fx.id).copied() {
+        match self.instances.get(&fx.id).cloned() {
             Some(l) if l.bundle_index == index && alive && l.layer_size == layer_size => {
                 return Ok(Ok(l));
             }
@@ -397,27 +440,19 @@ impl Inner {
             other => return Ok(Err(format!("unexpected reply {other:?}"))),
         }
         let prefs = sb.request(Request::ClipPreferences { instance })?;
-        let (mut source, mut output) = (
-            (Depth::Float, Components::Rgba),
-            (Depth::Float, Components::Rgba),
-        );
-        if let Reply::ClipPreferences { clips, .. } = prefs {
-            for (name, d, c) in clips {
-                match name.as_str() {
-                    SOURCE => source = (d, c),
-                    "Output" => output = (d, c),
-                    _ => {}
-                }
+        let clips = match prefs {
+            Reply::ClipPreferences { clips, .. } => {
+                clips.into_iter().map(|(n, d, c)| (n, (d, c))).collect()
             }
-        }
+            _ => HashMap::new(),
+        };
         let l = Live {
             bundle_index: index,
             instance,
             layer_size,
-            source,
-            output,
+            clips,
         };
-        self.instances.insert(fx.id, l);
+        self.instances.insert(fx.id, l.clone());
         Ok(Ok(l))
     }
 
@@ -452,12 +487,15 @@ impl Inner {
                 Ok(l) => l,
                 Err(e) => return Ok(Err(e)),
             };
+            // Every input (the layer, and the layers its extra clips read)
+            // covers the same region.
             let h = layer_size.y;
-            let inputs = if entry.has_source {
-                vec![(SOURCE.to_owned(), canonical(input, h))]
-            } else {
-                Vec::new()
-            };
+            let inputs = entry
+                .main
+                .iter()
+                .chain(&entry.extra)
+                .map(|c| (c.clone(), canonical(input, h)))
+                .collect();
             Ok(
                 match this.sandbox(index)?.request(Request::RegionOfDefinition {
                     instance: live.instance,
@@ -508,56 +546,77 @@ impl Inner {
         let scale = [s, s];
         let image_len =
             |d: (Depth, Components)| w as usize * h as usize * d.1.count() * d.0.bytes();
-        let source_len = if entry.has_source {
-            image_len(live.source)
-        } else {
-            0
-        };
-        let need = HEADER + source_len + image_len(live.output) + 2 * crate::shm::ALIGN;
+        // The input clips and their images (rows top-down): the effect's
+        // input, then each extra clip's layer, or transparency when its
+        // parameter names no active layer.
+        let transparent;
+        let mut sources: Vec<(&str, &[f32])> = Vec::new();
+        if let Some(m) = &entry.main {
+            sources.push((m, &frame.pixels));
+        }
+        if !entry.extra.is_empty() {
+            transparent = vec![0.0f32; frame.pixels.len()];
+            for clip in &entry.extra {
+                let pixels = layer_pixels(frame, clip).unwrap_or(&transparent);
+                sources.push((clip, pixels));
+            }
+        }
+        let need = HEADER
+            + sources
+                .iter()
+                .map(|(c, _)| image_len(live.format(c)) + crate::shm::ALIGN)
+                .sum::<usize>()
+            + image_len(live.format(OUTPUT))
+            + crate::shm::ALIGN;
         let dir = self.session.path().to_path_buf();
         let sb = self.sandbox(index)?;
         sb.ensure_mapping(&dir, need)?;
-        // An identity skips Render: the input passes through. An identity
-        // on another clip or time needs images the editor does not send
-        // yet, so the plugin renders instead.
-        if entry.has_source
+        // An identity skips Render: an input passes through. An identity at
+        // another time needs images the editor does not send yet, so the
+        // plugin renders instead.
+        if !sources.is_empty()
             && let Reply::Identity(Some((clip, at))) = sb.request(Request::IsIdentity {
                 instance: live.instance,
                 time,
                 window,
                 scale,
             })?
-            && clip == SOURCE
             && at == time
+            && let Some((_, pixels)) = sources.iter().find(|(c, _)| *c == clip)
         {
+            let pixels = pixels.to_vec();
+            frame.pixels = pixels;
             return Ok(Ok(()));
         }
         let mut slots = Slots::new(sb.shm.len());
-        let (Some(src), Some(dst)) = (slots.take(source_len), slots.take(image_len(live.output)))
-        else {
-            return Ok(Err("the image does not fit the shared memory".into()));
-        };
         let mut inputs = Vec::new();
-        if entry.has_source {
-            let bottom_up = flip_rows(&frame.pixels, w, h);
-            let input = Image::from_rgba(
+        for (clip, pixels) in &sources {
+            let format = live.format(clip);
+            let Some(at) = slots.take(image_len(format)) else {
+                return Ok(Err("the image does not fit the shared memory".into()));
+            };
+            let image = Image::from_rgba(
                 bounds,
-                &bottom_up,
-                live.source.0,
-                live.source.1,
+                &flip_rows(pixels, w, h),
+                format.0,
+                format.1,
                 Premult::Premultiplied,
             )
             .ok_or_else(|| SandboxError::Protocol("bad input image".into()))?;
-            sb.shm.write_from(src, &input.raw());
-            inputs.push((SOURCE.into(), slot_for(src, bounds, live.source)));
+            sb.shm.write_from(at, &image.raw());
+            inputs.push(((*clip).to_owned(), slot_for(at, bounds, format)));
         }
+        let output = live.format(OUTPUT);
+        let Some(dst) = slots.take(image_len(output)) else {
+            return Ok(Err("the image does not fit the shared memory".into()));
+        };
         let reply = sb.request(Request::Render {
             instance: live.instance,
             time,
             window,
             scale,
             inputs,
-            output: slot_for(dst, bounds, live.output),
+            output: slot_for(dst, bounds, output),
         })?;
         match reply {
             Reply::Done { .. } => {}
@@ -566,19 +625,23 @@ impl Inner {
             }
             other => return Ok(Err(format!("unexpected reply {other:?}"))),
         }
-        let mut bytes = vec![0u8; image_len(live.output)];
+        let mut bytes = vec![0u8; image_len(output)];
         sb.shm.read_into(dst, &mut bytes);
-        let out = Image::from_raw(
-            bounds,
-            live.output.0,
-            live.output.1,
-            Premult::Premultiplied,
-            &bytes,
-        )
-        .ok_or_else(|| SandboxError::Protocol("bad output image".into()))?;
+        let out = Image::from_raw(bounds, output.0, output.1, Premult::Premultiplied, &bytes)
+            .ok_or_else(|| SandboxError::Protocol("bad output image".into()))?;
         frame.pixels = flip_rows(&out.to_rgba(), w, h);
         Ok(Ok(()))
     }
+}
+
+/// The pixels of the layer feeding `clip`, if its parameter names one.
+fn layer_pixels<'f>(frame: &'f CpuFrame, clip: &str) -> Option<&'f [f32]> {
+    frame
+        .layers
+        .iter()
+        .find(|(n, _)| n.strip_prefix(CLIP_PARAM_PREFIX) == Some(clip))
+        .map(|(_, p)| p.as_slice())
+        .filter(|p| p.len() == frame.pixels.len())
 }
 
 /// The layer's size, or the buffer's in layer pixels when it is unknown.

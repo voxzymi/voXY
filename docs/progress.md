@@ -552,8 +552,14 @@ at `743b053` (merge of #3).
        non-seeded effect's frame number, OpenFX ones included, so plugins
        always rendered at time 0. OpenFX effects now keep the frame (and
        their chains are cached per frame). GPU test added.
-   4. Transition context (`SourceTo` as a layer reference, `Transition` as
-      progress).
+   4. **Done:** transition context. Listed under Transitions; the input is
+      `SourceFrom`; voXY adds Auto (`voxy.auto`, progress from the layer's
+      duration) and Transition To (`voxy.clip.SourceTo`, a layer
+      reference). `CpuFrame::layers` carries referenced layers to the
+      provider (layer-input textures gained `COPY_SRC`). An identity on
+      any input passes it through. New test plugin `org.voxy.test.Fade`.
+      Tests: Auto on/off, identity on `SourceTo`, no B layer, the GPU path
+      delivering the referenced layer, reserved parameter names.
    5. General context (extra clips as layer references).
    6. Parameter values at other times and key times (editor queries).
    7. Push buttons, InstanceChanged, and plugin edits as undoable
@@ -601,6 +607,13 @@ at `743b053` (merge of #3).
   - Q3: Bytes parameters are stored as hidden base64, like Custom, capped
     at 1 MiB per value and validated on load.
   - Q4: no "Get free plugins" for now; revisit after O-C.
+
+- Q-C1 (O-C step 10): the approved BSD-3 samples are built by our own
+  minimal build: an xtask fetches the pinned source tarball (sha256 in
+  `third_party/ofx-fixtures.toml`) and compiles only the needed sources
+  and the Support library with the system C++ compiler. No Conan.
+  OpenGL linked only where a plugin needs it to compile. CI test fixtures
+  only, never uploaded.
 
 ## Open questions waiting on the owner
 

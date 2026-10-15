@@ -6,6 +6,7 @@
 //! and plugin code; the OpenFX host implements it, the renderer calls it.
 
 use std::fmt::Debug;
+use std::sync::Arc;
 
 use glam::DVec2;
 
@@ -29,7 +30,23 @@ pub struct CpuFrame {
     pub space: WorkingSpace,
     /// `width × height × 4` values.
     pub pixels: Vec<f32>,
+    /// The layers the effect reads (an OpenFX transition's `SourceTo`), by
+    /// the name of their layer-reference parameter: same size and
+    /// placement as `pixels`. A reference to no layer, or to one that is
+    /// not active, is left out.
+    pub layers: Vec<(Arc<str>, Vec<f32>)>,
 }
+
+/// Effect parameters added by voXY (not the plugin) start with this.
+pub const RESERVED_PREFIX: &str = "voxy.";
+
+/// The layer-reference parameter feeding an extra OpenFX input clip is
+/// this prefix plus the clip's name.
+pub const CLIP_PARAM_PREFIX: &str = "voxy.clip.";
+
+/// An OpenFX transition's Auto switch (design §5): progress follows the
+/// layer's time instead of the plugin's `Transition` parameter.
+pub const AUTO_PARAM: &str = "voxy.auto";
 
 /// A rectangle in layer pixels (y down), `min` inclusive, `max` exclusive.
 #[derive(Debug, Clone, Copy, PartialEq)]

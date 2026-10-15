@@ -419,7 +419,7 @@ impl Builder<'_> {
         for node in nodes {
             let Some(Value::Layer(Some(id))) = node
                 .kernel
-                .layer_input()
+                .layer_param(&node.effect)
                 .and_then(|name| node.effect.param(name))
             else {
                 continue;

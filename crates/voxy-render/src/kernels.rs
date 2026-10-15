@@ -565,10 +565,27 @@ impl Kernel {
         )
     }
 
+    /// The layer-reference parameter of `fx` naming the layer it reads:
+    /// [`Kernel::layer_input`], or for an OpenFX effect its first extra
+    /// clip's parameter.
+    pub fn layer_param(self, fx: &EvaluatedEffect) -> Option<&str> {
+        match self {
+            Kernel::External => fx
+                .params
+                .iter()
+                .map(|(n, _)| &**n)
+                .find(|n| n.starts_with(voxy_core::external::CLIP_PARAM_PREFIX)),
+            k => k.layer_input(),
+        }
+    }
+
     /// Whether the output of `fx` depends on the layer's progress through
     /// its duration (a transition with Auto on).
     pub fn uses_layer_progress(self, fx: &EvaluatedEffect) -> bool {
-        self.is_transition() && flag(fx, "auto")
+        match self {
+            Kernel::External => flag(fx, voxy_core::external::AUTO_PARAM),
+            k => k.is_transition() && flag(fx, "auto"),
+        }
     }
 
     /// Whether the kernel combines its result with its own input, so the

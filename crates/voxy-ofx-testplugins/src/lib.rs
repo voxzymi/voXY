@@ -10,6 +10,7 @@
 //! - `org.voxy.test.Solid`: a generator that fills its output with `color`.
 //! - `org.voxy.test.Blur`: a box blur with a region of definition and
 //!   interest grown by its radius.
+//! - `org.voxy.test.Fade`: a cross-fade in the transition context.
 
 // A test fixture: a missing suite entry may panic (and abort) loudly.
 #![allow(
@@ -25,9 +26,11 @@ use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 use voxy_ofx_sys as ofx;
 
 mod blur;
+mod fade;
 mod solid;
 
 pub use blur::BLUR;
+pub use fade::FADE;
 pub use solid::SOLID;
 
 static HOST: AtomicPtr<ofx::OfxHost> = AtomicPtr::new(std::ptr::null_mut());
@@ -459,7 +462,7 @@ pub static HANG: StaticPlugin = StaticPlugin(ofx::OfxPlugin {
 });
 
 /// The bundle's plugins, in `OfxGetPlugin` order.
-pub static ALL: [&StaticPlugin; 5] = [&GAIN, &CRASH, &HANG, &SOLID, &BLUR];
+pub static ALL: [&StaticPlugin; 6] = [&GAIN, &CRASH, &HANG, &SOLID, &BLUR, &FADE];
 
 /// The OpenFX export: how many plugins the binary holds.
 #[unsafe(no_mangle)]
