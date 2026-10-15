@@ -18,3 +18,8 @@ toml.workspace = true
 # Same version as ffmpeg-sys-next's build dependency. `runtime` loads
 # libclang only when `cargo xtask bindgen` runs, so builds never need it.
 bindgen = { version = "0.72.1", default-features = false, features = ["runtime"] }
+# `ofx-fixtures`: checksums, the source tarball, and the C++ compiler.
+sha2 = "0.10"
+tar = { version = "0.4", default-features = false }
+flate2 = "1.1"
+cc = "1.2"

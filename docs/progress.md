@@ -620,10 +620,23 @@ at `743b053` (merge of #3).
           blur, the P-0 Q2 trio). Goldens were checked by eye before
           being kept. CI at `8a5423a` (run 38709449721) green on every job
           that finished; macOS arm64 tests were still running.
-       2. **Blocked (10b):** the approved BSD-3 samples (#1 to #11). This
-          session's safety classifier refuses reading or building
-          third-party plugin source ("untrusted code integration"), so
-          the fixture build (Q-C1) waits for the owner's go-ahead.
+       2. **Done (10b, after the owner's go-ahead):** the approved BSD-3
+          samples (#1 to #11). `cargo xtask ofx-fixtures` builds them
+          from `third_party/ofx-fixtures.toml` (pinned tarball; tarball
+          sha256 plus a content hash of the extracted paths, computed from
+          a git checkout of `ab77951`; system C++ compiler via `cc`; one
+          bundle each; per-platform `skip` lists). New xtask dependencies
+          `sha2`, `tar`, `flate2`, `cc` (MIT/Apache-2.0). CI builds them
+          in the runner's temp folder (not cached, not uploaded) and the
+          conformance suite requires them. All 11 build on Linux; all 12
+          plugins describe and map; goldens checked by eye. Two **host
+          bugs** found and fixed: a plugin could change the output depth
+          although the host says it has no multiple clip depths; and
+          parameters with a normalised *default* were sent as normalised
+          values (OpenFX values are always canonical). Two upstream
+          sample bugs noted for the table: DepthConverter addresses
+          source pixels per component when converting, and Rectangle
+          overwrites corner2's default with the colour's.
    11. Compatibility table in `docs/ofx-plugins.md` §5.
 8. O-D.
 

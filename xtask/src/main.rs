@@ -15,8 +15,11 @@
 //! - `credits [--check]`: regenerate the README and LICENSING.md credit
 //!   blocks from `third_party/credits.toml`, or fail if they are stale or
 //!   the data breaks the plugin license policy (used by CI).
+//! - `ofx-fixtures [--out DIR] [--source DIR] [--print-hash]`: build the
+//!   approved OpenFX sample plugins as test fixtures (see `fixtures.rs`).
 
 mod credits;
+mod fixtures;
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -35,11 +38,12 @@ fn main() -> Result<()> {
             args.get(1).is_some_and(|a| a == "--check"),
         ),
         Some("bindgen") => ofx_bindgen(args.get(1).is_some_and(|a| a == "--check")),
+        Some("ofx-fixtures") => fixtures::run(&workspace_root(), &args[1..]),
         Some("am-inspect") => am_inspect(&args[1..]),
         Some("am-diff") if args.len() == 3 => am_diff(Path::new(&args[1]), Path::new(&args[2])),
         _ => {
             eprintln!(
-                "usage:\n  cargo xtask licenses [--check]\n  cargo xtask bindgen [--check]\n  cargo xtask credits [--check]\n  cargo xtask am-inspect FILE... [--out REPORT.md]\n  cargo xtask am-diff A B"
+                "usage:\n  cargo xtask licenses [--check]\n  cargo xtask bindgen [--check]\n  cargo xtask credits [--check]\n  cargo xtask ofx-fixtures [--out DIR] [--source DIR] [--print-hash]\n  cargo xtask am-inspect FILE... [--out REPORT.md]\n  cargo xtask am-diff A B"
             );
             std::process::exit(2);
         }

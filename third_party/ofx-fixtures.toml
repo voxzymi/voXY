@@ -1,0 +1,121 @@
+# OpenFX test fixtures built in CI (owner decisions P-0 Q1 and Q-C1).
+#
+# `cargo xtask ofx-fixtures` downloads the pinned OpenFX source tarball,
+# checks it, extracts only `paths`, and builds each fixture below with the
+# platform's C++ compiler into `<out>/bundles/<bundle>.ofx.bundle`. The
+# conformance suite (`voxy-ofx-sandbox/tests/conformance.rs`) loads them
+# from the folder named by `VOXY_OFX_FIXTURES`.
+#
+# Test fixtures only: never shipped, never uploaded as artifacts. Every
+# fixture must be an approved "fixture" entry in credits.toml (checked by
+# `cargo xtask credits --check`). No GPL code, anywhere.
+#
+# Checks:
+#   sha256          the downloaded tarball itself
+#   content_sha256  the extracted files under `paths` (sorted by path; for
+#                   each: path, NUL, length as 8 little-endian bytes,
+#                   bytes). Computed from a git checkout of `commit`, so
+#                   it holds whatever way the files were obtained.
+#
+# A fixture that cannot build cleanly on a platform lists that platform in
+# `skip` ("linux", "windows", "macos"), and the reason goes into the
+# compatibility table in docs/ofx-plugins.md §5.
+
+schema = 1
+
+[source]
+url = "https://codeload.github.com/AcademySoftwareFoundation/openfx/tar.gz/ab779510b2655b4d11a7e01e5c521f9aa8c88976"
+commit = "ab779510b2655b4d11a7e01e5c521f9aa8c88976"
+sha256 = ""
+content_sha256 = "1a496014591228fe9e12b277e61ed6cc89c91215bfea71955aef2a96696f47b7"
+paths = [
+    "LICENSE.md",
+    "include",
+    "Examples/include",
+    "Examples/Invert",
+    "Examples/Basic",
+    "Examples/Rectangle",
+    "Examples/ChoiceParams",
+    "Examples/DepthConverter",
+    "Examples/Test",
+    "Support/LICENSE",
+    "Support/include",
+    "Support/Library",
+    "Support/Plugins/include",
+    "Support/Plugins/Invert",
+    "Support/Plugins/Generator",
+    "Support/Plugins/Transition",
+    "Support/Plugins/Tester",
+    "Support/Plugins/MultiBundle",
+]
+
+# Fields: `bundle` (output name), `credit` (credits.toml id), `sources`
+# (.cpp files), `support` (also compile the C++ Support library), `opengl`
+# (link the system OpenGL library; the plugin only draws overlays, which
+# voXY never asks for), `skip` (platforms where it does not build).
+
+[[fixture]]
+bundle = "OfxExampleInvert"
+credit = "openfx-examples"
+sources = ["Examples/Invert/invert.cpp"]
+
+[[fixture]]
+bundle = "OfxExampleBasic"
+credit = "openfx-examples"
+sources = ["Examples/Basic/basic.cpp"]
+
+[[fixture]]
+bundle = "OfxExampleRectangle"
+credit = "openfx-examples"
+sources = ["Examples/Rectangle/rectangle.cpp"]
+
+[[fixture]]
+bundle = "OfxExampleChoiceParams"
+credit = "openfx-examples"
+sources = ["Examples/ChoiceParams/choiceparams.cpp"]
+
+[[fixture]]
+bundle = "OfxExampleDepthConverter"
+credit = "openfx-examples"
+sources = ["Examples/DepthConverter/depthConverter.cpp"]
+
+[[fixture]]
+bundle = "OfxExampleTest"
+credit = "openfx-examples"
+sources = ["Examples/Test/testProperties.cpp", "Examples/Test/ofxLog.cpp"]
+
+[[fixture]]
+bundle = "OfxSupportInvert"
+credit = "openfx-support-plugins"
+sources = ["Support/Plugins/Invert/invert.cpp"]
+support = true
+
+[[fixture]]
+bundle = "OfxSupportNoise"
+credit = "openfx-support-plugins"
+sources = ["Support/Plugins/Generator/noise.cpp"]
+support = true
+
+[[fixture]]
+bundle = "OfxSupportCrossFade"
+credit = "openfx-support-plugins"
+sources = ["Support/Plugins/Transition/crossFade.cpp"]
+support = true
+
+[[fixture]]
+bundle = "OfxSupportTester"
+credit = "openfx-support-plugins"
+sources = ["Support/Plugins/Tester/Tester.cpp"]
+support = true
+opengl = true
+
+[[fixture]]
+bundle = "OfxSupportMultiBundle"
+credit = "openfx-support-plugins"
+sources = [
+    "Support/Plugins/MultiBundle/multibundle1.cpp",
+    "Support/Plugins/MultiBundle/multibundle2.cpp",
+    "Support/Plugins/MultiBundle/PluginRegistration.cpp",
+]
+support = true
+opengl = true

@@ -56,7 +56,7 @@ jobs:
             mesa-vulkan-drivers libvulkan1 libxkbcommon-x11-0 libwayland-client0 \
             pkg-config clang libavcodec-dev libavformat-dev libavutil-dev \
             libswscale-dev libswresample-dev libavfilter-dev libavdevice-dev \
-            libasound2-dev
+            libasound2-dev libgl-dev
       - name: Install FFmpeg (macOS)
         if: runner.os == 'macOS'
         run: brew install ffmpeg pkg-config
@@ -88,9 +88,16 @@ jobs:
           (Join-Path $dir "bin") | Out-File -FilePath $env:GITHUB_PATH -Append
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked
+      # The approved BSD-3 OpenFX samples (docs/ofx-plugins.md), built from
+      # the pinned, checksummed source as test fixtures only. They live in
+      # the runner's temp folder: never cached, never uploaded.
+      - name: Build OpenFX sample fixtures
+        run: cargo xtask ofx-fixtures --out "${{ runner.temp }}/ofx-fixtures"
       - name: Test
         run: cargo test --workspace --locked --no-fail-fast
         env:
+          VOXY_OFX_FIXTURES: ${{ runner.temp }}/ofx-fixtures
+          VOXY_REQUIRE_OFX_FIXTURES: '1'
           # Linux always has lavapipe, so golden tests must run there; on
           # hosted Windows/macOS runners they run when an adapter exists.
           VOXY_REQUIRE_GPU: ${{ runner.os == 'Linux' && '1' || '' }}

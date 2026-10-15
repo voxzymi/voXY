@@ -87,7 +87,9 @@ Checked against OpenFX 1.5.1, "Packaging OFX Plug-ins".
 - Contexts: filter, generator, transition and general. Pixel depths: float, short, byte (float preferred). Components:
   RGBA, RGB, Alpha.
 - Multi-resolution, tiles and temporal clip access: yes. Overlays: no
-  (interacts arrive in O-D). Multiple clip depths or pixel aspects,
+  (interacts arrive in O-D). Multiple clip depths or pixel aspects
+  (so a plugin's request for another output depth is ignored, as the
+  spec requires: every clip gets one depth; fixed in O-C step 10b),
   settable frame rate or fielding: no. Draft quality: yes.
 - Native origin: bottom-left, as OpenFX images are.
 - No GPU render (`OfxImageEffectPropOpenGLRenderSupported` is `"false"`,
@@ -212,6 +214,9 @@ answers `Hello` with its protocol version and process ID, maps the shared
 memory it is sent, and serves requests until `Unload` or until the channel
 closes (then it unloads everything and exits 0).
 
+- It runs in the editor session's private folder (O-C), so files a plugin
+  writes to its working directory stay out of the editor's and go when
+  the session ends.
 - The binary is the bundle's `Contents/<arch>/NAME.ofx`, or a path to a
   binary. Plugins that fail Load or Describe are listed in the
   description's `failed` with the reason; the rest still work.
@@ -260,7 +265,7 @@ category: its grouping (or "OpenFX"); description: its description.
 
 | OFX parameter | voXY |
 |---|---|
-| Double, 2D, 3D | `Scalar`, `Vec2`, `Vec3`. Unit by double type: angle → degrees, scale → factor, X/Y types → pixels, normalised coordinates → normalised (sent as is), others none. |
+| Double, 2D, 3D | `Scalar`, `Vec2`, `Vec3`. Unit by double type: angle → degrees, scale → factor, X/Y types → pixels, normalised default coordinates → normalised: voXY keeps the value as a fraction of the layer, and the plugin gets canonical values (× layer width and/or height, and back for its own edits), since OpenFX normalises only the default (fixed in O-C step 10b); others none. |
 | Integer, 2D, 3D | `Int`, or `Vec2`/`Vec3` shown as integers |
 | Boolean | `Bool` |
 | Choice | `Enum` with the option labels; a default past the options becomes 0 |
@@ -393,8 +398,19 @@ registry validation of each definition, rendering a fixed pattern
 against PNG goldens in `tests/golden/ofx/` (±1 per 8-bit channel;
 `VOXY_UPDATE_GOLDEN=1` rewrites them), exact identities, and the same
 result twice (also from a fresh instance). The fixtures are voXY's own
-test plugins; the approved BSD-3 OpenFX samples join when their build
-lands.
+test plugins and the approved BSD-3 OpenFX samples.
+
+The samples are built by `cargo xtask ofx-fixtures` from
+`third_party/ofx-fixtures.toml`: the pinned OpenFX tarball is downloaded,
+its sha256 and the content hash of the extracted paths are checked, and
+each sample is compiled with the platform's C++ compiler (found as build
+scripts find it) into its own `.ofx.bundle`. CI builds them in the
+runner's temp folder (never cached or uploaded) and runs the suite with
+`VOXY_OFX_FIXTURES` and `VOXY_REQUIRE_OFX_FIXTURES=1`; locally the sample
+part is skipped without them. Noise has no golden (its random numbers
+come from the C++ standard library, which differs by platform); the
+property tester only has to render; the tester's push buttons are
+pressed.
 
 ## Messages in the editor (O-B)
 

@@ -161,11 +161,17 @@ impl Sandbox {
         let launch = |e: &dyn std::fmt::Display| SandboxError::Launch(e.to_string());
         let spec = channel::spec(session.path(), id);
         let listener = channel::listen(&spec).map_err(|e| launch(&e))?;
-        let mut child = Command::new(exe)
+        // The sandbox runs in the private session folder, so files a plugin
+        // writes to its working directory (logs) stay out of the editor's;
+        // paths are made absolute first.
+        let exe = std::path::absolute(exe).map_err(|e| launch(&e))?;
+        let bundle = std::path::absolute(bundle).map_err(|e| launch(&e))?;
+        let mut child = Command::new(&exe)
             .arg("--bundle")
-            .arg(bundle)
+            .arg(&bundle)
             .arg("--channel")
             .arg(&spec)
+            .current_dir(session.path())
             .stdin(Stdio::null())
             .spawn()
             .map_err(|e| launch(&e))?;

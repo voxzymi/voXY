@@ -3,7 +3,10 @@
 //! detection, and determinism, all through the real sandbox.
 //!
 //! Fixtures are our own test plugins (the blur, transform and keyer stand
-//! in for the third-party ones the owner ruled out, P-0 Q2). Goldens are
+//! in for the third-party ones the owner ruled out, P-0 Q2) and, when
+//! `VOXY_OFX_FIXTURES` names the folder `cargo xtask ofx-fixtures` built,
+//! the approved OpenFX samples (P-0 Q1). CI sets it, with
+//! `VOXY_REQUIRE_OFX_FIXTURES=1` so a missing folder fails. Goldens are
 //! PNGs in `tests/golden/ofx/`, the output clamped to 0..1 and stored as
 //! 8 bits; `VOXY_UPDATE_GOLDEN=1` rewrites them. Each case renders a fixed
 //! 32×24 pattern; a layer input sees a second pattern.
@@ -28,14 +31,28 @@ const H: u32 = 24;
 /// The largest difference allowed per 8-bit channel.
 const TOLERANCE: u8 = 1;
 
+/// What a case checks, beyond rendering without an error twice with the
+/// same result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Check {
+    /// Matches its golden and changes the input.
+    Golden,
+    /// The output is exactly the input (an identity, or a pass-through).
+    Unchanged,
+    /// Changes the input; no golden (the result depends on the platform's
+    /// C++ library, such as random numbers).
+    Changes,
+    /// Only renders (a diagnostic plugin).
+    Renders,
+}
+
 /// One render of one plugin.
 struct Case {
     plugin: &'static str,
     name: &'static str,
     /// Values other than the defaults.
     params: Vec<(&'static str, Value)>,
-    /// The plugin must report an identity: the output is the input.
-    identity: bool,
+    check: Check,
 }
 
 fn case(plugin: &'static str, name: &'static str, params: Vec<(&'static str, Value)>) -> Case {
@@ -43,13 +60,13 @@ fn case(plugin: &'static str, name: &'static str, params: Vec<(&'static str, Val
         plugin,
         name,
         params,
-        identity: false,
+        check: Check::Golden,
     }
 }
 
 fn identity(plugin: &'static str, params: Vec<(&'static str, Value)>) -> Case {
     Case {
-        identity: true,
+        check: Check::Unchanged,
         ..case(plugin, "identity", params)
     }
 }
@@ -85,6 +102,106 @@ fn cases() -> Vec<Case> {
             vec![("Transition", s(0.5)), ("voxy.auto", Value::Bool(false))],
         ),
         case("org.voxy.test.Matte", "matte", vec![]),
+    ]
+}
+
+/// The approved OpenFX samples (docs/ofx-plugins.md #1 to #11), by the
+/// bundle `cargo xtask ofx-fixtures` builds them into.
+fn sample_cases() -> Vec<(&'static str, Case)> {
+    let s = Value::Scalar;
+    let off = Value::Bool(false);
+    let with = |c: Case, check| Case { check, ..c };
+    vec![
+        (
+            "OfxExampleInvert",
+            case("uk.co.thefoundry.OfxInvertExample", "default", vec![]),
+        ),
+        (
+            "OfxExampleBasic",
+            case(
+                "uk.co.thefoundry.BasicGainPlugin",
+                "scale-2",
+                vec![("scale", s(2.0))],
+            ),
+        ),
+        (
+            "OfxExampleBasic",
+            identity("uk.co.thefoundry.BasicGainPlugin", vec![]),
+        ),
+        (
+            "OfxExampleRectangle",
+            case(
+                "uk.co.thefoundry.GeneratorExample",
+                "red",
+                vec![("colour", Value::Color(LinearRgba::new(1.0, 0.0, 0.0, 1.0)))],
+            ),
+        ),
+        (
+            "OfxExampleChoiceParams",
+            case("org.openfx.ChoiceParamPlugin", "default", vec![]),
+        ),
+        // voXY has no multiple clip depths, so every depth is the input's
+        // and the converter passes the image through.
+        (
+            "OfxExampleDepthConverter",
+            with(
+                case(
+                    "uk.co.thefoundry.DepthConverterExample",
+                    "same-depth",
+                    vec![],
+                ),
+                Check::Unchanged,
+            ),
+        ),
+        (
+            "OfxExampleTest",
+            with(
+                case("net.sf.openfx:PropertyTestPlugin", "renders", vec![]),
+                Check::Renders,
+            ),
+        ),
+        (
+            "OfxSupportInvert",
+            case("net.sf.openfx.invertPlugin", "default", vec![]),
+        ),
+        (
+            "OfxSupportNoise",
+            with(
+                case("net.sf.openfx.noisePlugin", "default", vec![]),
+                Check::Changes,
+            ),
+        ),
+        (
+            "OfxSupportCrossFade",
+            case(
+                "net.sf.openfx.crossFade",
+                "half",
+                vec![("Transition", s(0.5)), ("voxy.auto", off.clone())],
+            ),
+        ),
+        (
+            "OfxSupportCrossFade",
+            identity(
+                "net.sf.openfx.crossFade",
+                vec![("Transition", s(0.0)), ("voxy.auto", off)],
+            ),
+        ),
+        (
+            "OfxSupportTester",
+            case("net.sf.openfx.GenericTestPlugin", "default", vec![]),
+        ),
+        (
+            "OfxSupportMultiBundle",
+            case("net.sf.openfx.dotexample", "default", vec![]),
+        ),
+        (
+            "OfxSupportMultiBundle",
+            case(
+                "net.sf.openfx.gammaexample",
+                "scale-2",
+                vec![("scale", s(2.0))],
+            ),
+        ),
     ]
 }
 
@@ -164,7 +281,11 @@ fn effect(def: &EffectDef, id: u64, overrides: &[(&str, Value)]) -> EvaluatedEff
 }
 
 fn golden_path(plugin: &str, name: &str) -> PathBuf {
-    let short = plugin.rsplit('.').next().unwrap().to_lowercase();
+    let short = if plugin.starts_with("org.voxy.test.") {
+        plugin.rsplit('.').next().unwrap().to_lowercase()
+    } else {
+        format!("sample-{}", plugin.replace([':', '.'], "-").to_lowercase())
+    };
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/golden/ofx")
         .join(format!("{short}-{name}.png"))
@@ -208,28 +329,19 @@ fn check_golden(plugin: &str, name: &str, pixels: &[f32]) -> Option<String> {
     (worst > TOLERANCE).then(|| format!("{plugin} {name}: differs from its golden by {worst}"))
 }
 
-#[test]
-fn every_fixture_plugin_conforms() {
-    let tmp = tempfile::tempdir().unwrap();
-    let bundle = common::bundle(tmp.path());
-    let rt = OfxRuntime::new(Path::new(EXE), tmp.path(), Timeouts::default()).unwrap();
-    let scan = rt.scan(std::slice::from_ref(&bundle));
-
-    // Describe and mapping: every plugin maps, and its definition passes
-    // the registry's validation (defaults fit kinds, ranges, keys).
-    assert_eq!(scan.problems, vec![], "nothing failed to describe or map");
-    let mut reg = EffectRegistry::with_builtins();
-    for def in &scan.definitions {
-        assert!(def.type_id.is_ofx());
-        reg.register(def.clone())
-            .unwrap_or_else(|e| panic!("{}: {e}", def.name));
-    }
-
+/// Runs `cases` against `rt` (whose plugins are registered in `reg`) and
+/// returns the failures.
+fn run_cases<'a>(
+    rt: &OfxRuntime,
+    reg: &EffectRegistry,
+    cases: impl IntoIterator<Item = &'a Case>,
+) -> Vec<String> {
     let mut failures = Vec::new();
-    for (i, c) in cases().iter().enumerate() {
-        let def = reg
-            .latest(&plugin_type(c.plugin))
-            .unwrap_or_else(|| panic!("{} is not installed", c.plugin));
+    for (i, c) in cases.into_iter().enumerate() {
+        let Some(def) = reg.latest(&plugin_type(c.plugin)) else {
+            failures.push(format!("{}: not installed", c.plugin));
+            continue;
+        };
         let fx = effect(def, i as u64 + 1, &c.params);
         let mut f = frame(def);
         if let Err(e) = rt.render(&fx, &mut f) {
@@ -243,15 +355,94 @@ fn every_fixture_plugin_conforms() {
         if again.pixels != f.pixels {
             failures.push(format!("{} {}: not deterministic", c.plugin, c.name));
         }
-        if c.identity {
-            if f.pixels != pattern(false) {
-                failures.push(format!("{} {}: not an identity", c.plugin, c.name));
+        let unchanged = f.pixels == pattern(false);
+        match c.check {
+            Check::Unchanged if !unchanged => {
+                failures.push(format!("{} {}: changed the input", c.plugin, c.name));
             }
-        } else {
-            if f.pixels == pattern(false) {
+            Check::Golden | Check::Changes if unchanged => {
                 failures.push(format!("{} {}: left the input as it was", c.plugin, c.name));
             }
-            failures.extend(check_golden(c.plugin, c.name, &f.pixels));
+            Check::Golden => failures.extend(check_golden(c.plugin, c.name, &f.pixels)),
+            _ => {}
+        }
+    }
+    failures
+}
+
+/// Scans `bundles`: nothing may fail to describe or map, and every
+/// definition passes the registry's validation.
+fn scan_all(rt: &OfxRuntime, bundles: &[PathBuf]) -> EffectRegistry {
+    let scan = rt.scan(bundles);
+    assert_eq!(scan.problems, vec![], "nothing failed to describe or map");
+    let mut reg = EffectRegistry::with_builtins();
+    for def in &scan.definitions {
+        assert!(def.type_id.is_ofx());
+        reg.register(def.clone())
+            .unwrap_or_else(|e| panic!("{}: {e}", def.name));
+    }
+    reg
+}
+
+#[test]
+fn every_fixture_plugin_conforms() {
+    let tmp = tempfile::tempdir().unwrap();
+    let bundle = common::bundle(tmp.path());
+    let rt = OfxRuntime::new(Path::new(EXE), tmp.path(), Timeouts::default()).unwrap();
+    let reg = scan_all(&rt, std::slice::from_ref(&bundle));
+    let failures = run_cases(&rt, &reg, &cases());
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// The approved OpenFX samples, built by `cargo xtask ofx-fixtures`. A
+/// bundle the build skipped on this platform (its `report.txt` says so)
+/// has its cases skipped too.
+#[test]
+fn the_approved_samples_conform() {
+    let Some(dir) = std::env::var_os("VOXY_OFX_FIXTURES").map(PathBuf::from) else {
+        assert!(
+            std::env::var_os("VOXY_REQUIRE_OFX_FIXTURES").is_none(),
+            "VOXY_OFX_FIXTURES is not set"
+        );
+        eprintln!("skipped: set VOXY_OFX_FIXTURES to a `cargo xtask ofx-fixtures` folder");
+        return;
+    };
+    let report = std::fs::read_to_string(dir.join("report.txt")).unwrap();
+    let built: Vec<&str> = report
+        .lines()
+        .filter_map(|l| l.strip_suffix(": built"))
+        .collect();
+    let bundles: Vec<PathBuf> = built
+        .iter()
+        .map(|b| dir.join("bundles").join(format!("{b}.ofx.bundle")))
+        .collect();
+    let tmp = tempfile::tempdir().unwrap();
+    let rt = OfxRuntime::new(Path::new(EXE), tmp.path(), Timeouts::default()).unwrap();
+    let reg = scan_all(&rt, &bundles);
+    let cases: Vec<Case> = sample_cases()
+        .into_iter()
+        .filter(|(b, _)| built.contains(b))
+        .map(|(_, c)| c)
+        .collect();
+    let mut failures = run_cases(&rt, &reg, &cases);
+
+    // The tester's push buttons reach the plugin.
+    if built.contains(&"OfxSupportTester") {
+        let def = reg
+            .latest(&plugin_type("net.sf.openfx.GenericTestPlugin"))
+            .unwrap();
+        let buttons: Vec<&str> = def
+            .params
+            .iter()
+            .filter(|p| p.flags.visibility == voxy_core::registry::ParamVisibility::Button)
+            .map(|p| &*p.name)
+            .collect();
+        assert!(!buttons.is_empty(), "the tester has push buttons");
+        let fx = effect(def, 5000, &[]);
+        for b in buttons {
+            if let Err(e) = rt.instance_changed(&fx, DVec2::new(f64::from(W), f64::from(H)), b) {
+                failures.push(format!("tester button {b}: {e}"));
+            }
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));

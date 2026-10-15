@@ -417,11 +417,11 @@ impl Instance<'_> {
         let mut prefs = HashMap::new();
         for c in &clips {
             let name = &c.name;
-            let d = outs
-                .0
-                .string(&format!("OfxImageClipPropDepth_{name}"), 0)
-                .and_then(|d| Depth::from_ofx(&d))
-                .unwrap_or(depth);
+            // The host does not support multiple clip depths, so a plugin
+            // may not change them (spec: only such a host "will allow the
+            // plugin to explicitly set the output clip's pixel depth");
+            // every clip keeps the depth chosen above.
+            let d = depth;
             let k = outs
                 .0
                 .string(&format!("OfxImageClipPropComponents_{name}"), 0)

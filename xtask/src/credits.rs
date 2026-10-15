@@ -53,12 +53,20 @@ enum Status {
     Proposed,
 }
 
-/// `third_party/ofx-fixtures.toml`: the plugins CI builds as fixtures. It
-/// arrives with the fixture builds; until then there is nothing to check.
+/// `third_party/ofx-fixtures.toml`: the plugins CI builds as fixtures
+/// (read in full by `cargo xtask ofx-fixtures`; here only what the license
+/// policy needs).
 #[derive(Debug, Deserialize)]
 struct Fixtures {
+    source: FixtureSource,
     #[serde(default)]
     fixture: Vec<Fixture>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FixtureSource {
+    commit: String,
+    content_sha256: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -173,14 +181,23 @@ fn check_fixtures(root: &Path, file: &File) -> Result<()> {
         return Ok(());
     };
     let fixtures: Fixtures = toml::from_str(&text).context("third_party/ofx-fixtures.toml")?;
+    if fixtures.source.content_sha256.len() != 64 {
+        bail!("ofx-fixtures.toml: the source needs its content_sha256");
+    }
     for f in &fixtures.fixture {
-        let ok = file
+        let Some(c) = file
             .credit
             .iter()
-            .any(|c| c.id == f.credit && c.usage == Usage::Fixture && c.status == Status::Approved);
-        if !ok {
+            .find(|c| c.id == f.credit && c.usage == Usage::Fixture && c.status == Status::Approved)
+        else {
             bail!(
                 "ofx-fixtures.toml: {} is not an approved fixture in credits.toml",
+                f.credit
+            );
+        };
+        if c.commit != fixtures.source.commit {
+            bail!(
+                "ofx-fixtures.toml: the source commit is not the one credits.toml approves for {}",
                 f.credit
             );
         }

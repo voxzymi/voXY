@@ -45,6 +45,11 @@ struct PluginEntry {
     extra: Vec<String>,
     /// A transition: its `Transition` parameter follows Auto.
     transition: bool,
+    /// Spatial double parameters whose default is in normalised
+    /// coordinates: voXY keeps them normalised (fractions of the layer),
+    /// the plugin sees canonical values (OpenFX: only the default is
+    /// normalised). By name: which axes scale (x, y).
+    normalised: HashMap<String, (bool, bool)>,
     /// Each parameter's OpenFX type, by name.
     kinds: HashMap<String, ParamKind>,
 }
@@ -337,6 +342,72 @@ fn entry(bundle: &Path, p: &PluginDesc) -> PluginEntry {
         kinds: ctx
             .map(|c| c.params.iter().map(|d| (d.name.clone(), d.kind)).collect())
             .unwrap_or_default(),
+        normalised: ctx
+            .map(|c| {
+                c.params
+                    .iter()
+                    .filter_map(|d| Some((d.name.clone(), normalised_axes(&d.props)?)))
+                    .collect()
+            })
+            .unwrap_or_default(),
+    }
+}
+
+/// The axes a parameter's values scale along if its default coordinate
+/// system is normalised, else `None`.
+fn normalised_axes(p: &crate::protocol::PropList) -> Option<(bool, bool)> {
+    use voxy_ofx_sys as ofx;
+    let is = |name: &[u8], v: &[u8]| p.string(ofx_str(name)) == Some(ofx_str(v));
+    if !is(
+        ofx::kOfxParamPropDefaultCoordinateSystem,
+        ofx::kOfxParamCoordinatesNormalised,
+    ) {
+        return None;
+    }
+    let t = |v: &[u8]| is(ofx::kOfxParamPropDoubleType, v);
+    if t(ofx::kOfxParamDoubleTypeX) || t(ofx::kOfxParamDoubleTypeXAbsolute) {
+        Some((true, false))
+    } else if t(ofx::kOfxParamDoubleTypeY) || t(ofx::kOfxParamDoubleTypeYAbsolute) {
+        Some((false, true))
+    } else if t(ofx::kOfxParamDoubleTypeXY) || t(ofx::kOfxParamDoubleTypeXYAbsolute) {
+        Some((true, true))
+    } else {
+        None
+    }
+}
+
+impl PluginEntry {
+    /// A value for the plugin: normalised parameters become canonical for a
+    /// layer of `layer` pixels.
+    fn to_plugin(&self, name: &str, value: ParamValue, layer: DVec2) -> ParamValue {
+        self.scale(name, value, layer, false)
+    }
+
+    /// The inverse of [`PluginEntry::to_plugin`].
+    fn to_voxy(&self, name: &str, value: ParamValue, layer: DVec2) -> ParamValue {
+        self.scale(name, value, layer, true)
+    }
+
+    fn scale(&self, name: &str, value: ParamValue, layer: DVec2, back: bool) -> ParamValue {
+        let (Some(&axes), ParamValue::Doubles(mut comps)) =
+            (self.normalised.get(name), value.clone())
+        else {
+            return value;
+        };
+        // A single X or Y value scales by its axis; 2D values by both.
+        let factors = match axes {
+            (true, false) => [layer.x, layer.x],
+            (false, true) => [layer.y, layer.y],
+            _ => [layer.x, layer.y],
+        };
+        for (c, factor) in comps.iter_mut().zip(factors) {
+            if !back {
+                *c *= factor;
+            } else if factor > 0.0 {
+                *c /= factor;
+            }
+        }
+        ParamValue::Doubles(comps)
     }
 }
 
@@ -387,7 +458,7 @@ impl Inner {
         Ok(self.sandboxes.get_mut(&index).expect("present"))
     }
 
-    fn snapshot(entry: &PluginEntry, fx: &EvaluatedEffect) -> Vec<ParamSnapshot> {
+    fn snapshot(entry: &PluginEntry, fx: &EvaluatedEffect, layer: DVec2) -> Vec<ParamSnapshot> {
         fx.params
             .iter()
             .filter_map(|(name, v)| {
@@ -403,7 +474,7 @@ impl Inner {
                 }
                 Some(ParamSnapshot {
                     name: name.to_string(),
-                    value: to_param_value(*kind, v)?,
+                    value: entry.to_plugin(name, to_param_value(*kind, v)?, layer),
                     keys: fx
                         .timeline
                         .as_ref()
@@ -425,6 +496,7 @@ impl Inner {
         index: usize,
         entry: &PluginEntry,
         fx: &EvaluatedEffect,
+        layer: DVec2,
         req: Request,
     ) -> Result<Reply, SandboxError> {
         let mut answer = |name: &str, frame: f64| {
@@ -432,7 +504,7 @@ impl Inner {
                 return None;
             }
             let v = fx.timeline.as_ref()?.value_at(name, frame)?;
-            to_param_value(*entry.kinds.get(name)?, &v)
+            Some(entry.to_plugin(name, to_param_value(*entry.kinds.get(name)?, &v)?, layer))
         };
         self.sandbox(index)?.request_with(req, &mut answer)
     }
@@ -494,6 +566,7 @@ impl Inner {
             index,
             entry,
             fx,
+            layer_size,
             Request::CreateInstance {
                 instance,
                 plugin: entry.identifier.clone(),
@@ -503,7 +576,7 @@ impl Inner {
                     extent: layer_size.to_array(),
                     ..Project::default()
                 },
-                params: Self::snapshot(entry, fx),
+                params: Self::snapshot(entry, fx, layer_size),
             },
         )? {
             Reply::Done { .. } => {}
@@ -514,7 +587,13 @@ impl Inner {
             }
             other => return Ok(Err(format!("unexpected reply {other:?}"))),
         }
-        let prefs = self.ask(index, entry, fx, Request::ClipPreferences { instance })?;
+        let prefs = self.ask(
+            index,
+            entry,
+            fx,
+            layer_size,
+            Request::ClipPreferences { instance },
+        )?;
         let clips = match prefs {
             Reply::ClipPreferences { clips, .. } => {
                 clips.into_iter().map(|(n, d, c)| (n, (d, c))).collect()
@@ -547,7 +626,7 @@ impl Inner {
         self.sandbox(index)?.request(Request::SetParams {
             instance: live.instance,
             time: fx.frame as f64,
-            params: Self::snapshot(entry, fx),
+            params: Self::snapshot(entry, fx, layer_size),
         })?;
         // An instance joins a running sequence before its first render.
         let mut live = live;
@@ -558,6 +637,7 @@ impl Inner {
                 index,
                 entry,
                 fx,
+                layer_size,
                 Request::Sequence {
                     instance: live.instance,
                     begin: true,
@@ -598,6 +678,7 @@ impl Inner {
                     index,
                     entry,
                     fx,
+                    layer_size,
                     Request::RegionOfDefinition {
                         instance: live.instance,
                         time: fx.frame as f64,
@@ -635,6 +716,7 @@ impl Inner {
                 index,
                 entry,
                 fx,
+                size,
                 Request::InstanceChanged {
                     instance: live.instance,
                     param: param.to_owned(),
@@ -645,7 +727,7 @@ impl Inner {
                 Reply::Done { messages, edits } => Ok(InstanceChange {
                     changes: edits
                         .into_iter()
-                        .filter_map(|e| plugin_change(entry, e))
+                        .filter_map(|e| plugin_change(entry, e, size))
                         .collect(),
                     messages,
                 }),
@@ -721,6 +803,7 @@ impl Inner {
                 index,
                 entry,
                 fx,
+                layer_size,
                 Request::IsIdentity {
                     instance: live.instance,
                     time,
@@ -762,6 +845,7 @@ impl Inner {
             index,
             entry,
             fx,
+            layer_size,
             Request::Render {
                 instance: live.instance,
                 time,
@@ -789,11 +873,16 @@ impl Inner {
 
 /// A plugin's edit as a voXY change; `None` for a parameter it does not
 /// have or a value that does not fit.
-fn plugin_change(entry: &PluginEntry, e: crate::protocol::ParamEdit) -> Option<PluginChange> {
+fn plugin_change(
+    entry: &PluginEntry,
+    e: crate::protocol::ParamEdit,
+    layer: DVec2,
+) -> Option<PluginChange> {
     use crate::protocol::ParamEdit;
     Some(match e {
         ParamEdit::Set { name, time, value } => {
             let kind = *entry.kinds.get(&name)?;
+            let value = entry.to_voxy(&name, value, layer);
             PluginChange::Set {
                 value: crate::mapping::to_value(kind, &value)?,
                 name,
