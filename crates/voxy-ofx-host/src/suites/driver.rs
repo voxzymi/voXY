@@ -252,11 +252,20 @@ impl Plugin {
         let desc = description
             .context(context)
             .ok_or_else(|| DriverError::UnknownContext(context.to_owned()))?;
-        let fx = Arc::new(Effect::instance(desc, project, values, images, &|_| {
+        // Mask clips are never connected: voXY's effect matte masks the
+        // result instead (design §6.4).
+        let masks: Vec<String> = desc
+            .clips()
+            .iter()
+            .filter(|c| c.props.int(ofx_str(ofx::kOfxImageClipPropIsMask), 0) == Some(1))
+            .map(|c| c.name.clone())
+            .collect();
+        let fx = Arc::new(Effect::instance(desc, project, values, images, &|name| {
             ClipInfo {
                 frame_rate: project.frame_rate,
                 frame_range: [0.0, (project.duration - 1.0).max(0.0)],
                 pixel_aspect: project.pixel_aspect,
+                connected: !masks.iter().any(|m| m == name),
                 ..ClipInfo::default()
             }
         }));

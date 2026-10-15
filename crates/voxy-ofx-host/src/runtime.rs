@@ -22,7 +22,7 @@ use crate::client::{Blocked, Blocklist, Sandbox, SandboxError, Timeouts};
 use crate::discovery::{Arch, Os, bundle_binaries};
 use crate::effect::Project;
 use crate::image::{Components, Depth, Image, Premult, RectI};
-use crate::mapping::{effect_def, mapped_context, to_param_value, type_id};
+use crate::mapping::{effect_def, extra_clips, mapped_context, to_param_value, type_id};
 use crate::params::{ParamKind, ParamValue};
 use crate::props::ofx_str;
 use crate::protocol::{ImageSlot, ParamSnapshot, PluginDesc, Reply, Request};
@@ -284,11 +284,9 @@ fn entry(bundle: &Path, p: &PluginDesc) -> PluginEntry {
         bundle: bundle.to_path_buf(),
         identifier: p.identifier.clone(),
         context: ctx.map(|c| c.context.clone()).unwrap_or_default(),
-        extra: clips
-            .iter()
-            .filter(|c| Some(*c) != main.as_ref() && *c != OUTPUT)
-            .cloned()
-            .collect(),
+        extra: ctx
+            .map(|c| extra_clips(c).map(|k| k.name.clone()).collect())
+            .unwrap_or_default(),
         main,
         transition: ctx
             .is_some_and(|c| c.context == ofx_str(voxy_ofx_sys::kOfxImageEffectContextTransition)),

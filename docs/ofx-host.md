@@ -72,7 +72,7 @@ Checked against OpenFX 1.5.1, "Packaging OFX Plug-ins".
 
 - API version 1.5, name `org.voxy.voXY`, label `voXY`, version from the
   crate.
-- Contexts: filter, generator and transition; general arrives in O-C. Pixel depths: float, short, byte (float preferred). Components:
+- Contexts: filter, generator, transition and general. Pixel depths: float, short, byte (float preferred). Components:
   RGBA, RGB, Alpha.
 - Multi-resolution, tiles and temporal clip access: yes. Overlays: no
   (interacts arrive in O-D). Multiple clip depths or pixel aspects,
@@ -234,8 +234,9 @@ closes (then it unloads everything and exits 0).
 
 ## Plugins as voXY effects (O-B, `voxy_ofx_host::mapping`)
 
-Each plugin's first context of filter, transition (O-C) and generator
-(O-C) becomes an effect definition `ofx:<pluginIdentifier>`, version = the plugin's major version (a newer
+Each plugin's first context of filter, transition, generator and general
+(the last three since O-C) becomes an effect definition
+`ofx:<pluginIdentifier>`, version = the plugin's major version (a newer
 minor version loads normally). Name: the plugin's label (or identifier);
 category: its grouping (or "OpenFX"); description: its description.
 
@@ -264,6 +265,13 @@ category: its grouping (or "OpenFX"); description: its description.
   **Transition To** (`voxy.clip.SourceTo`), a layer reference whose plain
   source (Q-E1) is `SourceTo`; no layer means transparency. With Auto off
   the plugin's own `Transition` parameter is used as keyed.
+- General context: `Source` is the effect's input. Every other input
+  clip that is not a mask gets a layer-reference parameter
+  `voxy.clip.<clip>` (labelled with the clip's label; the hint says
+  whether it is optional); no layer means transparency. Mask clips are
+  never connected (`kOfxImageClipPropConnected` is 0): voXY's own effect
+  matte masks the result, so feeding the plugin a mask would apply it
+  twice.
 - Parameters voXY adds start with `voxy.`; a plugin parameter with such a
   name is refused at mapping time, so the names cannot collide.
 - Hard range from Min/Max unless they are the "no limit" defaults; the
@@ -317,10 +325,13 @@ the next chain texture; GPU effects after it continue as usual.
   and that input passes through (a transition at 1 shows `SourceTo`). An
   identity at another time renders instead, until the editor can send
   images from other times.
-- Extra input clips (a transition's `SourceTo`) are fed from the layer
+- Extra input clips (a transition's `SourceTo`, a general context's
+  extra clips) are fed from the layer
   their `voxy.clip.<name>` parameter names, drawn into a buffer the size
   and placement of the effect's own, read back alongside it, and sent in
-  shared memory at their clip's preferred depth.
+  shared memory at their clip's preferred depth. The renderer gives one
+  effect one layer for now, so only the first extra clip receives one;
+  the others see transparency.
 - A crash, hang or protocol error blocks the plugin for the session (other
   plugins of the bundle get a fresh sandbox); a plugin that returns an
   error status is reported but not blocked.
@@ -345,6 +356,6 @@ Left after O-B: parameter values at other times than the frame (asked
 back from the editor), key times, push buttons, sequence-render
 calls during export and playback, cancelling a
 render from the editor, timeouts in Preferences, and instance clean-up when
-an effect is deleted. The generator and transition contexts arrived in
-O-C. Then the general context (O-C),
+an effect is deleted. The generator, transition and general contexts
+arrived in O-C (several layer inputs per effect still to come). Then
 interacts (O-D) and parametric parameters.

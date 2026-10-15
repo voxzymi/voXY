@@ -16,6 +16,7 @@ pub const CONTEXTS: &[&[u8]] = &[
     ofx::kOfxImageEffectContextFilter,
     ofx::kOfxImageEffectContextGenerator,
     ofx::kOfxImageEffectContextTransition,
+    ofx::kOfxImageEffectContextGeneral,
 ];
 
 /// The pixel depths the host can deliver, best first (§6.5: float is

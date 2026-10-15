@@ -560,7 +560,13 @@ at `743b053` (merge of #3).
       any input passes it through. New test plugin `org.voxy.test.Fade`.
       Tests: Auto on/off, identity on `SourceTo`, no B layer, the GPU path
       delivering the referenced layer, reserved parameter names.
-   5. General context (extra clips as layer references).
+   5. **Done:** general context. Extra input clips become
+      `voxy.clip.<clip>` layer references; mask clips are never connected
+      (the effect matte masks instead). New test plugin
+      `org.voxy.test.Matte` (extra clip, optional mask that must stay
+      unconnected).
+   5b. Several layer inputs per effect (today only an effect's first
+       extra clip receives a layer).
    6. Parameter values at other times and key times (editor queries).
    7. Push buttons, InstanceChanged, and plugin edits as undoable
       commands.

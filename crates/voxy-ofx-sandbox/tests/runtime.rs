@@ -74,6 +74,7 @@ fn scan_render_block_and_retry() {
             "Test Gain",
             "Test Gain",
             "Test Gain",
+            "Test Matte",
             "Test Solid"
         ],
         "gain, crash, hang share the description"
@@ -385,4 +386,63 @@ fn a_transition_mixes_its_input_into_the_layer_it_names() {
     for (out, a) in f.pixels.iter().zip(&a.pixels) {
         assert!((out - a * 0.5).abs() < 1e-6);
     }
+}
+
+fn matte(id: u64, invert: bool) -> EvaluatedEffect {
+    EvaluatedEffect {
+        id: EffectId(id),
+        type_id: plugin_type("org.voxy.test.Matte"),
+        version: 1,
+        params: vec![
+            (Arc::from("invert"), Value::Bool(invert)),
+            (Arc::from("voxy.clip.Matte"), Value::Layer(None)),
+        ],
+        matte: None,
+        frame: 0,
+        layer_progress: 0.0,
+    }
+}
+
+#[test]
+fn a_general_context_plugin_reads_its_extra_clip_and_never_gets_a_mask() {
+    let tmp = tempfile::tempdir().unwrap();
+    let bundle = common::bundle(tmp.path());
+    let rt = OfxRuntime::new(Path::new(EXE), tmp.path(), Timeouts::default()).unwrap();
+    let scan = rt.scan(std::slice::from_ref(&bundle));
+    let def = scan
+        .definitions
+        .iter()
+        .find(|d| d.type_id == plugin_type("org.voxy.test.Matte"))
+        .unwrap();
+    // The extra clip is a layer reference; the mask clip has none.
+    assert_eq!(
+        def.params.iter().map(|p| &*p.name).collect::<Vec<_>>(),
+        ["invert", "voxy.clip.Matte"]
+    );
+    let clip = def.param("voxy.clip.Matte").unwrap();
+    assert_eq!(&*clip.desc.label, "Matte Layer");
+    assert!(clip.hint.as_deref().unwrap().contains("(optional)"));
+
+    // The matte layer's alpha: 0.25 everywhere.
+    let a = frame();
+    let mut f = frame();
+    f.layers = vec![(
+        Arc::from("voxy.clip.Matte"),
+        [0.0, 0.0, 0.0, 0.25].repeat(f.pixels.len() / 4),
+    )];
+    let layers = f.layers.clone();
+    rt.render(&matte(1, false), &mut f).unwrap();
+    for (out, a) in f.pixels.iter().zip(&a.pixels) {
+        assert!((out - a * 0.25).abs() < 1e-6);
+    }
+    let mut f = frame();
+    f.layers = layers;
+    rt.render(&matte(1, true), &mut f).unwrap();
+    for (out, a) in f.pixels.iter().zip(&a.pixels) {
+        assert!((out - a * 0.75).abs() < 1e-6);
+    }
+    // No matte layer: transparent, so the output is too.
+    let mut f = frame();
+    rt.render(&matte(1, false), &mut f).unwrap();
+    assert!(f.pixels.iter().all(|v| *v == 0.0));
 }

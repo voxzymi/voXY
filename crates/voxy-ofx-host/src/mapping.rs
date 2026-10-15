@@ -253,15 +253,16 @@ impl std::fmt::Display for MapError {
 impl std::error::Error for MapError {}
 
 /// The contexts voXY maps, in order of preference.
-pub const MAPPED_CONTEXTS: [&[u8]; 3] = [
+pub const MAPPED_CONTEXTS: [&[u8]; 4] = [
     ofx::kOfxImageEffectContextFilter,
     ofx::kOfxImageEffectContextTransition,
     ofx::kOfxImageEffectContextGenerator,
+    ofx::kOfxImageEffectContextGeneral,
 ];
 
 /// The context a plugin runs in as a voXY effect: the first it has of
-/// filter, transition and generator (whose output replaces the effect's
-/// input).
+/// filter, transition, generator (whose output replaces the effect's
+/// input) and general.
 pub fn mapped_context(plugin: &PluginDesc) -> Option<&ContextDesc> {
     MAPPED_CONTEXTS
         .iter()
@@ -303,6 +304,8 @@ pub fn effect_def(plugin: &PluginDesc, binary: &Path, index: u32) -> Result<Effe
     let transition = ctx.context == ofx_str(ofx::kOfxImageEffectContextTransition);
     if transition {
         params.extend(transition_params(&tid));
+    } else {
+        params.extend(extra_clips(ctx).map(|c| clip_param(&tid, c)));
     }
     let category = if transition {
         Category::Transition
@@ -324,6 +327,59 @@ pub fn effect_def(plugin: &PluginDesc, binary: &Path, index: u32) -> Result<Effe
             index,
         },
     })
+}
+
+/// A context's input clips other than the effect's own input and masks:
+/// each is fed by a layer-reference parameter (design §6.4). Masks are
+/// left unconnected; voXY's effect matte masks the result instead.
+pub fn extra_clips(ctx: &ContextDesc) -> impl Iterator<Item = &crate::protocol::ClipDesc> {
+    let main = [
+        ofx::kOfxImageEffectSimpleSourceClipName.as_slice(),
+        ofx::kOfxImageEffectTransitionSourceFromClipName,
+        ofx::kOfxImageEffectOutputClipName,
+    ];
+    ctx.clips
+        .iter()
+        .filter(move |c| !main.iter().any(|m| c.name == ofx_str(m)))
+        .filter(|c| !flag(&c.props, ofx::kOfxImageClipPropIsMask))
+}
+
+/// The layer-reference parameter feeding an extra clip.
+fn clip_param(tid: &EffectTypeId, clip: &crate::protocol::ClipDesc) -> EffectParamDef {
+    let name = format!("{CLIP_PARAM_PREFIX}{}", clip.name);
+    let label = string(&clip.props, ofx::kOfxPropLabel);
+    let optional = flag(&clip.props, ofx::kOfxImageClipPropOptional);
+    EffectParamDef {
+        desc: Arc::new(PropertyDesc {
+            key: tid.param_key(&name).into(),
+            label: if label.is_empty() {
+                clip.name.clone()
+            } else {
+                label
+            }
+            .into(),
+            kind: ValueKind::Layer,
+            default: Value::Layer(None),
+            range: None,
+            soft_range: None,
+            unit: Unit::None,
+            animatable: true,
+            spatial: false,
+        }),
+        name: name.into(),
+        choices: None,
+        group: None,
+        gizmo: None,
+        hint: Some(
+            format!(
+                "The layer for the plugin's {} input{}. Its own effects are not used.",
+                clip.name,
+                if optional { " (optional)" } else { "" }
+            )
+            .into(),
+        ),
+        flags: ParamFlags::default(),
+    }
 }
 
 /// The parameters voXY adds to a transition (design §5, §6.4): Auto, and
