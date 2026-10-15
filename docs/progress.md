@@ -873,7 +873,20 @@ at `86e1edf` (merge of #6). Design note: `docs/design-ux.md`.
   can now reuse `hit::pick`). Tests: `hit::pick` (topmost / outside /
   adjustment) and a viewport-drop frame hitting the layer under the cursor.
   clippy `-D warnings` and `fmt --check` clean; 290 `voxy-ui` tests pass.
-- **Remaining U-B step:** drop into the Effect Controls stack at a position.
+- **U-B step 4: drop into the Effect Controls stack at a position.**
+  `effects_panel::apply_at` applies an effect at a given stack index (one undo
+  step); `effect_controls_drop` shows an **insert line** between effect
+  sections at the drop position (using each section's captured y-extent), with
+  the "Add <effect> here" badge and Copy / Not-allowed cursor, and on release
+  inserts there — including onto the "No effects" placeholder. Tests: `apply_at`
+  inserts at the given index, and a frame-driven drop lands between two
+  effects. clippy `-D warnings` and `fmt --check` clean; 292 `voxy-ui` tests
+  pass.
+
+**U-B complete** (B1–B4): effect drag-and-drop now has live feedback on the
+timeline, viewport hit-test, multi-layer apply, Effect-Controls positioned
+drop, the empty-target message and not-allowed cursor, Escape to cancel, and
+one undo step per drop. Pending the per-job CI report.
 
 ## Design-note / deferred reconciliation
 

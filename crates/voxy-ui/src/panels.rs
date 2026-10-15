@@ -357,36 +357,43 @@ impl Panels<'_> {
                 self.state.effects_preview.toggle_split();
             }
         });
+        // The y-extents of each effect's section, for the drag insert line.
+        let effects_top = ui.cursor().top();
+        let mut spans: Vec<(f32, f32)> = Vec::new();
         if layer.effects.is_empty() {
-            ui.weak("No effects. Add one with Add Effect.");
-            return;
-        }
-        // Layers a layer-reference parameter can point at.
-        let others: Vec<(LayerId, String)> = doc
-            .find_layer(layer.id)
-            .and_then(|(comp, _)| doc.comp(comp))
-            .map(|c| {
-                c.layers
+            ui.weak("No effects. Add one with Add Effect, or drag one here.");
+        } else {
+            // Layers a layer-reference parameter can point at.
+            let others: Vec<(LayerId, String)> = doc
+                .find_layer(layer.id)
+                .and_then(|(comp, _)| doc.comp(comp))
+                .map(|c| {
+                    c.layers
+                        .iter()
+                        .filter(|l| l.id != layer.id)
+                        .map(|l| (l.id, l.name.clone()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let refs = ParamRefs {
+                layers: others,
+                luts: doc
+                    .assets
                     .iter()
-                    .filter(|l| l.id != layer.id)
-                    .map(|l| (l.id, l.name.clone()))
-                    .collect()
-            })
-            .unwrap_or_default();
-        let refs = ParamRefs {
-            layers: others,
-            luts: doc
-                .assets
-                .iter()
-                .filter(|a| a.kind == voxy_core::AssetKind::Lut)
-                .map(|a| (a.id, a.name.clone()))
-                .collect(),
-        };
-        let count = layer.effects.len();
-        for (i, fx) in layer.effects.iter().enumerate() {
-            let def = self.state.effects.get(&fx.type_id, fx.version).cloned();
-            let id = ui.make_persistent_id(("effect-controls", fx.id));
-            egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, true)
+                    .filter(|a| a.kind == voxy_core::AssetKind::Lut)
+                    .map(|a| (a.id, a.name.clone()))
+                    .collect(),
+            };
+            let count = layer.effects.len();
+            for (i, fx) in layer.effects.iter().enumerate() {
+                let top = ui.cursor().top();
+                let def = self.state.effects.get(&fx.type_id, fx.version).cloned();
+                let id = ui.make_persistent_id(("effect-controls", fx.id));
+                egui::collapsing_header::CollapsingState::load_with_default_open(
+                    ui.ctx(),
+                    id,
+                    true,
+                )
                 .show_header(ui, |ui| self.effect_header(ui, layer.id, fx, i, count))
                 .body(|ui| {
                     if let Some(ph) = &fx.placeholder {
@@ -401,7 +408,17 @@ impl Panels<'_> {
                     self.plugin_problem(ui, fx);
                     self.effect_params(ui, layer.id, fx, def.as_deref(), None, &refs, 0);
                 });
+                spans.push((top, ui.cursor().top()));
+            }
         }
+        let section = egui::Rect::from_min_max(
+            egui::pos2(ui.max_rect().left(), effects_top),
+            egui::pos2(
+                ui.max_rect().right(),
+                ui.cursor().top().max(effects_top + 8.0),
+            ),
+        );
+        crate::effects_panel::effect_controls_drop(ui, self.state, layer.id, &spans, section);
     }
 
     /// Why an OpenFX effect is passed through, if it is: a failure in the

@@ -130,6 +130,37 @@ pub fn apply_to_selection(state: &mut EditorState, def: &Arc<EffectDef>) {
     apply_to_layers(state, &layers, def);
 }
 
+/// Applies `def` to `layer` at stack position `index` (`None` = end of the
+/// stack) as one undo step. Used by the Effect Controls drop.
+pub fn apply_at(
+    state: &mut EditorState,
+    layer: LayerId,
+    index: Option<usize>,
+    def: &Arc<EffectDef>,
+) {
+    let doc = state.history.current().clone();
+    let Some((_, model)) = doc.find_layer(layer) else {
+        return;
+    };
+    if can_apply(def, model).is_err() {
+        state.info(NO_TARGET);
+        return;
+    }
+    state.last_effect = Some(def.clone());
+    let name = def.name.clone();
+    if state
+        .execute_reported(AddEffect {
+            layer,
+            index,
+            def: def.clone(),
+        })
+        .is_some()
+    {
+        state.selection = Some(layer);
+        state.info(format!("Added {name}"));
+    }
+}
+
 pub fn show(ui: &mut Ui, state: &mut EditorState) {
     ui.horizontal(|ui| {
         ui.label("Search");
@@ -399,6 +430,75 @@ pub fn viewport_effect_drop(
             Some(_) => {}
             None => state.info(NO_TARGET),
         }
+    }
+}
+
+/// Live feedback and release handling for an effect dragged over the Effect
+/// Controls stack of `layer`. `spans` are the top/bottom y of each effect's
+/// section (empty when the layer has none); `section` is the whole stack
+/// area. Shows an insert line at the drop position and applies the effect
+/// there on release. Escape cancels.
+pub fn effect_controls_drop(
+    ui: &Ui,
+    state: &mut EditorState,
+    layer: LayerId,
+    spans: &[(f32, f32)],
+    section: Rect,
+) {
+    let ctx = ui.ctx();
+    if cancel_on_escape(ctx) {
+        return;
+    }
+    let Some(drag) = peek(ctx) else { return };
+    let def = &drag.0;
+    let Some(at) = ctx
+        .input(|i| i.pointer.hover_pos())
+        .filter(|p| section.contains(*p))
+    else {
+        return;
+    };
+    let doc = state.history.current().clone();
+    let allowed = doc
+        .find_layer(layer)
+        .is_some_and(|(_, m)| can_apply(def, m).is_ok());
+
+    // The stack position: after every effect whose midpoint is above the
+    // pointer. `spans` is in stack order.
+    let index = spans.iter().filter(|(t, b)| (t + b) / 2.0 < at.y).count();
+    let line_y = if spans.is_empty() {
+        section.top()
+    } else if index == 0 {
+        spans[0].0
+    } else if index >= spans.len() {
+        spans[spans.len() - 1].1
+    } else {
+        spans[index].0
+    };
+
+    let col = if allowed {
+        ACCENT
+    } else {
+        ui.visuals().error_fg_color
+    };
+    ui.painter_at(section)
+        .hline(section.x_range(), line_y, Stroke::new(2.0, col));
+    let label = if allowed {
+        format!("Add {} here", def.name)
+    } else {
+        format!("Can’t add {} here", def.name)
+    };
+    drag_badge(ctx, at, &label, allowed);
+    ctx.set_cursor_icon(if allowed {
+        CursorIcon::Copy
+    } else {
+        CursorIcon::NotAllowed
+    });
+
+    if ctx.input(|i| i.pointer.any_released())
+        && let Some(EffectDrag(def)) = take(ctx)
+        && allowed
+    {
+        apply_at(state, layer, Some(index), &def);
     }
 }
 
@@ -817,6 +917,85 @@ mod tests {
             fx_count(&s, layer),
             1,
             "applied to the layer under the cursor"
+        );
+    }
+
+    #[test]
+    fn apply_at_inserts_at_the_given_stack_position() {
+        let (mut s, layer) = state_with_layer();
+        let blur = listing(&s, "gaussian")[0].1[0].clone();
+        let invert = listing(&s, "invert")[0].1[0].clone();
+        let box_blur = listing(&s, "box")[0].1[0].clone();
+        apply(&mut s, layer, &blur);
+        apply(&mut s, layer, &invert);
+        // Insert between the two.
+        apply_at(&mut s, layer, Some(1), &box_blur);
+        s.selection = Some(layer);
+        let ids: Vec<_> = s
+            .selected_layer_effects()
+            .iter()
+            .map(|e| e.type_id.clone())
+            .collect();
+        assert_eq!(
+            ids,
+            vec![
+                blur.type_id.clone(),
+                box_blur.type_id.clone(),
+                invert.type_id.clone()
+            ]
+        );
+        assert!(s.history.undo(), "one undo");
+        assert_eq!(s.selected_layer_effects().len(), 2);
+    }
+
+    #[test]
+    fn dropping_into_the_effect_controls_stack_inserts_at_the_drop_position() {
+        let (mut s, layer) = state_with_layer();
+        let blur = listing(&s, "gaussian")[0].1[0].clone();
+        let invert = listing(&s, "invert")[0].1[0].clone();
+        let box_blur = listing(&s, "box")[0].1[0].clone();
+        apply(&mut s, layer, &blur);
+        apply(&mut s, layer, &invert);
+
+        // Two effect sections stacked vertically; drop in the second one's
+        // top half resolves to index 1 (between the two).
+        let spans = vec![(20.0f32, 40.0f32), (40.0f32, 60.0f32)];
+        let section = Rect::from_min_max(Pos2::new(0.0, 20.0), Pos2::new(200.0, 60.0));
+        let at = Pos2::new(100.0, 45.0);
+        let input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(400.0, 400.0))),
+            events: vec![
+                egui::Event::PointerMoved(at),
+                egui::Event::PointerButton {
+                    pos: at,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+            ..Default::default()
+        };
+        let ctx = Context::default();
+        let mut out = ctx.run_ui(input, |ui| {
+            DragAndDrop::set_payload(ui.ctx(), EffectDrag(box_blur.clone()));
+            effect_controls_drop(ui, &mut s, layer, &spans, section);
+        });
+        out.textures_delta.clear();
+
+        s.selection = Some(layer);
+        let ids: Vec<_> = s
+            .selected_layer_effects()
+            .iter()
+            .map(|e| e.type_id.clone())
+            .collect();
+        assert_eq!(
+            ids,
+            vec![
+                blur.type_id.clone(),
+                box_blur.type_id.clone(),
+                invert.type_id.clone()
+            ],
+            "inserted between the two effects"
         );
     }
 
