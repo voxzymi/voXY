@@ -590,7 +590,13 @@ at `743b053` (merge of #3).
       back), core (merging into the drag's step, undo/redo, unknown
       parameters skipped). The UI glue is not covered end to end (it would
       need the sandbox binary in `voxy-ui`'s tests).
-   8. Begin/EndSequenceRender around export and playback.
+   8. **Done:** Begin/EndSequenceRender. `ExternalEffects` gains
+      `begin_sequence`/`end_sequence`; the runtime sends Begin to each
+      instance before its first render in the run and End at the end;
+      renders in between say sequential (and interactive). The editor
+      announces playback (start/stop). There is no video export yet; it
+      will use the same calls. The `Lag` test plugin reports what it
+      sees.
    9. Persisted plugin state: plugin version and context, load
       validation of Custom/Bytes, placeholders for missing plugins.
    10. Conformance suite: the approved BSD-3 samples (#1 to #11) plus our

@@ -579,3 +579,38 @@ fn a_push_button_returns_the_plugins_edits_and_messages() {
         .unwrap();
     assert_eq!(none.changes, vec![]);
 }
+
+#[test]
+fn renders_in_a_sequence_are_announced_to_the_plugin() {
+    let tmp = tempfile::tempdir().unwrap();
+    let bundle = common::bundle(tmp.path());
+    let rt = OfxRuntime::new(Path::new(EXE), tmp.path(), Timeouts::default()).unwrap();
+    rt.scan(std::slice::from_ref(&bundle));
+    let fx = EvaluatedEffect {
+        id: EffectId(1),
+        type_id: plugin_type("org.voxy.test.Lag"),
+        version: 1,
+        params: vec![(Arc::from("gain"), Value::Scalar(1.0))],
+        matte: None,
+        frame: 0,
+        layer_progress: 0.0,
+        timeline: None,
+    };
+    let alpha = || {
+        let mut f = frame();
+        rt.render(&fx, &mut f).unwrap();
+        f.pixels[3]
+    };
+    assert_eq!(alpha(), 0.0, "not in a sequence");
+    rt.begin_sequence([0, 24], true);
+    assert_eq!(alpha(), 110.0, "begun, and the render says sequential");
+    assert_eq!(alpha(), 110.0, "begun once");
+    rt.end_sequence();
+    assert_eq!(alpha(), 0.0, "ended");
+    // A new sequence starts over; ending twice is harmless.
+    rt.begin_sequence([3, 4], false);
+    assert_eq!(alpha(), 110.0);
+    rt.end_sequence();
+    rt.end_sequence();
+    assert_eq!(alpha(), 0.0);
+}

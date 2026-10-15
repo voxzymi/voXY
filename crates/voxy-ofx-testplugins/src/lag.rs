@@ -1,15 +1,21 @@
 //! `org.voxy.test.Lag`: a filter that multiplies colour by its `gain` one
 //! frame earlier (a parameter query at another time) and writes the number
 //! of `gain`'s keys into alpha, so tests can see both. Its push button
-//! `double` doubles `gain` (a plugin edit) and logs a message.
+//! `double` doubles `gain` (a plugin edit) and logs a message. Alpha also
+//! gets 10 when the render says it is sequential, and 100 between
+//! `BeginSequenceRender` and `EndSequenceRender`.
 
-use std::ffi::{CStr, c_char, c_uint, c_void};
+use std::ffi::{CStr, c_char, c_int, c_uint, c_void};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use voxy_ofx_sys as ofx;
 
 use super::{
     StaticPlugin, c, double_at, fetch_suites, fx, image_data, param, params, props, set_host,
 };
+
+/// Between Begin and End of a sequence.
+static IN_SEQUENCE: AtomicBool = AtomicBool::new(false);
 
 /// # Safety
 /// Called by the host with valid arguments.
@@ -117,6 +123,20 @@ unsafe fn render(h: ofx::OfxImageEffectHandle, ins: ofx::OfxPropertySetHandle) -
         let gain = double_at(h, b"gain\0", time - 1.0) as f32;
         let mut keys: c_uint = 0;
         params().paramGetNumKeys.unwrap()(param(h, b"gain\0"), &raw mut keys);
+        let mut sequential: c_int = 0;
+        p.propGetInt.unwrap()(
+            ins,
+            c(ofx::kOfxImageEffectPropSequentialRenderStatus),
+            0,
+            &raw mut sequential,
+        );
+        let alpha = keys as f32
+            + 10.0 * sequential as f32
+            + if IN_SEQUENCE.load(Ordering::SeqCst) {
+                100.0
+            } else {
+                0.0
+            };
         let image = |name: &[u8]| {
             let mut ch: ofx::OfxImageClipHandle = std::ptr::null_mut();
             fx().clipGetHandle.unwrap()(h, c(name), &raw mut ch, std::ptr::null_mut());
@@ -139,7 +159,7 @@ unsafe fn render(h: ofx::OfxImageEffectHandle, ins: ofx::OfxPropertySetHandle) -
                 for k in 0..3 {
                     *d.add(di + k) = *s.add(si + k) * gain;
                 }
-                *d.add(di + 3) = keys as f32;
+                *d.add(di + 3) = alpha;
             }
         }
         fx().clipReleaseImage.unwrap()(src);
@@ -167,6 +187,14 @@ unsafe extern "C" fn main_entry(
             a if a == ofx::kOfxImageEffectActionDescribeInContext => describe_in_context(h),
             a if a == ofx::kOfxImageEffectActionRender => render(h, ins),
             a if a == ofx::kOfxActionInstanceChanged => instance_changed(h, ins),
+            a if a == ofx::kOfxImageEffectActionBeginSequenceRender => {
+                IN_SEQUENCE.store(true, Ordering::SeqCst);
+                ofx::kOfxStatOK
+            }
+            a if a == ofx::kOfxImageEffectActionEndSequenceRender => {
+                IN_SEQUENCE.store(false, Ordering::SeqCst);
+                ofx::kOfxStatOK
+            }
             _ => ofx::kOfxStatReplyDefault,
         }
     }

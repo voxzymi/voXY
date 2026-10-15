@@ -79,4 +79,14 @@ pub trait ExternalEffects: Send + Sync + Debug {
         let _ = (fx, layer_size);
         input
     }
+
+    /// The renders until [`ExternalEffects::end_sequence`] are a run over
+    /// `frames` (first and last, inclusive): playback (`interactive`) or an
+    /// export. Plugins may prepare for it (OpenFX `BeginSequenceRender`).
+    fn begin_sequence(&self, frames: [i64; 2], interactive: bool) {
+        let _ = (frames, interactive);
+    }
+
+    /// Ends the run started by [`ExternalEffects::begin_sequence`].
+    fn end_sequence(&self) {}
 }

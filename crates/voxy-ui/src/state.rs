@@ -133,6 +133,8 @@ pub struct EditorState {
     pub ofx: Option<std::sync::Arc<voxy_ofx_host::runtime::OfxRuntime>>,
     /// What OpenFX start-up could not use: `(bundle or plugin, reason)`.
     pub ofx_problems: Vec<(String, String)>,
+    /// Playback is announced to plugins as a sequence (design §6.9).
+    pub ofx_sequence: bool,
     /// Effects the last viewport frame passed through because their plugin
     /// failed, with the reason (shown on the effect's header).
     pub effect_errors: std::collections::HashMap<voxy_core::EffectId, String>,
@@ -204,6 +206,7 @@ impl EditorState {
             prefs: Preferences::default(),
             effects: std::sync::Arc::new(voxy_core::registry::builtins().clone()),
             ofx: None,
+            ofx_sequence: false,
             ofx_problems: Vec::new(),
             effect_errors: std::collections::HashMap::new(),
             redraw: false,
@@ -1330,6 +1333,27 @@ impl EditorState {
             }
         }
         self.redraw = true;
+    }
+
+    /// Announces playback to OpenFX plugins as an interactive sequence over
+    /// the composition (`BeginSequenceRender` when it starts,
+    /// `EndSequenceRender` when it stops). Call once per UI frame.
+    pub fn sync_ofx_sequence(&mut self) {
+        use voxy_core::external::ExternalEffects;
+        let playing = self.transport.is_playing();
+        if playing == self.ofx_sequence {
+            return;
+        }
+        self.ofx_sequence = playing;
+        let Some(rt) = self.ofx.clone() else {
+            return;
+        };
+        if !playing {
+            rt.end_sequence();
+        } else if let Some(c) = self.comp() {
+            let last = c.frame_rate.time_to_frame(c.duration) - 1;
+            rt.begin_sequence([0, last.max(0)], true);
+        }
     }
 
     /// The Retry action on an OpenFX effect: unblocks its plugin, whose

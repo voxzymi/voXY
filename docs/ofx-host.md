@@ -344,6 +344,17 @@ the next chain texture; GPU effects after it continue as usual.
   plugins of the bundle get a fresh sandbox); a plugin that returns an
   error status is reported but not blocked.
 
+## Sequences (O-C)
+
+- Playback is announced as an interactive sequence over the whole
+  composition: when it starts, `ExternalEffects::begin_sequence`; when it
+  stops, `end_sequence`. Each instance gets `BeginSequenceRender` before
+  its first render in the run (instances created during the run join it
+  then), and `EndSequenceRender` at the end. Renders in between report
+  `kOfxImageEffectPropSequentialRenderStatus` 1 and the interactive status.
+- voXY has no video export yet; an exporter will call the same two
+  functions with `interactive` off.
+
 ## Changes and plugin edits (O-C)
 
 - Editing an OpenFX effect's parameter in Effect Controls, or pressing
@@ -379,7 +390,8 @@ the next chain texture; GPU effects after it continue as usual.
 ## Still to be written (O-A to O-D)
 
 Left after O-B: sequence-render
-calls during export and playback, cancelling a
+calls during export (playback has them since O-C; there is no exporter
+yet), cancelling a
 render from the editor, timeouts in Preferences, and instance clean-up when
 an effect is deleted. The generator, transition and general contexts
 arrived in O-C. Then

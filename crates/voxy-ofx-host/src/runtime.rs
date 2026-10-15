@@ -58,6 +58,8 @@ struct Live {
     /// Each clip's preferred depth and components (from
     /// `GetClipPreferences`); float RGBA when it gave none.
     clips: HashMap<String, (Depth, Components)>,
+    /// Whether `BeginSequenceRender` was sent for the current sequence.
+    in_sequence: bool,
 }
 
 impl Live {
@@ -80,6 +82,8 @@ struct Inner {
     instances: HashMap<EffectId, Live>,
     next_instance: u32,
     blocklist: Blocklist,
+    /// The run being rendered (frames, interactive), if any.
+    sequence: Option<([i64; 2], bool)>,
 }
 
 /// The OpenFX runtime. Thread-safe: renders are serialised.
@@ -134,6 +138,7 @@ impl OfxRuntime {
                 instances: HashMap::new(),
                 next_instance: 1,
                 blocklist: Blocklist::new(),
+                sequence: None,
             }),
         })
     }
@@ -521,6 +526,7 @@ impl Inner {
             instance,
             layer_size,
             clips,
+            in_sequence: false,
         };
         self.instances.insert(fx.id, l.clone());
         Ok(Ok(l))
@@ -543,6 +549,27 @@ impl Inner {
             time: fx.frame as f64,
             params: Self::snapshot(entry, fx),
         })?;
+        // An instance joins a running sequence before its first render.
+        let mut live = live;
+        if let Some((frames, interactive)) = self.sequence
+            && !live.in_sequence
+        {
+            if let Reply::Failed { action, status, .. } = self.ask(
+                index,
+                entry,
+                fx,
+                Request::Sequence {
+                    instance: live.instance,
+                    begin: true,
+                    frames: frames.map(|f| f as f64),
+                    interactive,
+                },
+            )? {
+                return Ok(Err(format!("the plugin failed {action} (status {status})")));
+            }
+            live.in_sequence = true;
+            self.instances.insert(fx.id, live.clone());
+        }
         Ok(Ok(live))
     }
 
@@ -811,6 +838,35 @@ fn from_canonical(c: [f64; 4], h: f64) -> Region {
     }
 }
 
+impl Inner {
+    /// Ends the current sequence on every instance that joined it. A
+    /// sandbox that fails here is left for the next render to find.
+    fn end_sequence(&mut self) {
+        let Some((frames, interactive)) = self.sequence.take() else {
+            return;
+        };
+        let joined: Vec<(EffectId, Live)> = self
+            .instances
+            .iter()
+            .filter(|(_, l)| l.in_sequence)
+            .map(|(id, l)| (*id, l.clone()))
+            .collect();
+        for (id, l) in joined {
+            if let Some(sb) = self.sandboxes.get_mut(&l.bundle_index) {
+                let _ = sb.request(Request::Sequence {
+                    instance: l.instance,
+                    begin: false,
+                    frames: frames.map(|f| f as f64),
+                    interactive,
+                });
+            }
+            if let Some(l) = self.instances.get_mut(&id) {
+                l.in_sequence = false;
+            }
+        }
+    }
+}
+
 impl ExternalEffects for OfxRuntime {
     fn supports(&self, type_id: &EffectTypeId) -> bool {
         self.lock().plugins.contains_key(type_id)
@@ -818,6 +874,17 @@ impl ExternalEffects for OfxRuntime {
 
     fn render(&self, fx: &EvaluatedEffect, frame: &mut CpuFrame) -> Result<(), String> {
         self.lock().render(fx, frame)
+    }
+
+    /// Instances join the sequence on their next render.
+    fn begin_sequence(&self, frames: [i64; 2], interactive: bool) {
+        let mut inner = self.lock();
+        inner.end_sequence();
+        inner.sequence = Some((frames, interactive));
+    }
+
+    fn end_sequence(&self) {
+        self.lock().end_sequence();
     }
 
     /// The plugin's `GetRegionOfDefinition`; the input when it fails (the
