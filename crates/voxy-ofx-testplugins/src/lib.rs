@@ -7,6 +7,7 @@
 //! - `org.voxy.test.Crash`: the same, but Render dereferences null.
 //! - `org.voxy.test.Hang`: the same, but Render never returns and ignores
 //!   abort.
+//! - `org.voxy.test.Solid`: a generator that fills its output with `color`.
 
 // A test fixture: a missing suite entry may panic (and abort) loudly.
 #![allow(
@@ -20,6 +21,10 @@ use std::ffi::{CStr, c_char, c_int, c_void};
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 
 use voxy_ofx_sys as ofx;
+
+mod solid;
+
+pub use solid::SOLID;
 
 static HOST: AtomicPtr<ofx::OfxHost> = AtomicPtr::new(std::ptr::null_mut());
 static PROPS: AtomicPtr<ofx::OfxPropertySuiteV1> = AtomicPtr::new(std::ptr::null_mut());
@@ -71,6 +76,20 @@ unsafe fn fetch<T>(name: &[u8], version: c_int) -> *mut T {
         host.fetchSuite.unwrap()(host.host, c(name), version)
             .cast_mut()
             .cast()
+    }
+}
+
+/// Fetches the suites the plugins use (in Load).
+///
+/// # Safety
+/// `host` was set by `setHost`.
+unsafe fn fetch_suites() {
+    // SAFETY: the caller's contract.
+    unsafe {
+        PROPS.store(fetch(ofx::kOfxPropertySuite, 1), Ordering::SeqCst);
+        FX.store(fetch(ofx::kOfxImageEffectSuite, 1), Ordering::SeqCst);
+        PARAMS.store(fetch(ofx::kOfxParameterSuite, 1), Ordering::SeqCst);
+        MSG.store(fetch(ofx::kOfxMessageSuite, 2), Ordering::SeqCst);
     }
 }
 
@@ -337,10 +356,7 @@ unsafe extern "C" fn main_entry(
         let h = handle.cast_mut().cast::<ofx::OfxImageEffectStruct>();
         match action {
             a if a == ofx::kOfxActionLoad => {
-                PROPS.store(fetch(ofx::kOfxPropertySuite, 1), Ordering::SeqCst);
-                FX.store(fetch(ofx::kOfxImageEffectSuite, 1), Ordering::SeqCst);
-                PARAMS.store(fetch(ofx::kOfxParameterSuite, 1), Ordering::SeqCst);
-                MSG.store(fetch(ofx::kOfxMessageSuite, 2), Ordering::SeqCst);
+                fetch_suites();
                 LOADS.fetch_add(1, Ordering::SeqCst);
                 ofx::kOfxStatOK
             }
@@ -439,7 +455,7 @@ pub static HANG: StaticPlugin = StaticPlugin(ofx::OfxPlugin {
 });
 
 /// The bundle's plugins, in `OfxGetPlugin` order.
-pub static ALL: [&StaticPlugin; 3] = [&GAIN, &CRASH, &HANG];
+pub static ALL: [&StaticPlugin; 4] = [&GAIN, &CRASH, &HANG, &SOLID];
 
 /// The OpenFX export: how many plugins the binary holds.
 #[unsafe(no_mangle)]

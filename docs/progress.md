@@ -532,7 +532,28 @@ at `743b053` (merge of #3).
    workspace tests pass; CI green on all four platforms at `f04f2f8`
    (run 38560685814). What is left
    for follow-up steps is listed at the end of `docs/ofx-host.md`.
-7. O-C, O-D.
+7. O-C, on a fresh branch from `main` at `75ef443` (merge of #5). Steps:
+   1. **Done:** generator context. A plugin without a filter context runs
+      in its generator context: no `Source` clip, its output replaces the
+      input. New test plugin `org.voxy.test.Solid` (generator only).
+   2. Identity: IsIdentity before Render; pass-through when the plugin
+      says so.
+   3. The plugin's regions of definition and interest in chain planning,
+      and absolute image coordinates.
+   4. Transition context (`SourceTo` as a layer reference, `Transition` as
+      progress).
+   5. General context (extra clips as layer references).
+   6. Parameter values at other times and key times (editor queries).
+   7. Push buttons, InstanceChanged, and plugin edits as undoable
+      commands.
+   8. Begin/EndSequenceRender around export and playback.
+   9. Persisted plugin state: plugin version and context, load
+      validation of Custom/Bytes, placeholders for missing plugins.
+   10. Conformance suite: the approved BSD-3 samples (#1 to #11) plus our
+       blur, transform and keyer test plugins; Describe, mapping, goldens,
+       identity.
+   11. Compatibility table in `docs/ofx-plugins.md` §5.
+8. O-D.
 
 ## Approved decisions
 

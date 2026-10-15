@@ -234,7 +234,7 @@ pub fn to_param_value(kind: ParamKind, v: &Value) -> Option<ParamValue> {
 /// Why a context could not become an effect.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MapError {
-    /// The plugin has no context this step of voXY maps (filter for now).
+    /// The plugin has no context voXY maps (filter or generator for now).
     NoContext,
     /// A parameter could not be mapped.
     Param { name: String, why: String },
@@ -243,7 +243,7 @@ pub enum MapError {
 impl std::fmt::Display for MapError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            MapError::NoContext => f.write_str("it has no filter context"),
+            MapError::NoContext => f.write_str("it has no filter or generator context"),
             MapError::Param { name, why } => write!(f, "parameter {name}: {why}"),
         }
     }
@@ -251,14 +251,25 @@ impl std::fmt::Display for MapError {
 
 impl std::error::Error for MapError {}
 
-/// The filter context of `plugin` as an effect definition. `binary` and
-/// `index` say where the plugin lives (`EffectOrigin::Ofx`).
-pub fn effect_def(plugin: &PluginDesc, binary: &Path, index: u32) -> Result<EffectDef, MapError> {
-    let ctx = plugin
-        .contexts
+/// The contexts voXY maps, in order of preference.
+pub const MAPPED_CONTEXTS: [&[u8]; 2] = [
+    ofx::kOfxImageEffectContextFilter,
+    ofx::kOfxImageEffectContextGenerator,
+];
+
+/// The context a plugin runs in as a voXY effect: filter if it has one,
+/// otherwise generator (its output replaces the effect's input).
+pub fn mapped_context(plugin: &PluginDesc) -> Option<&ContextDesc> {
+    MAPPED_CONTEXTS
         .iter()
-        .find(|c| c.context == ofx_str(ofx::kOfxImageEffectContextFilter))
-        .ok_or(MapError::NoContext)?;
+        .find_map(|want| plugin.contexts.iter().find(|c| c.context == ofx_str(want)))
+}
+
+/// The mapped context of `plugin` (see [`mapped_context`]) as an effect
+/// definition. `binary` and `index` say where the plugin lives
+/// (`EffectOrigin::Ofx`).
+pub fn effect_def(plugin: &PluginDesc, binary: &Path, index: u32) -> Result<EffectDef, MapError> {
+    let ctx = mapped_context(plugin).ok_or(MapError::NoContext)?;
     let tid = type_id(&plugin.identifier);
     let label = string(&plugin.props, ofx::kOfxPropLabel);
     let name = if label.is_empty() {

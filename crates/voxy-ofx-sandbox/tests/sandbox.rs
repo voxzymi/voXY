@@ -164,7 +164,8 @@ fn a_bundle_describes_and_renders_out_of_process() {
         [
             "org.voxy.test.Gain",
             "org.voxy.test.Crash",
-            "org.voxy.test.Hang"
+            "org.voxy.test.Hang",
+            "org.voxy.test.Solid"
         ]
     );
     assert_eq!(d.plugins[0].props.string("OfxPropLabel"), Some("Test Gain"));

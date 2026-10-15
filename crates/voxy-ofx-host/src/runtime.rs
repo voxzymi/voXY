@@ -21,7 +21,7 @@ use crate::client::{Blocked, Blocklist, Sandbox, SandboxError, Timeouts};
 use crate::discovery::{Arch, Os, bundle_binaries};
 use crate::effect::Project;
 use crate::image::{Components, Depth, Image, Premult, RectI};
-use crate::mapping::{effect_def, to_param_value, type_id};
+use crate::mapping::{effect_def, mapped_context, to_param_value, type_id};
 use crate::params::ParamKind;
 use crate::protocol::{ImageSlot, ParamSnapshot, PluginDesc, Reply, Request};
 use crate::shm::{HEADER, SessionDir, Slots};
@@ -29,13 +29,14 @@ use crate::shm::{HEADER, SessionDir, Slots};
 /// Sandbox launches in this process.
 static LAUNCHES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
-/// The filter context's name.
-const FILTER: &str = "OfxImageEffectContextFilter";
-
 #[derive(Debug, Clone)]
 struct PluginEntry {
     bundle: PathBuf,
     identifier: String,
+    /// The OpenFX context the effect runs in.
+    context: String,
+    /// Whether that context has a `Source` clip (not a generator).
+    has_source: bool,
     /// Each parameter's OpenFX type, by name.
     kinds: HashMap<String, ParamKind>,
 }
@@ -251,18 +252,20 @@ impl OfxRuntime {
 }
 
 fn entry(bundle: &Path, p: &PluginDesc) -> PluginEntry {
-    let kinds = p
-        .contexts
-        .iter()
-        .find(|c| c.context == FILTER)
-        .map(|c| c.params.iter().map(|d| (d.name.clone(), d.kind)).collect())
-        .unwrap_or_default();
+    let ctx = mapped_context(p);
     PluginEntry {
         bundle: bundle.to_path_buf(),
         identifier: p.identifier.clone(),
-        kinds,
+        context: ctx.map(|c| c.context.clone()).unwrap_or_default(),
+        has_source: ctx.is_some_and(|c| c.clips.iter().any(|k| k.name == SOURCE)),
+        kinds: ctx
+            .map(|c| c.params.iter().map(|d| (d.name.clone(), d.kind)).collect())
+            .unwrap_or_default(),
     }
 }
+
+/// The filter context's input clip.
+const SOURCE: &str = "Source";
 
 impl Inner {
     fn bundle_index(&mut self, bundle: &Path) -> usize {
@@ -370,7 +373,7 @@ impl Inner {
                 match sb.request(Request::CreateInstance {
                     instance,
                     plugin: entry.identifier.clone(),
-                    context: FILTER.into(),
+                    context: entry.context.clone(),
                     project,
                     params: params.clone(),
                 })? {
@@ -390,7 +393,7 @@ impl Inner {
                 if let Reply::ClipPreferences { clips, .. } = prefs {
                     for (name, d, c) in clips {
                         match name.as_str() {
-                            "Source" => source = (d, c),
+                            SOURCE => source = (d, c),
                             "Output" => output = (d, c),
                             _ => {}
                         }
@@ -408,8 +411,12 @@ impl Inner {
         };
         let session_len =
             |d: (Depth, Components)| w as usize * h as usize * d.1.count() * d.0.bytes();
-        let need =
-            HEADER + session_len(live.source) + session_len(live.output) + 2 * crate::shm::ALIGN;
+        let source_len = if entry.has_source {
+            session_len(live.source)
+        } else {
+            0
+        };
+        let need = HEADER + source_len + session_len(live.output) + 2 * crate::shm::ALIGN;
         let dir = self.session.path().to_path_buf();
         let sb = self.sandbox(index)?;
         sb.ensure_mapping(&dir, need)?;
@@ -419,29 +426,31 @@ impl Inner {
             params,
         })?;
         let mut slots = Slots::new(sb.shm.len());
-        let (Some(src), Some(dst)) = (
-            slots.take(session_len(live.source)),
-            slots.take(session_len(live.output)),
-        ) else {
+        let (Some(src), Some(dst)) = (slots.take(source_len), slots.take(session_len(live.output)))
+        else {
             return Ok(Err("the image does not fit the shared memory".into()));
         };
         let bounds = RectI::new(0, 0, w as i32, h as i32);
-        let bottom_up = flip_rows(&frame.pixels, w, h);
-        let input = Image::from_rgba(
-            bounds,
-            &bottom_up,
-            live.source.0,
-            live.source.1,
-            Premult::Premultiplied,
-        )
-        .ok_or_else(|| SandboxError::Protocol("bad input image".into()))?;
-        sb.shm.write_from(src, &input.raw());
+        let mut inputs = Vec::new();
+        if entry.has_source {
+            let bottom_up = flip_rows(&frame.pixels, w, h);
+            let input = Image::from_rgba(
+                bounds,
+                &bottom_up,
+                live.source.0,
+                live.source.1,
+                Premult::Premultiplied,
+            )
+            .ok_or_else(|| SandboxError::Protocol("bad input image".into()))?;
+            sb.shm.write_from(src, &input.raw());
+            inputs.push((SOURCE.into(), slot_for(src, w, h, live.source)));
+        }
         let reply = sb.request(Request::Render {
             instance: live.instance,
             time,
             window: [0, 0, w as i32, h as i32],
             scale: [frame.texel_scale, frame.texel_scale],
-            inputs: vec![("Source".into(), slot_for(src, w, h, live.source))],
+            inputs,
             output: slot_for(dst, w, h, live.output),
         })?;
         match reply {

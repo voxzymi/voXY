@@ -66,7 +66,7 @@ fn scan_render_block_and_retry() {
     names.sort_unstable();
     assert_eq!(
         names,
-        ["Test Gain", "Test Gain", "Test Gain"],
+        ["Test Gain", "Test Gain", "Test Gain", "Test Solid"],
         "gain, crash, hang share the description"
     );
     assert_eq!(scan.problems, vec![]);
@@ -185,4 +185,38 @@ fn the_cache_skips_unchanged_bundles_and_redescribes_changed_ones() {
     let c = third.scan_cached(std::slice::from_ref(&bundle), &cache);
     assert_eq!(third.sandboxes_running(), 1, "re-described");
     assert_eq!(c.definitions, a.definitions);
+}
+
+#[test]
+fn a_generator_replaces_the_input() {
+    let tmp = tempfile::tempdir().unwrap();
+    let bundle = common::bundle(tmp.path());
+    let rt = OfxRuntime::new(Path::new(EXE), tmp.path(), Timeouts::default()).unwrap();
+    let scan = rt.scan(std::slice::from_ref(&bundle));
+    let def = scan
+        .definitions
+        .iter()
+        .find(|d| d.type_id == plugin_type("org.voxy.test.Solid"))
+        .expect("the generator-only plugin is mapped");
+    assert_eq!(
+        def.params.iter().map(|p| &*p.name).collect::<Vec<_>>(),
+        ["color"]
+    );
+    let fx = EvaluatedEffect {
+        id: EffectId(1),
+        type_id: plugin_type("org.voxy.test.Solid"),
+        version: 1,
+        params: vec![(
+            Arc::from("color"),
+            Value::Color(voxy_core::LinearRgba::new(0.5, 0.25, 1.0, 0.5)),
+        )],
+        matte: None,
+        frame: 0,
+        layer_progress: 0.0,
+    };
+    let mut f = frame();
+    rt.render(&fx, &mut f).unwrap();
+    for px in f.pixels.as_chunks::<4>().0 {
+        assert_eq!(*px, [0.25, 0.125, 0.5, 0.5], "premultiplied colour");
+    }
 }

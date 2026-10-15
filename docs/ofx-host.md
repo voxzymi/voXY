@@ -235,7 +235,8 @@ closes (then it unloads everything and exits 0).
 
 ## Plugins as voXY effects (O-B, `voxy_ofx_host::mapping`)
 
-The filter context of each plugin becomes an effect definition
+Each plugin's filter context, or its generator context when it has no
+filter context (O-C), becomes an effect definition
 `ofx:<pluginIdentifier>`, version = the plugin's major version (a newer
 minor version loads normally). Name: the plugin's label (or identifier);
 category: its grouping (or "OpenFX"); description: its description.
@@ -256,6 +257,9 @@ category: its grouping (or "OpenFX"); description: its description.
 | PushButton | read-only for now; buttons come with the parameter UI step |
 | Parametric | refused at define time (not supported yet) |
 
+- A generator has no `Source` clip: its output replaces the effect's
+  input (best on a solid or adjustment layer, design §6.4). A plugin with
+  both contexts runs as a filter.
 - Hard range from Min/Max unless they are the "no limit" defaults; the
   display range from DisplayMin/Max, kept inside the hard range.
 - Animatable follows `kOfxParamPropAnimates`; secret parameters are
@@ -308,7 +312,8 @@ the next chain texture; GPU effects after it continue as usual.
 Left after O-B: parameter values at other times than the frame (asked
 back from the editor), key times, the plugin's own regions of definition
 and interest, absolute image coordinates, push buttons, sequence-render
-calls during export and playback, the generator context, cancelling a
+calls during export and playback, cancelling a
 render from the editor, timeouts in Preferences, and instance clean-up when
-an effect is deleted. Then the transition and general contexts (O-C),
+an effect is deleted. The generator context arrived in O-C step 1. Then
+the transition and general contexts (O-C),
 interacts (O-D) and parametric parameters.
