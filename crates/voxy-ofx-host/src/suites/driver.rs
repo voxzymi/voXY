@@ -73,7 +73,7 @@ pub struct Plugin {
     host: HostStruct,
     pub identifier: String,
     pub version: (u32, u32),
-    loaded: bool,
+    loaded: std::sync::atomic::AtomicBool,
 }
 
 /// Everything Describe and `DescribeInContext` reported.
@@ -148,16 +148,18 @@ impl Plugin {
         // SAFETY: the plugin keeps the pointer while loaded; `host` lives
         // as long as this `Plugin` and its box never moves.
         unsafe { set_host(host.as_ptr()) };
-        let mut plugin = Plugin {
+        let plugin = Plugin {
             raw,
             host,
             identifier,
             version: (raw.pluginVersionMajor, raw.pluginVersionMinor),
-            loaded: false,
+            loaded: std::sync::atomic::AtomicBool::new(false),
         };
         // SAFETY: the plugin's own entry point.
         unsafe { plugin.call(ofx::kOfxActionLoad, std::ptr::null(), None, None) }?;
-        plugin.loaded = true;
+        plugin
+            .loaded
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         Ok(plugin)
     }
 
@@ -277,13 +279,20 @@ impl Plugin {
     }
 }
 
-impl Drop for Plugin {
-    fn drop(&mut self) {
-        if self.loaded {
-            // SAFETY: the plugin's own entry point, once, after its
-            // instances are gone (they borrow the plugin).
+impl Plugin {
+    /// Runs Unload, once. Instances must be gone (in the sandbox, plugins
+    /// live as long as the process, so it unloads them explicitly).
+    pub fn unload(&self) {
+        if self.loaded.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            // SAFETY: the plugin's own entry point, once.
             let _ = unsafe { self.call(ofx::kOfxActionUnload, std::ptr::null(), None, None) };
         }
+    }
+}
+
+impl Drop for Plugin {
+    fn drop(&mut self) {
+        self.unload();
     }
 }
 

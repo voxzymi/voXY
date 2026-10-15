@@ -158,6 +158,9 @@ impl Panels<'_> {
         let (doc, revision) = self.state.view_document();
         let preview = self.state.effects_preview;
         let playing = self.state.transport.is_playing();
+        if std::mem::take(&mut self.state.redraw) {
+            viewport.invalidate();
+        }
         let mut shot = crate::viewport::Shot {
             doc: &doc,
             comp: comp_id,
@@ -172,6 +175,13 @@ impl Panels<'_> {
             playing,
             crate::viewport::Slot::Main,
         );
+        // Effects whose plugin failed, for their headers.
+        self.state.effect_errors = viewport
+            .last_report
+            .external_errors
+            .iter()
+            .cloned()
+            .collect();
         let Some((id, _)) = frame else { return };
         let before = preview.split.and_then(|_| {
             shot.effects = voxy_render::EffectsView::Bypass;
@@ -392,9 +402,45 @@ impl Panels<'_> {
                             ),
                         );
                     }
+                    self.plugin_problem(ui, fx);
                     self.effect_params(ui, fx, def.as_deref(), None, &refs, 0);
                 });
         }
+    }
+
+    /// Why an OpenFX effect is passed through, if it is: a failure in the
+    /// last frame, or its plugin being blocked.
+    fn plugin_problem_text(&self, fx: &voxy_core::EffectInstance) -> Option<String> {
+        if !fx.type_id.is_ofx() {
+            return None;
+        }
+        self.state
+            .effect_errors
+            .get(&fx.id)
+            .cloned()
+            .or_else(|| self.state.ofx_blocked(&fx.type_id))
+    }
+
+    /// The message and Retry button for an OpenFX effect whose plugin
+    /// failed (design §6.7).
+    fn plugin_problem(&mut self, ui: &mut Ui, fx: &voxy_core::EffectInstance) {
+        let Some(why) = self.plugin_problem_text(fx) else {
+            return;
+        };
+        ui.horizontal_wrapped(|ui| {
+            ui.colored_label(
+                ui.visuals().error_fg_color,
+                format!("The image passes through unchanged: {why}."),
+            );
+            if self.state.ofx.is_some()
+                && ui
+                    .button("Retry")
+                    .on_hover_text("Unblock the plugin and start its host again")
+                    .clicked()
+            {
+                self.state.retry_ofx(&fx.type_id);
+            }
+        });
     }
 
     /// The parameters of `fx` in `group` (`None`: the top level), then its
@@ -478,8 +524,16 @@ impl Panels<'_> {
         if fx.is_placeholder() {
             name = name.color(ui.visuals().warn_fg_color);
         }
+        let problem = self.plugin_problem_text(fx);
+        if problem.is_some() {
+            name = name.color(ui.visuals().error_fg_color);
+        }
         let selected = self.state.selected_effect == Some(fx.id);
         let label = ui.selectable_label(selected, name);
+        if let Some(why) = &problem {
+            ui.colored_label(ui.visuals().error_fg_color, "⚠")
+                .on_hover_text(format!("Passed through: {why}"));
+        }
         if label.clicked() || label.secondary_clicked() {
             self.state.selected_effect = Some(fx.id);
         }

@@ -3,8 +3,7 @@ name = "voxy-ofx-host"
 description = "voXY OpenFX host (from M7)"
 version.workspace = true
 edition.workspace = true
-# C-variadic functions (the parameter suite's getters) are stable from 1.99.
-rust-version = "1.99"
+rust-version.workspace = true
 repository.workspace = true
 authors.workspace = true
 publish = false
@@ -13,7 +12,16 @@ publish = false
 workspace = true
 
 [dependencies]
+voxy-core.workspace = true
 voxy-ofx-sys.workspace = true
+interprocess.workspace = true
+libloading.workspace = true
+memmap2.workspace = true
+postcard.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
+voxy-core.workspace = true
+voxy-ofx-testplugins = { path = "../voxy-ofx-testplugins" }
 tempfile.workspace = true

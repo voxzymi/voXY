@@ -7,7 +7,7 @@ CI fails if this file is stale. The policy that every license must satisfy is in
 The list covers every target platform, so it includes crates that are only
 compiled on Windows, macOS or Linux.
 
-412 crates.
+419 crates.
 
 ## By license
 
@@ -15,6 +15,8 @@ compiled on Windows, macOS or Linux.
 |---|---|
 | `(MIT OR Apache-2.0) AND OFL-1.1 AND Ubuntu-font-1.0` | 1 |
 | `(MIT OR Apache-2.0) AND Unicode-3.0` | 1 |
+| `0BSD` | 2 |
+| `0BSD OR Apache-2.0` | 1 |
 | `0BSD OR MIT OR Apache-2.0` | 1 |
 | `Apache-2.0` | 15 |
 | `Apache-2.0 AND MIT` | 1 |
@@ -29,7 +31,7 @@ compiled on Windows, macOS or Linux.
 | `BSL-1.0` | 2 |
 | `ISC` | 1 |
 | `MIT` | 90 |
-| `MIT OR Apache-2.0` | 209 |
+| `MIT OR Apache-2.0` | 213 |
 | `MIT OR Apache-2.0 OR LGPL-2.1-or-later` | 1 |
 | `MIT OR Apache-2.0 OR Zlib` | 6 |
 | `MIT OR Zlib OR Apache-2.0` | 1 |
@@ -99,6 +101,7 @@ compiled on Windows, macOS or Linux.
 | [`cgl`](https://github.com/servo/cgl-rs) | 0.3.2 | `MIT OR Apache-2.0` |
 | [`clang-sys`](https://github.com/KyleMayes/clang-sys) | 1.9.1 | `Apache-2.0` |
 | [`clipboard-win`](https://github.com/DoumanAsh/clipboard-win) | 5.4.1 | `BSL-1.0` |
+| [`cobs`](https://github.com/jamesmunns/cobs.rs) | 0.3.0 | `MIT OR Apache-2.0` |
 | [`codespan-reporting`](https://github.com/brendanzab/codespan) | 0.13.1 | `Apache-2.0` |
 | [`color`](https://github.com/linebender/color) | 0.3.3 | `Apache-2.0 OR MIT` |
 | [`combine`](https://github.com/Marwes/combine) | 4.6.8 | `MIT` |
@@ -118,6 +121,7 @@ compiled on Windows, macOS or Linux.
 | [`dispatch`](http://github.com/SSheldon/rust-dispatch) | 0.2.0 | `MIT` |
 | [`dispatch2`](https://github.com/madsmtm/objc2) | 0.3.1 | `Zlib OR Apache-2.0 OR MIT` |
 | [`dlib`](https://github.com/elinorbgr/dlib) | 0.5.3 | `MIT` |
+| [`doctest-file`](https://codeberg.org/Goat7658/doctest-file) | 1.1.1 | `0BSD` |
 | [`document-features`](https://github.com/slint-ui/document-features) | 0.2.12 | `MIT OR Apache-2.0` |
 | [`downcast-rs`](https://github.com/marcianx/downcast-rs) | 1.2.1 | `MIT OR Apache-2.0` |
 | [`dpi`](https://github.com/rust-windowing/winit) | 0.1.2 | `Apache-2.0 AND MIT` |
@@ -131,6 +135,7 @@ compiled on Windows, macOS or Linux.
 | [`egui_glow`](https://github.com/emilk/egui/tree/main/crates/egui_glow) | 0.36.2 | `MIT OR Apache-2.0` |
 | [`either`](https://github.com/rayon-rs/either) | 1.19.0 | `MIT OR Apache-2.0` |
 | [`emath`](https://github.com/emilk/egui/tree/main/crates/emath) | 0.36.2 | `MIT OR Apache-2.0` |
+| [`embedded-io`](https://github.com/embassy-rs/embedded-io) | 0.4.0, 0.6.1 | `MIT OR Apache-2.0` |
 | [`endi`](https://github.com/zeenix/endi) | 1.1.1 | `MIT` |
 | [`enumflags2`](https://github.com/meithecatte/enumflags2) | 0.7.12 | `MIT OR Apache-2.0` |
 | [`enumflags2_derive`](https://github.com/meithecatte/enumflags2) | 0.7.12 | `MIT OR Apache-2.0` |
@@ -186,6 +191,7 @@ compiled on Windows, macOS or Linux.
 | [`hex`](https://github.com/KokaKiwi/rust-hex) | 0.4.3 | `MIT OR Apache-2.0` |
 | [`image`](https://github.com/image-rs/image) | 0.25.10 | `MIT OR Apache-2.0` |
 | [`indexmap`](https://github.com/indexmap-rs/indexmap) | 2.14.2 | `Apache-2.0 OR MIT` |
+| [`interprocess`](https://github.com/kotauskas/interprocess) | 2.4.5 | `0BSD OR Apache-2.0` |
 | [`itertools`](https://github.com/rust-itertools/itertools) | 0.13.0, 0.15.0 | `MIT OR Apache-2.0` |
 | [`itoa`](https://github.com/dtolnay/itoa) | 1.0.18 | `MIT OR Apache-2.0` |
 | [`jni`](https://github.com/jni-rs/jni-rs) | 0.22.4 | `MIT OR Apache-2.0` |
@@ -278,6 +284,7 @@ compiled on Windows, macOS or Linux.
 | [`polycool`](https://github.com/linebender/kurbo) | 0.4.0 | `MIT OR Apache-2.0` |
 | [`portable-atomic`](https://github.com/taiki-e/portable-atomic) | 1.15.0 | `Apache-2.0 OR MIT` |
 | [`portable-atomic-util`](https://github.com/taiki-e/portable-atomic-util) | 0.2.8 | `Apache-2.0 OR MIT` |
+| [`postcard`](https://github.com/jamesmunns/postcard) | 1.1.3 | `MIT OR Apache-2.0` |
 | [`ppv-lite86`](https://github.com/cryptocorrosion/cryptocorrosion) | 0.2.21 | `MIT OR Apache-2.0` |
 | [`presser`](https://github.com/EmbarkStudios/presser) | 0.3.1 | `MIT OR Apache-2.0` |
 | [`proc-macro-crate`](https://github.com/bkchr/proc-macro-crate) | 3.5.0 | `MIT OR Apache-2.0` |
@@ -298,6 +305,7 @@ compiled on Windows, macOS or Linux.
 | [`raw-window-handle`](https://github.com/rust-windowing/raw-window-handle) | 0.6.2 | `MIT OR Apache-2.0 OR Zlib` |
 | [`raw-window-metal`](https://github.com/rust-windowing/raw-window-metal) | 1.1.0 | `MIT OR Apache-2.0` |
 | [`read-fonts`](https://github.com/googlefonts/fontations) | 0.41.0 | `MIT OR Apache-2.0` |
+| `recvmsg` | 1.0.0 | `0BSD` |
 | [`redox_syscall`](https://gitlab.redox-os.org/redox-os/syscall) | 0.4.1, 0.5.18, 0.9.4 | `MIT` |
 | [`regex`](https://github.com/rust-lang/regex) | 1.13.1 | `MIT OR Apache-2.0` |
 | [`regex-automata`](https://github.com/rust-lang/regex) | 0.4.18 | `MIT OR Apache-2.0` |
@@ -404,6 +412,7 @@ compiled on Windows, macOS or Linux.
 | [`wgpu-hal`](https://github.com/gfx-rs/wgpu) | 30.0.1 | `MIT OR Apache-2.0` |
 | [`wgpu-naga-bridge`](https://github.com/gfx-rs/wgpu) | 30.0.1 | `MIT OR Apache-2.0` |
 | [`wgpu-types`](https://github.com/gfx-rs/wgpu) | 30.0.1 | `MIT OR Apache-2.0` |
+| [`widestring`](https://github.com/VoidStarKat/widestring-rs) | 1.2.1 | `MIT OR Apache-2.0` |
 | [`winapi-util`](https://github.com/BurntSushi/winapi-util) | 0.1.11 | `Unlicense OR MIT` |
 | [`windows`](https://github.com/microsoft/windows-rs) | 0.62.2 | `MIT OR Apache-2.0` |
 | [`windows-collections`](https://github.com/microsoft/windows-rs) | 0.3.2 | `MIT OR Apache-2.0` |

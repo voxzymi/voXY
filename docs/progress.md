@@ -429,8 +429,8 @@ at `743b053` (merge of #3).
          plugin-writable), the live-handle registry, `OfxHost` and
          `fetchSuite`, and the property and memory suites, tested through
          `fetchSuite`. `voxy-ofx-host` needs Rust 1.99 (C-variadic
-         functions, for the parameter suite); the rest of the workspace
-         stays at 1.97.
+         functions, for the parameter suite); since O-B the whole
+         workspace does (the editor links the host).
       2. **Done:** message (V1/V2, with a C99 printf formatter), progress
          (V1/V2, abort replies no), time line and multi-thread suites
          (recursive mutexes), on a host-side `effect::Effect` record. The
@@ -458,7 +458,81 @@ at `743b053` (merge of #3).
       licenses, unpinned commits, and downloads without a sha256; once
       `third_party/ofx-fixtures.toml` exists, every fixture must be an
       approved credit.
-6. O-B to O-D.
+   **O-A complete.** CI green on `main` at `3a1d1e3` (merge of #4), all
+   jobs on all four platforms (run 38151511685).
+6. O-B: the sandbox process, CPU rendering of filter plugins (design
+   §6.7). Steps:
+   1. **Done:** `protocol`: versioned `Request`/`Reply` in
+      length-prefixed `postcard` frames (16 MiB cap, exact decoding),
+      serializable descriptions (no pointers cross), parameter snapshots,
+      image slots and parameter edits. Round-trip and garbage tests, and
+      a `cargo fuzz` target (`ofx_frame`).
+   2. **Done:** `shm`: a `memmap2` mapping per sandbox in a private
+      session folder (`/dev/shm` on Linux, temp elsewhere; 0700 on Unix),
+      a 4 KiB header (magic, layout, length, abort flag, heartbeat),
+      64-byte-aligned slots with bounds checks. The folder is locked while
+      the session lives, removed on drop, and `clean_stale` removes folders
+      whose lock is free (left by a crash), as D4 requires.
+   3. The sandbox binary: loads a bundle, serves requests over a local
+      socket.
+      1. **Done:** `voxy-ofx-testplugins`, our own test plugins (gain,
+         crash, hang) as a `cdylib` + `rlib` exporting `OfxGetPlugin`; the
+         in-process harness now links the same gain plugin.
+      2. **Done:** `voxy-ofx-sandbox`: bundle loading (`libloading`, in the
+         sandbox only), the request server, local-socket channel
+         (`interprocess`), heartbeat and abort thread. End-to-end tests
+         build a real `.ofx.bundle` from the test plugins: describe,
+         render through shared memory, messages, unload; a crashing
+         plugin ends only the sandbox. Parameter queries at other times
+         use the snapshot value until the editor-query step.
+   4. **Done:** `client::Sandbox`: launch with a connect timeout,
+      handshake, per-action timeouts, crash/hang/protocol errors that kill
+      the sandbox and stick, abort flag; `Blocklist` (session, persistent
+      after 3 failures, Retry). Tests: clean run, crash in Render, hang in
+      Render (killed at a 0.5 s test timeout), a bundle that does not load,
+      the blocklist rules.
+   5. Effect definitions from descriptions; CPU rendering of filter
+      plugins in the render graph.
+      1. **Done:** `mapping`: a plugin's filter context as an `EffectDef`
+         (`ofx:<id>`, major version), every parameter type per §6.6, value
+         conversion both ways, strict base64 for Bytes. The gain test
+         plugin registers in the effect registry. A Windows-only clippy
+         lint from step 2 was fixed on the way (CI run 38557109300).
+      2. **Done:** `voxy_core::external::{ExternalEffects, CpuFrame}` and
+         the renderer's `External` kernel: readback, CPU provider, upload,
+         between GPU passes; pass-through plus `RenderReport::
+         external_errors` when there is no provider or it fails. GPU tests
+         with a CPU invert provider (Linux, lavapipe).
+      3. **Done:** `runtime::OfxRuntime`, the `ExternalEffects` provider:
+         scans bundles into effect definitions, one sandbox per bundle,
+         instances per effect, parameter snapshots, frames through shared
+         memory (flipped, at the plugin's preferred depth), blocklist and
+         Retry. Tested against the real sandbox: gain renders, crash and
+         hang are blocked, the bundle's other plugins carry on.
+      4. App wiring:
+         1. **Done:** the discovery cache (`cache::DescribeCache`,
+            `OfxRuntime::scan_cached`): unchanged bundles are not loaded at
+            start-up. Sandbox channel names are now unique per process
+            (two runtimes in one process collided in parallel tests).
+         2. **Done:** the editor scans at start-up, before a project
+            opens: standard folders plus Preferences' `ofx_plugin_paths`,
+            cached descriptions, definitions registered, the runtime given
+            to the viewport's compositor; persistent blocks are saved in
+            Preferences (`ofx_blocked`). No plugins means no runtime and no
+            session folder. The workspace `rust-version` is now 1.99 (the
+            editor links the host, which needs C-variadic functions; CI
+            already used 1.99).
+   6. **Done:** UI messages: the effect header's ⚠ badge and error colour
+      with the reason, a pass-through line with Retry in Effect Controls,
+      blocked plugins marked in the Effects panel; Retry unblocks, forgets
+      the errors and redraws. Persistent blocks live in Preferences
+      (step 5.4.2).
+
+   **O-B complete** for the requested scope (filter plugins). 709
+   workspace tests pass; CI green on all four platforms at `f04f2f8`
+   (run 38560685814). What is left
+   for follow-up steps is listed at the end of `docs/ofx-host.md`.
+7. O-C, O-D.
 
 ## Approved decisions
 
@@ -502,7 +576,7 @@ at `743b053` (merge of #3).
 ## Toolchain
 
 - CI uses the current stable Rust (1.99 since 2026-09-28), and so does
-  local work now. Clippy 1.99 added `assert_is_empty`, and the new tests
+  local work now. The workspace needs 1.99 since O-B. Clippy 1.99 added `assert_is_empty`, and the new tests
   follow it.
 
 ## Known flaky tests (outside the effects scope)

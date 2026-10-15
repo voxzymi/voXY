@@ -154,12 +154,25 @@ pub fn show(ui: &mut Ui, state: &mut EditorState) {
                 })
                 .body(|ui| {
                     for def in defs {
-                        let r = ui
-                            .add(egui::Label::new(def.name.as_ref()).sense(Sense::click_and_drag()))
-                            .on_hover_text(format!(
+                        // A blocked OpenFX plugin is listed, marked, with why.
+                        let blocked = state.ofx_blocked(&def.type_id);
+                        let mut text = egui::RichText::new(def.name.as_ref());
+                        if blocked.is_some() {
+                            text = text.color(ui.visuals().error_fg_color);
+                        }
+                        let hint = match &blocked {
+                            Some(why) => format!(
+                                "{}\n\nBlocked: {why}\nIt passes images through until Retry in Effect Controls.",
+                                def.description
+                            ),
+                            None => format!(
                                 "{}\n\nDouble-click to apply to the selected layer, or drag onto a layer.",
                                 def.description
-                            ));
+                            ),
+                        };
+                        let r = ui
+                            .add(egui::Label::new(text).sense(Sense::click_and_drag()))
+                            .on_hover_text(hint);
                         if r.double_clicked() {
                             apply_to_selection(state, def.clone());
                         }

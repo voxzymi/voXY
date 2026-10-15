@@ -129,6 +129,16 @@ pub struct EditorState {
     /// Every effect this session can apply: the built-ins (and, from O-A,
     /// installed OpenFX plugins). Projects resolve against it on load.
     pub effects: std::sync::Arc<voxy_core::registry::EffectRegistry>,
+    /// The OpenFX runtime, when plugins were found (design §6.3).
+    pub ofx: Option<std::sync::Arc<voxy_ofx_host::runtime::OfxRuntime>>,
+    /// What OpenFX start-up could not use: `(bundle or plugin, reason)`.
+    pub ofx_problems: Vec<(String, String)>,
+    /// Effects the last viewport frame passed through because their plugin
+    /// failed, with the reason (shown on the effect's header).
+    pub effect_errors: std::collections::HashMap<voxy_core::EffectId, String>,
+    /// Render the viewport again even if the document has not changed
+    /// (after Retry).
+    pub redraw: bool,
     /// Effects last copied (Copy Effect), for pasting onto other layers.
     pub effect_clipboard: Vec<voxy_core::EffectInstance>,
     /// The Effects & Presets panel's view state.
@@ -193,6 +203,10 @@ impl EditorState {
             shortcut_editor: None,
             prefs: Preferences::default(),
             effects: std::sync::Arc::new(voxy_core::registry::builtins().clone()),
+            ofx: None,
+            ofx_problems: Vec::new(),
+            effect_errors: std::collections::HashMap::new(),
+            redraw: false,
             effect_clipboard: Vec::new(),
             effects_panel: crate::effects_panel::EffectsPanel::default(),
             selected_effect: None,
@@ -1193,11 +1207,50 @@ impl EditorState {
     }
 
     pub fn save_prefs(&mut self) {
+        if let Some(rt) = &self.ofx {
+            self.prefs.ofx_blocked = rt.persistent_blocks();
+        }
         if let Some(path) = self.prefs_path.clone()
             && let Err(e) = self.prefs.save_to(&path)
         {
             self.error(format!("Could not save preferences: {e}"));
         }
+    }
+
+    /// Registers OpenFX plugins found at start-up (before any project is
+    /// opened, so its OpenFX effects resolve against them).
+    pub fn install_ofx(&mut self, startup: crate::ofx::OfxStartup) {
+        for (what, why) in &startup.problems {
+            tracing::warn!("OpenFX: {what}: {why}");
+        }
+        if !startup.definitions.is_empty() {
+            let mut reg = (*self.effects).clone();
+            for def in startup.definitions {
+                let name = def.name.clone();
+                if let Err(e) = reg.register(def) {
+                    tracing::warn!("OpenFX: {name}: {e}");
+                }
+            }
+            self.effects = std::sync::Arc::new(reg);
+        }
+        self.ofx_problems = startup.problems;
+        self.ofx = startup.runtime;
+    }
+
+    /// Why an OpenFX effect type is blocked, if it is.
+    pub fn ofx_blocked(&self, type_id: &voxy_core::EffectTypeId) -> Option<String> {
+        self.ofx.as_ref()?.blocked(type_id).map(|b| b.reason)
+    }
+
+    /// The Retry action on an OpenFX effect: unblocks its plugin, whose
+    /// host restarts cleanly on the next frame.
+    pub fn retry_ofx(&mut self, type_id: &voxy_core::EffectTypeId) {
+        if let Some(rt) = &self.ofx {
+            rt.retry(type_id);
+        }
+        self.effect_errors.clear();
+        self.redraw = true;
+        self.save_prefs();
     }
 
     /// Keeps the live preview in step with the dialog: the viewport shows

@@ -24,6 +24,7 @@ mod document;
 pub mod easing;
 pub mod effect;
 mod evaluate;
+pub mod external;
 mod history;
 mod id;
 pub mod keyframe;

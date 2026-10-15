@@ -17,7 +17,7 @@ use crate::props::{Dim, PropSet, Values};
 
 /// A parameter type (`kOfxParamType*`). Parametric parameters are not
 /// supported yet (`docs/ofx-host.md`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ParamKind {
     Integer,
     Double,
@@ -135,7 +135,7 @@ impl ParamKind {
 }
 
 /// One parameter value.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum ParamValue {
     Ints(Vec<i32>),
     Doubles(Vec<f64>),

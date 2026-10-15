@@ -75,6 +75,7 @@ impl ChainEntry {
 /// The shaders of `kernel`'s stages ([`crate::kernels::KernelParams::stage`]).
 pub(super) fn kernel_shaders(kernel: Kernel) -> Vec<&'static str> {
     match kernel {
+        Kernel::External => Vec::new(),
         Kernel::DropShadow | Kernel::InnerShadow => vec![
             include_str!("../shaders/effects/shadow_mask.wgsl"),
             include_str!("../shaders/effects/convolve.wgsl"),
@@ -100,6 +101,8 @@ pub(super) fn kernel_shaders(kernel: Kernel) -> Vec<&'static str> {
 
 fn kernel_shader(kernel: Kernel) -> &'static str {
     match kernel {
+        // Never built: `kernel_shaders` returns none for it.
+        Kernel::External => unreachable!("the external kernel has no shader"),
         Kernel::Invert => include_str!("../shaders/effects/invert.wgsl"),
         Kernel::GaussianBlur | Kernel::BoxBlur => {
             include_str!("../shaders/effects/convolve.wgsl")
@@ -710,6 +713,14 @@ impl Compositor {
                 continue;
             }
             let ctx = PassContext { seed: *seed, ..ctx };
+            if *kernel == Kernel::External {
+                // One slot so pass `i` keeps uniform slot `i`; the CPU step
+                // reads no uniforms.
+                let at = bytes.len();
+                bytes.resize(at + stride as usize, 0);
+                passes.push((*kernel, None, 0, true, index));
+                continue;
+            }
             let mut first = true;
             for mut k in kernel.passes(fx, &ctx) {
                 if let Some(e) = lut.and_then(|a| self.luts.get(&a)) {
@@ -760,6 +771,25 @@ impl Compositor {
                 if *first {
                     kept = kernel.keeps_input().then_some(cur);
                 }
+                if *kernel == Kernel::External {
+                    let next = (0..entry.views.len())
+                        .find(|&t| t != cur)
+                        .expect("a free texture");
+                    let node = &effects[*index];
+                    match self.external_step(
+                        device,
+                        queue,
+                        encoder,
+                        (&entry.textures[cur], &entry.textures[next]),
+                        entry.size,
+                        &node.effect,
+                        &ctx,
+                    ) {
+                        Ok(()) => cur = next,
+                        Err(e) => report.external_errors.push((node.effect.id, e)),
+                    }
+                    continue;
+                }
                 let Some(pipeline) = self.effect_pipelines.get(&(*kernel, *stage)) else {
                     continue;
                 };
@@ -807,6 +837,116 @@ impl Compositor {
             }
         }
         (cur, lut_missing)
+    }
+
+    /// Runs an external effect on the CPU: reads `textures.0` back (the
+    /// commands so far are submitted first), hands it to the provider, and
+    /// writes the result into `textures.1`. On an error nothing is written
+    /// and the caller passes the image through.
+    #[allow(clippy::too_many_arguments)]
+    fn external_step(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        textures: (&wgpu::Texture, &wgpu::Texture),
+        size: (u32, u32),
+        fx: &voxy_core::EvaluatedEffect,
+        ctx: &PassContext,
+    ) -> Result<(), String> {
+        let Some(ext) = self.external.clone() else {
+            return Err("OpenFX plugins are not available in this session".into());
+        };
+        if !ext.supports(&fx.type_id) {
+            return Err("the plugin is not installed".into());
+        }
+        let (w, h) = size;
+        let texel = 8u32; // Rgba16Float
+        let padded = (w * texel).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
+            * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("voxy-external-readback"),
+            size: u64::from(padded) * u64::from(h),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let extent = wgpu::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
+        };
+        encoder.copy_texture_to_buffer(
+            textures.0.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded),
+                    rows_per_image: Some(h),
+                },
+            },
+            extent,
+        );
+        let done = std::mem::replace(
+            encoder,
+            device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("voxy-after-external"),
+            }),
+        );
+        let submission = queue.submit([done.finish()]);
+        let slice = buffer.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        device
+            .poll(wgpu::PollType::Wait {
+                submission_index: Some(submission),
+                timeout: None,
+            })
+            .map_err(|e| e.to_string())?;
+        rx.recv()
+            .map_err(|e| e.to_string())?
+            .map_err(|e| e.to_string())?;
+        let mut pixels = Vec::with_capacity((w * h * 4) as usize);
+        {
+            let data = slice.get_mapped_range().map_err(|e| e.to_string())?;
+            for row in data.chunks(padded as usize).take(h as usize) {
+                for c in row[..(w * texel) as usize].as_chunks::<2>().0 {
+                    pixels.push(half::f16::from_le_bytes(*c).to_f32());
+                }
+            }
+        }
+        buffer.unmap();
+        let mut frame = voxy_core::external::CpuFrame {
+            width: w,
+            height: h,
+            origin: ctx.origin,
+            texel_scale: ctx.texel_scale,
+            space: ctx.space,
+            pixels,
+        };
+        ext.render(fx, &mut frame)?;
+        if frame.pixels.len() != (w * h * 4) as usize || frame.width != w || frame.height != h {
+            return Err("the effect returned an image of the wrong size".into());
+        }
+        let bytes: Vec<u8> = frame
+            .pixels
+            .iter()
+            .flat_map(|v| half::f16::from_f32(*v).to_le_bytes())
+            .collect();
+        queue.write_texture(
+            textures.1.as_image_copy(),
+            &bytes,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(w * texel),
+                rows_per_image: Some(h),
+            },
+            extent,
+        );
+        self.chain_stats.passes += 1;
+        Ok(())
     }
 
     fn chain_asset_paths(
@@ -898,10 +1038,13 @@ impl Compositor {
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: WORKING_FORMAT,
-                // COPY_DST: an adjustment layer's input is copied in.
+                // COPY_DST: an adjustment layer's input is copied in, and
+                // an external effect's result is written in. COPY_SRC: an
+                // external effect's input is read back.
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                     | wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::COPY_DST,
+                    | wgpu::TextureUsages::COPY_DST
+                    | wgpu::TextureUsages::COPY_SRC,
                 view_formats: &[],
             });
             let view = texture.create_view(&wgpu::TextureViewDescriptor::default());

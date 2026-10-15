@@ -139,7 +139,7 @@ Parsing Alight Motion's actual format waits for real sample files; see
 
 ## Building
 
-You need a Rust **stable** toolchain, 1.97 or newer, from <https://rustup.rs>,
+You need a Rust **stable** toolchain, 1.99 or newer, from <https://rustup.rs>,
 plus **FFmpeg development libraries (3.0 to 9.0)** and **libclang**, which
 the FFmpeg bindings use at build time. voXY links FFmpeg dynamically.
 Development builds can use any FFmpeg; release builds ship an LGPL build

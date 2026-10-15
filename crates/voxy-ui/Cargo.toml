@@ -15,6 +15,7 @@ workspace = true
 voxy-core.workspace = true
 voxy-render.workspace = true
 voxy-media.workspace = true
+voxy-ofx-host.workspace = true
 eframe = { workspace = true, features = ["wgpu", "default_fonts", "wayland", "x11", "accesskit"] }
 egui.workspace = true
 egui-wgpu.workspace = true

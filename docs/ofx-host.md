@@ -59,6 +59,12 @@ Checked against OpenFX 1.5.1, "Packaging OFX Plug-ins".
   folder). Intel Macs fall back to the deprecated `MacOS-x86-64`. For arm64
   Windows and Linux the host uses the spec's informational names,
   `Win-arm64` and `Linux-aarch64`; voXY does not build for them yet.
+- **Cache:** `ofx-cache.json` in the config folder holds each bundle's
+  description keyed by its binary's path, modification time and size.
+  Start-up describes only bundles whose key changed (so unchanged plugins
+  are not loaded until an effect uses them), and drops entries of
+  binaries that are gone. A cache from another format version is ignored.
+  It is written to a temporary file and renamed.
 - Discovery never loads a binary. Loading and Describe happen only in the
   sandbox (design §6.3).
 
@@ -186,8 +192,123 @@ it.
 - **DestroyInstance** when an instance is dropped, **Unload** when the
   plugin is.
 
+## Sandbox (O-B)
+
+`voxy-ofx-sandbox --bundle <path> --channel <spec>` runs one bundle's
+plugins. It connects to the editor's local socket (`ns:` names on Linux
+and Windows, an `fs:` socket file in the session folder on macOS),
+answers `Hello` with its protocol version and process ID, maps the shared
+memory it is sent, and serves requests until `Unload` or until the channel
+closes (then it unloads everything and exits 0).
+
+- The binary is the bundle's `Contents/<arch>/NAME.ofx`, or a path to a
+  binary. Plugins that fail Load or Describe are listed in the
+  description's `failed` with the reason; the rest still work.
+- For a render, each input slot is copied into an image the plugin reads,
+  and the output image is copied back into its slot afterwards.
+- A heartbeat thread bumps the counter in the mapping every 25 ms, and
+  passes the editor's abort flag on to every instance.
+- Parameter values come from the request's snapshot. A plugin asking for
+  another time gets the snapshot value for now; asking the editor back
+  comes in a later O-B step. Changes the plugin makes return as
+  `ParamEdit`s with the action's reply.
+- `OfxSetHost` (the optional binary-level export in 1.5) is not called
+  yet.
+
+## Editor side of a sandbox (O-B, `voxy_ofx_host::client`)
+
+- **Launch:** the editor listens, starts the sandbox (found next to its
+  own executable), waits up to 10 s for it to connect, checks the
+  protocol version and hands it its mapping. A bundle that does not load
+  fails the launch with the sandbox's reason.
+- **Timeouts** (defaults, adjustable in Preferences later): Describe 10 s,
+  CreateInstance 5 s, Render 30 s, everything else 5 s.
+- **Crash, hang, protocol error:** the sandbox process is killed, the
+  error names the action (and the exit status or signal for a crash), and
+  every later request fails at once with it. The editor's process is never
+  affected; tests run a crashing and a hanging plugin to prove it.
+- **Blocklist:** a failure blocks the plugin for the session. After 3
+  failures the block is persistent (kept in Preferences). Retry clears it
+  and restarts the sandbox cleanly.
+- Dropping a healthy sandbox sends Unload (0.5 s grace) and then ends the
+  process.
+
+## Plugins as voXY effects (O-B, `voxy_ofx_host::mapping`)
+
+The filter context of each plugin becomes an effect definition
+`ofx:<pluginIdentifier>`, version = the plugin's major version (a newer
+minor version loads normally). Name: the plugin's label (or identifier);
+category: its grouping (or "OpenFX"); description: its description.
+
+| OFX parameter | voXY |
+|---|---|
+| Double, 2D, 3D | `Scalar`, `Vec2`, `Vec3`. Unit by double type: angle → degrees, scale → factor, X/Y types → pixels, normalised coordinates → normalised (sent as is), others none. |
+| Integer, 2D, 3D | `Int`, or `Vec2`/`Vec3` shown as integers |
+| Boolean | `Bool` |
+| Choice | `Enum` with the option labels; a default past the options becomes 0 |
+| StrChoice | `String`; the hint lists the allowed values |
+| String | `String` |
+| RGB / RGBA | `Color` (RGB hides alpha); components passed as they are |
+| Custom | `String`, not animatable (hold-only) |
+| Bytes | hidden `String`, base64 (standard alphabet, padded, strict) |
+| Group | a collapsible group (open state from the plugin) |
+| Page | flattened |
+| PushButton | read-only for now; buttons come with the parameter UI step |
+| Parametric | refused at define time (not supported yet) |
+
+- Hard range from Min/Max unless they are the "no limit" defaults; the
+  display range from DisplayMin/Max, kept inside the hard range.
+- Animatable follows `kOfxParamPropAnimates`; secret parameters are
+  hidden; labels and hints come from the plugin.
+
+## Rendering (O-B, design §6.9)
+
+An `ofx:` effect in a layer's chain is the renderer's `External` kernel.
+The commands so far are submitted, the chain buffer (premultiplied, in the
+working space, f16) is read back as floats, an `ExternalEffects` provider
+(the OpenFX host) runs the plugin on it, and the result is written into
+the next chain texture; GPU effects after it continue as usual.
+
+- Without a provider, for a type it does not run, or when the plugin
+  fails, the image passes through and the render report lists the effect
+  with the reason (for the effect header's error badge).
+- The region of definition stays the input's for now; the plugin's own
+  GetRegionOfDefinition and GetRegionsOfInterest join in a later step.
+- The provider is `runtime::OfxRuntime`. One sandbox per bundle, started
+  on first use and again after it dies; one plugin instance per voXY
+  effect, created on its first render with the depth and components the
+  plugin prefers (from GetClipPreferences). Each render sends the
+  parameter values at the frame, then the frame through shared memory,
+  rows flipped to OpenFX's bottom-up order and converted to the preferred
+  depth. The mapping grows by replacement when a frame does not fit.
+- For now the image's bounds start at (0, 0) and the project is the
+  buffer's size, so plugins that depend on absolute position see the
+  layer's buffer, not the composition. Parameter key times are not sent
+  yet.
+- A crash, hang or protocol error blocks the plugin for the session (other
+  plugins of the bundle get a fresh sandbox); a plugin that returns an
+  error status is reported but not blocked.
+
+## Messages in the editor (O-B)
+
+- An OpenFX effect that the last frame passed through (plugin failed,
+  blocked, not installed, or no plugin host) is shown in Effect Controls
+  with its name in the error colour, a ⚠ badge on its header whose
+  tooltip gives the reason, and a line in its body: "The image passes
+  through unchanged: <reason>." with a **Retry** button.
+- Retry unblocks the plugin (session and persistent blocks), forgets the
+  errors and renders the frame again; the plugin's host restarts cleanly.
+- The Effects & Presets panel keeps a blocked plugin listed, in the error
+  colour, with the reason in its tooltip.
+- Start-up problems (bundles without a binary for this platform, plugins
+  that could not be mapped, a missing plugin host) are logged.
+
 ## Still to be written (O-A to O-D)
 
-Render scale and multi-resolution, thread-safety levels across
-instances, timeouts and abort through the sandbox (O-B), the transition
-and general contexts (O-C), interacts (O-D), parametric parameters.
+Left after O-B: parameter values at other times than the frame (asked
+back from the editor), key times, the plugin's own regions of definition
+and interest, absolute image coordinates, push buttons, sequence-render
+calls during export and playback, the generator context, cancelling a
+render from the editor, timeouts in Preferences, and instance clean-up when
+an effect is deleted. Then the transition and general contexts (O-C),
+interacts (O-D) and parametric parameters.

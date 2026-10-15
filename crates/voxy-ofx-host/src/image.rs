@@ -15,7 +15,7 @@ use crate::props::{PropSet, Values, ofx_str};
 use crate::suites::PixelBuffer;
 
 /// A pixel depth (`kOfxBitDepth*`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Depth {
     Byte,
     Short,
@@ -47,7 +47,7 @@ impl Depth {
 }
 
 /// A component layout (`kOfxImageComponent*`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Components {
     Rgba,
     Rgb,
@@ -79,7 +79,7 @@ impl Components {
 }
 
 /// How alpha relates to colour (`kOfxImage*Multiplied`, `kOfxImageOpaque`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Premult {
     Opaque,
     Premultiplied,
@@ -108,7 +108,7 @@ impl Premult {
 
 /// A rectangle in pixels: `x1, y1` inclusive, `x2, y2` exclusive, with y
 /// up, as `OfxRectI`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct RectI {
     pub x1: i32,
     pub y1: i32,
@@ -283,6 +283,29 @@ impl Image {
             p[3] = 1.0;
         }
         self.write_rgba(&px);
+    }
+
+    /// An image holding `bytes` exactly as laid out in memory (bottom-up
+    /// rows of `row_bytes`), or `None` if the sizes disagree.
+    pub fn from_raw(
+        bounds: RectI,
+        depth: Depth,
+        components: Components,
+        premult: Premult,
+        bytes: &[u8],
+    ) -> Option<Image> {
+        let img = Image::new(bounds, depth, components, premult, [1.0, 1.0], 1.0)?;
+        if bytes.len() != img.buf.len() {
+            return None;
+        }
+        img.buf.write(bytes);
+        Some(img)
+    }
+
+    /// The bytes as laid out in memory. Call only when no plugin action is
+    /// writing.
+    pub fn raw(&self) -> Vec<u8> {
+        self.buf.to_vec()
     }
 
     /// The pixels as RGBA floats, bottom-up. RGB gets alpha 1; Alpha gets

@@ -93,6 +93,9 @@ pub struct RenderReport {
     pub unsupported_effects: usize,
     /// Placeholder effects (not installed) drawn as pass-through.
     pub missing_effects: usize,
+    /// External (OpenFX) effects that failed and passed the image through,
+    /// with the reason: the effect header shows it.
+    pub external_errors: Vec<(voxy_core::EffectId, String)>,
 }
 
 /// GPU upload counters for video frames.
@@ -261,6 +264,8 @@ pub struct Compositor {
     effect_input_layout: wgpu::BindGroupLayout,
     /// LUT assets for the LUT effect, and their bind group layout.
     luts: HashMap<AssetId, lut::LutEntry>,
+    /// Runs OpenFX effects on the CPU (design §6.9), when the app has one.
+    external: Option<std::sync::Arc<dyn voxy_core::external::ExternalEffects>>,
     lut_layout: wgpu::BindGroupLayout,
     effect_uniforms: Option<(wgpu::Buffer, wgpu::BindGroup, u64)>,
     effect_stride: u64,
@@ -370,6 +375,15 @@ fn space_flag(space: WorkingSpace) -> u32 {
 }
 
 impl Compositor {
+    /// Sets the provider that runs external (OpenFX) effects. Without one,
+    /// they pass the image through and are reported.
+    pub fn set_external(
+        &mut self,
+        external: Option<std::sync::Arc<dyn voxy_core::external::ExternalEffects>>,
+    ) {
+        self.external = external;
+    }
+
     pub fn new(device: &wgpu::Device) -> Self {
         let layer_uniform_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -608,6 +622,7 @@ impl Compositor {
             effect_uniform_layout,
             effect_input_layout,
             luts: HashMap::new(),
+            external: None,
             lut_layout,
             effect_chain_layout,
             effect_uniforms: None,

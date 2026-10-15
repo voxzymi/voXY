@@ -23,6 +23,7 @@ mod layout;
 mod media;
 mod menu;
 mod nav_time;
+mod ofx;
 mod panels;
 mod prefs;
 mod project_panel;

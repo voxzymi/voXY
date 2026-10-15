@@ -122,6 +122,12 @@ pub struct Preferences {
     pub dock_layout: Option<String>,
     /// What double-clicking a precomp layer does.
     pub precomp_double_click: PrecompOpen,
+    /// Extra folders searched for OpenFX plugins, after `OFX_PLUGIN_PATH`
+    /// and the standard folder (design §6.2).
+    pub ofx_plugin_paths: Vec<PathBuf>,
+    /// OpenFX plugins that failed three times, with the reason; they stay
+    /// blocked until Retry (design §6.7).
+    pub ofx_blocked: Vec<(String, String)>,
 }
 
 /// Reads the shortcut table entry by entry (like [`lenient_list`]).
@@ -154,6 +160,8 @@ impl Default for Preferences {
             shortcuts: BTreeMap::new(),
             dock_layout: None,
             precomp_double_click: PrecompOpen::CurrentTab,
+            ofx_plugin_paths: Vec::new(),
+            ofx_blocked: Vec::new(),
         }
     }
 }

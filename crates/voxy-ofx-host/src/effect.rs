@@ -14,7 +14,7 @@ use crate::image::ImageSource;
 use crate::params::{ParamSet, ParamValues, Role};
 use crate::props::{PropSet, Values};
 /// A message type from `ofxMessage.h`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum MessageKind {
     Fatal,
     Error,
@@ -42,7 +42,7 @@ impl MessageKind {
 }
 
 /// One message from the plugin, already formatted.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Message {
     pub kind: MessageKind,
     /// The plugin's message id, if it gave one.
@@ -87,7 +87,7 @@ struct State {
 
 /// The project an instance belongs to, as OpenFX describes it, in
 /// canonical coordinates (`kOfxImageEffectPropProject*`).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Project {
     pub size: [f64; 2],
     pub offset: [f64; 2],
