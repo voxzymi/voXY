@@ -258,6 +258,20 @@ impl OfxRuntime {
         self.lock().blocklist = Blocklist::with_persistent(blocks);
     }
 
+    /// Tells `fx`'s plugin that its parameter `param` changed (a user edit,
+    /// or a push button pressed): `InstanceChanged` with the new values.
+    /// Returns what the plugin changed in response and what it said. The
+    /// instance is created if it has none yet, for a layer of
+    /// `layer_size` (an existing instance keeps its own).
+    pub fn instance_changed(
+        &self,
+        fx: &EvaluatedEffect,
+        layer_size: DVec2,
+        param: &str,
+    ) -> Result<InstanceChange, String> {
+        self.lock().instance_changed(fx, layer_size, param)
+    }
+
     /// Ends the plugin instance of an effect that no longer exists.
     pub fn forget(&self, effect: EffectId) {
         let mut inner = self.lock();
@@ -269,6 +283,31 @@ impl OfxRuntime {
             });
         }
     }
+}
+
+/// A plugin parameter change, in OpenFX times (frames).
+#[derive(Debug, Clone, PartialEq)]
+pub enum PluginChange {
+    /// `frame: None`: the value now (`paramSetValue`).
+    Set {
+        name: String,
+        frame: Option<f64>,
+        value: Value,
+    },
+    DeleteKey {
+        name: String,
+        frame: f64,
+    },
+    DeleteAllKeys {
+        name: String,
+    },
+}
+
+/// What a plugin did in `InstanceChanged`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct InstanceChange {
+    pub changes: Vec<PluginChange>,
+    pub messages: Vec<crate::effect::Message>,
 }
 
 fn entry(bundle: &Path, p: &PluginDesc) -> PluginEntry {
@@ -550,6 +589,47 @@ impl Inner {
         })
     }
 
+    fn instance_changed(
+        &mut self,
+        fx: &EvaluatedEffect,
+        layer_size: DVec2,
+        param: &str,
+    ) -> Result<InstanceChange, String> {
+        let size = self
+            .instances
+            .get(&fx.id)
+            .map_or(layer_size, |l| l.layer_size);
+        self.with_plugin(fx, |this, index, entry| {
+            let live = match this.prepared(index, entry, fx, size)? {
+                Ok(l) => l,
+                Err(e) => return Ok(Err(e)),
+            };
+            let reply = this.ask(
+                index,
+                entry,
+                fx,
+                Request::InstanceChanged {
+                    instance: live.instance,
+                    param: param.to_owned(),
+                    time: fx.frame as f64,
+                },
+            )?;
+            Ok(match reply {
+                Reply::Done { messages, edits } => Ok(InstanceChange {
+                    changes: edits
+                        .into_iter()
+                        .filter_map(|e| plugin_change(entry, e))
+                        .collect(),
+                    messages,
+                }),
+                Reply::Failed { action, status, .. } => {
+                    Err(format!("the plugin failed {action} (status {status})"))
+                }
+                other => Err(format!("unexpected reply {other:?}")),
+            })
+        })
+    }
+
     fn render(&mut self, fx: &EvaluatedEffect, frame: &mut CpuFrame) -> Result<(), String> {
         self.with_plugin(fx, |this, index, entry| {
             this.render_in(index, entry, fx, frame)
@@ -678,6 +758,24 @@ impl Inner {
         frame.pixels = flip_rows(&out.to_rgba(), w, h);
         Ok(Ok(()))
     }
+}
+
+/// A plugin's edit as a voXY change; `None` for a parameter it does not
+/// have or a value that does not fit.
+fn plugin_change(entry: &PluginEntry, e: crate::protocol::ParamEdit) -> Option<PluginChange> {
+    use crate::protocol::ParamEdit;
+    Some(match e {
+        ParamEdit::Set { name, time, value } => {
+            let kind = *entry.kinds.get(&name)?;
+            PluginChange::Set {
+                value: crate::mapping::to_value(kind, &value)?,
+                name,
+                frame: time,
+            }
+        }
+        ParamEdit::DeleteKey { name, time } => PluginChange::DeleteKey { name, frame: time },
+        ParamEdit::DeleteAllKeys { name } => PluginChange::DeleteAllKeys { name },
+    })
 }
 
 /// The pixels of the layer feeding `clip`, if its parameter names one.

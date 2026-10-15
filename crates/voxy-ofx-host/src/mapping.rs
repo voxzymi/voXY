@@ -502,8 +502,7 @@ fn param_def(
     let visibility = if flag(p, ofx::kOfxParamPropSecret) || d.kind == ParamKind::Bytes {
         ParamVisibility::Hidden
     } else if d.kind == ParamKind::PushButton {
-        // Buttons arrive with the parameter UI in a later step.
-        ParamVisibility::ReadOnly
+        ParamVisibility::Button
     } else {
         ParamVisibility::Editable
     };

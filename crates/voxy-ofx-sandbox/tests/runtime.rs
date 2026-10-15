@@ -530,3 +530,52 @@ fn a_plugin_reads_parameters_at_other_times_and_their_keys() {
     assert!((f.pixels[0] - a.pixels[0] * 2.0).abs() < 1e-6);
     assert_eq!(f.pixels[3], 0.0, "no keys");
 }
+
+#[test]
+fn a_push_button_returns_the_plugins_edits_and_messages() {
+    use voxy_ofx_host::runtime::PluginChange;
+    let tmp = tempfile::tempdir().unwrap();
+    let bundle = common::bundle(tmp.path());
+    let rt = OfxRuntime::new(Path::new(EXE), tmp.path(), Timeouts::default()).unwrap();
+    let scan = rt.scan(std::slice::from_ref(&bundle));
+    let def = scan
+        .definitions
+        .iter()
+        .find(|d| d.type_id == plugin_type("org.voxy.test.Lag"))
+        .unwrap();
+    assert_eq!(
+        def.param("double").unwrap().flags.visibility,
+        voxy_core::registry::ParamVisibility::Button
+    );
+    let fx = EvaluatedEffect {
+        id: EffectId(1),
+        type_id: plugin_type("org.voxy.test.Lag"),
+        version: 1,
+        params: vec![
+            (Arc::from("gain"), Value::Scalar(1.5)),
+            (Arc::from("double"), Value::Bool(false)),
+        ],
+        matte: None,
+        frame: 3,
+        layer_progress: 0.0,
+        timeline: None,
+    };
+    let change = rt
+        .instance_changed(&fx, DVec2::new(3.0, 2.0), "double")
+        .unwrap();
+    assert_eq!(
+        change.changes,
+        vec![PluginChange::Set {
+            name: "gain".into(),
+            frame: None,
+            value: Value::Scalar(3.0),
+        }]
+    );
+    assert_eq!(change.messages.len(), 1);
+    assert_eq!(change.messages[0].text, "Gain doubled");
+    // Another parameter: the plugin changes nothing.
+    let none = rt
+        .instance_changed(&fx, DVec2::new(3.0, 2.0), "gain")
+        .unwrap();
+    assert_eq!(none.changes, vec![]);
+}

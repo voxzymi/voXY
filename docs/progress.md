@@ -579,8 +579,17 @@ at `743b053` (merge of #3).
       frame rate). The sandbox server now owns its channel so plugin
       threads can ask. New test plugin `org.voxy.test.Lag` (reads its
       gain one frame back, counts keys).
-   7. Push buttons, InstanceChanged, and plugin edits as undoable
-      commands.
+   7. **Done:** push buttons, InstanceChanged, and plugin edits as
+      undoable commands. Push buttons are buttons
+      (`ParamVisibility::Button`); edits and button presses in Effect
+      Controls call `OfxRuntime::instance_changed`; the plugin's edits
+      become `PluginParamEdits`, which joins the user edit's undo step via
+      `set_property_merge_key` (a drag stays one step) or is its own step
+      for a button. Messages go to the status bar. The `Lag` test plugin
+      gained a `double` button. Tests: runtime (edits and message come
+      back), core (merging into the drag's step, undo/redo, unknown
+      parameters skipped). The UI glue is not covered end to end (it would
+      need the sandbox binary in `voxy-ui`'s tests).
    8. Begin/EndSequenceRender around export and playback.
    9. Persisted plugin state: plugin version and context, load
       validation of Custom/Bytes, placeholders for missing plugins.

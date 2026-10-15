@@ -476,3 +476,78 @@ fn ofx_effects_with_keys_carry_their_timeline() {
     assert_eq!(t.value_at("size", 7.5), Some(Value::Scalar(2.0)));
     assert_eq!(t.value_at("mix", 0.0), None);
 }
+
+/// O-C: a plugin's edits in response to a user edit join that edit's undo
+/// step; on their own (a push button) they are one step.
+#[test]
+fn plugin_edits_join_the_edit_that_caused_them() {
+    use voxy_core::Time;
+    use voxy_core::command::{PluginEdit, PluginParamEdits, SetProperty, set_property_merge_key};
+    let (mut doc, layer) = doc_with_solid();
+    let fx = add_effect(
+        &mut doc,
+        layer,
+        "ofx:org.example.Linked",
+        &[("a", Value::Scalar(1.0)), ("b", Value::Scalar(1.0))],
+    );
+    let param = |doc: &Document, name: &str| {
+        doc.find_layer(layer).expect("layer").1.effects[0]
+            .param(name)
+            .expect("param")
+            .clone()
+    };
+    let a = param(&doc, "a").id;
+    let mut h = History::new(doc);
+    let plugin = |merge, value: f64| PluginParamEdits {
+        layer,
+        effect: fx,
+        edits: vec![
+            PluginEdit::Set {
+                name: "b".into(),
+                time: Time::ZERO,
+                value: Value::Scalar(value),
+            },
+            PluginEdit::Set {
+                name: "missing".into(),
+                time: Time::ZERO,
+                value: Value::Scalar(0.0),
+            },
+        ],
+        label: "Plugin Edit".into(),
+        merge,
+    };
+    // A drag of `a` over two frames, each answered by the plugin setting `b`.
+    for v in [2.0, 3.0] {
+        h.execute(SetProperty {
+            prop: a,
+            time: Time::ZERO,
+            value: Value::Scalar(v),
+        })
+        .expect("edit");
+        h.execute(plugin(Some(set_property_merge_key(a)), v * 10.0))
+            .expect("plugin edit");
+    }
+    h.end_interaction();
+    assert_eq!(
+        param(h.current(), "b").value_at(Time::ZERO),
+        Value::Scalar(30.0)
+    );
+    assert!(h.undo());
+    assert_eq!(
+        param(h.current(), "a").value_at(Time::ZERO),
+        Value::Scalar(1.0)
+    );
+    assert_eq!(
+        param(h.current(), "b").value_at(Time::ZERO),
+        Value::Scalar(1.0)
+    );
+    assert!(h.redo());
+
+    // A push button: its own step.
+    h.execute(plugin(None, 7.0)).expect("button");
+    assert!(h.undo());
+    assert_eq!(
+        param(h.current(), "b").value_at(Time::ZERO),
+        Value::Scalar(30.0)
+    );
+}

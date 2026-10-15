@@ -1242,6 +1242,96 @@ impl EditorState {
         self.ofx.as_ref()?.blocked(type_id).map(|b| b.reason)
     }
 
+    /// Tells an OpenFX effect's plugin that its parameter `param` changed
+    /// (a user edit, or a push button), then applies what the plugin
+    /// changed in response as a command. With `merge` set to the user
+    /// edit's key, the plugin's edits join that undo step; otherwise they
+    /// are a step of their own, called `label`. Messages go to the status
+    /// bar; a failure is reported there too.
+    pub fn ofx_param_changed(
+        &mut self,
+        layer: voxy_core::LayerId,
+        effect: voxy_core::EffectId,
+        param: &str,
+        merge: Option<voxy_core::command::MergeKey>,
+        label: &str,
+    ) {
+        use voxy_core::command::{PluginEdit, PluginParamEdits};
+        use voxy_ofx_host::effect::MessageKind;
+        use voxy_ofx_host::runtime::PluginChange;
+        let Some(rt) = self.ofx.clone() else {
+            return;
+        };
+        let doc = self.history.current().clone();
+        let Some((comp, _)) = doc.find_layer(layer) else {
+            return;
+        };
+        let Some(rate) = doc.comp(comp).map(|c| c.frame_rate) else {
+            return;
+        };
+        let Some(eval) = voxy_core::evaluate(&doc, comp, self.time) else {
+            return;
+        };
+        let Some(fx) = eval
+            .layers
+            .iter()
+            .filter(|l| l.id == layer)
+            .flat_map(|l| &l.effects)
+            .find(|e| e.id == effect)
+        else {
+            return;
+        };
+        let size = doc
+            .content_size(layer)
+            .unwrap_or(voxy_core::glam::DVec2::new(1.0, 1.0));
+        let change = match rt.instance_changed(fx, size, param) {
+            Ok(c) => c,
+            Err(e) => {
+                self.effect_errors.insert(effect, e.clone());
+                self.error(e);
+                return;
+            }
+        };
+        let at = |frame: Option<f64>| frame.map_or(self.time, |f| rate.time_of_frame(f));
+        let edits: Vec<PluginEdit> = change
+            .changes
+            .into_iter()
+            .map(|c| match c {
+                PluginChange::Set { name, frame, value } => PluginEdit::Set {
+                    name,
+                    time: at(frame),
+                    value,
+                },
+                PluginChange::DeleteKey { name, frame } => PluginEdit::RemoveKey {
+                    name,
+                    time: at(Some(frame)),
+                },
+                PluginChange::DeleteAllKeys { name } => PluginEdit::RemoveAllKeys {
+                    name,
+                    time: self.time,
+                },
+            })
+            .collect();
+        if !edits.is_empty() {
+            self.execute(PluginParamEdits {
+                layer,
+                effect,
+                edits,
+                label: label.to_owned().into(),
+                merge,
+            });
+        }
+        // The last message that is not a log entry is shown.
+        if let Some(m) = change.messages.iter().rfind(|m| m.kind != MessageKind::Log) {
+            if matches!(m.kind, MessageKind::Error | MessageKind::Fatal) {
+                self.error(m.text.clone());
+            } else {
+                self.info(m.text.clone());
+            }
+        }
+        self.redraw = true;
+    }
+
     /// The Retry action on an OpenFX effect: unblocks its plugin, whose
     /// host restarts cleanly on the next frame.
     pub fn retry_ofx(&mut self, type_id: &voxy_core::EffectTypeId) {

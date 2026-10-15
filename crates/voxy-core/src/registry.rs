@@ -76,6 +76,9 @@ pub enum ParamVisibility {
     ReadOnly,
     /// Not shown at all (for example plugin state).
     Hidden,
+    /// Shown as a button that tells the plugin it was pressed (an OpenFX
+    /// push button); its value means nothing.
+    Button,
 }
 
 /// UI flags of a parameter.

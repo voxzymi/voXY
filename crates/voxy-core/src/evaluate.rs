@@ -17,7 +17,7 @@ use crate::effect::{EffectMatte, EffectTypeId};
 use crate::id::{AssetId, CompId, EffectId, LayerId};
 use crate::layer::{BlendMode, Layer, LayerKind, Transform};
 use crate::property::Property;
-use crate::time::{FLICKS_PER_SECOND, FrameRate, Time};
+use crate::time::{FrameRate, Time};
 use crate::value::Value;
 
 /// A composition with every property resolved at one time.
@@ -101,17 +101,12 @@ impl EffectTimeline {
         )
     }
 
-    /// The time of a (fractional) frame.
-    pub fn time_of(&self, frame: f64) -> Time {
-        let r = &self.frame_rate;
-        let flicks = frame * FLICKS_PER_SECOND as f64 * f64::from(r.den()) / f64::from(r.num());
-        Time::from_flicks(flicks.round() as i64)
+    fn time_of(&self, frame: f64) -> Time {
+        self.frame_rate.time_of_frame(frame)
     }
 
-    /// The (fractional) frame of a time.
-    pub fn frame_of(&self, time: Time) -> f64 {
-        let r = &self.frame_rate;
-        time.flicks() as f64 * f64::from(r.num()) / (FLICKS_PER_SECOND as f64 * f64::from(r.den()))
+    fn frame_of(&self, time: Time) -> f64 {
+        self.frame_rate.frame_of_time(time)
     }
 }
 

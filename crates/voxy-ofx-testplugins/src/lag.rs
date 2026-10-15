@@ -1,6 +1,7 @@
 //! `org.voxy.test.Lag`: a filter that multiplies colour by its `gain` one
 //! frame earlier (a parameter query at another time) and writes the number
-//! of `gain`'s keys into alpha, so tests can see both.
+//! of `gain`'s keys into alpha, so tests can see both. Its push button
+//! `double` doubles `gain` (a plugin edit) and logs a message.
 
 use std::ffi::{CStr, c_char, c_uint, c_void};
 
@@ -59,6 +60,40 @@ unsafe fn describe_in_context(h: ofx::OfxImageEffectHandle) -> ofx::OfxStatus {
         let mut pp: ofx::OfxPropertySetHandle = std::ptr::null_mut();
         params().paramDefine.unwrap()(set, c(ofx::kOfxParamTypeDouble), c(b"gain\0"), &raw mut pp);
         p.propSetDouble.unwrap()(pp, c(ofx::kOfxParamPropDefault), 0, 1.0);
+        params().paramDefine.unwrap()(
+            set,
+            c(ofx::kOfxParamTypePushButton),
+            c(b"double\0"),
+            &raw mut pp,
+        );
+        p.propSetString.unwrap()(pp, c(ofx::kOfxPropLabel), 0, c(b"Double Gain\0"));
+    }
+    ofx::kOfxStatOK
+}
+
+/// # Safety
+/// As above.
+unsafe fn instance_changed(
+    h: ofx::OfxImageEffectHandle,
+    ins: ofx::OfxPropertySetHandle,
+) -> ofx::OfxStatus {
+    // SAFETY: valid handles from the host.
+    unsafe {
+        let mut name: *mut c_char = std::ptr::null_mut();
+        let mut time = 0.0;
+        props().propGetString.unwrap()(ins, c(ofx::kOfxPropName), 0, &raw mut name);
+        props().propGetDouble.unwrap()(ins, c(ofx::kOfxPropTime), 0, &raw mut time);
+        if CStr::from_ptr(name).to_bytes() == b"double" {
+            let gain = double_at(h, b"gain\0", time);
+            params().paramSetValue.unwrap()(param(h, b"gain\0"), gain * 2.0);
+            let msg = &*super::MSG.load(std::sync::atomic::Ordering::SeqCst);
+            msg.message.unwrap()(
+                h.cast(),
+                c(ofx::kOfxMessageMessage),
+                std::ptr::null(),
+                c(b"Gain doubled\0"),
+            );
+        }
     }
     ofx::kOfxStatOK
 }
@@ -131,6 +166,7 @@ unsafe extern "C" fn main_entry(
             a if a == ofx::kOfxActionDescribe => describe(h),
             a if a == ofx::kOfxImageEffectActionDescribeInContext => describe_in_context(h),
             a if a == ofx::kOfxImageEffectActionRender => render(h, ins),
+            a if a == ofx::kOfxActionInstanceChanged => instance_changed(h, ins),
             _ => ofx::kOfxStatReplyDefault,
         }
     }

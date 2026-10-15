@@ -414,10 +414,16 @@ impl Command for SetProperty {
     }
 
     fn merge_key(&self) -> Option<MergeKey> {
-        Some(MergeKey {
-            kind: "set-property",
-            target: self.prop.raw(),
-        })
+        Some(set_property_merge_key(self.prop))
+    }
+}
+
+/// The merge key of [`SetProperty`] on `prop`: what follow-up edits (a
+/// plugin's response to the change) use to join its undo step.
+pub fn set_property_merge_key(prop: PropId) -> MergeKey {
+    MergeKey {
+        kind: "set-property",
+        target: prop.raw(),
     }
 }
 

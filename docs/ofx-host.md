@@ -259,7 +259,7 @@ category: its grouping (or "OpenFX"); description: its description.
 | Bytes | hidden `String`, base64 (standard alphabet, padded, strict) |
 | Group | a collapsible group (open state from the plugin) |
 | Page | flattened |
-| PushButton | read-only for now; buttons come with the parameter UI step |
+| PushButton | a button in Effect Controls (`ParamVisibility::Button`); its stored `Bool` means nothing |
 | Parametric | refused at define time (not supported yet) |
 
 - A generator has no `Source` clip: its output replaces the effect's
@@ -344,6 +344,24 @@ the next chain texture; GPU effects after it continue as usual.
   plugins of the bundle get a fresh sandbox); a plugin that returns an
   error status is reported but not blocked.
 
+## Changes and plugin edits (O-C)
+
+- Editing an OpenFX effect's parameter in Effect Controls, or pressing
+  one of its buttons, sends the new values and then `InstanceChanged`
+  (reason "user edited", at the current frame) to the plugin. An effect
+  that has no instance yet gets one first.
+- What the plugin sets in response (`paramSetValue`, `paramSetValueAtTime`,
+  key deletions) comes back with the reply and is applied as one command,
+  `PluginParamEdits`. After a user edit it carries that edit's merge key,
+  so the edit and the plugin's response are one undo step (a drag stays
+  one step); after a button it is its own step, named after the button.
+  Edits to parameters the effect does not have are skipped.
+- The plugin's last message that is not a log entry is shown in the
+  status bar (errors in the error colour).
+- Not covered: edits made elsewhere (keyframes in the timeline, undo) do
+  not send `InstanceChanged`; plugin edits made outside `InstanceChanged`
+  (in Render, for example, which the spec does not allow) are dropped.
+
 ## Messages in the editor (O-B)
 
 - An OpenFX effect that the last frame passed through (plugin failed,
@@ -360,7 +378,7 @@ the next chain texture; GPU effects after it continue as usual.
 
 ## Still to be written (O-A to O-D)
 
-Left after O-B: push buttons, sequence-render
+Left after O-B: sequence-render
 calls during export and playback, cancelling a
 render from the editor, timeouts in Preferences, and instance clean-up when
 an effect is deleted. The generator, transition and general contexts
