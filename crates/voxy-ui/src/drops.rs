@@ -318,6 +318,15 @@ pub fn view_to_comp(panel: Rect, size: [u32; 2], p: Pos2) -> Option<voxy_core::g
     ))
 }
 
+/// The screen point of composition pixel `point`, the inverse of
+/// [`view_to_comp`] (same fit). Used to outline a layer over the viewport.
+pub fn comp_to_view(panel: Rect, size: [u32; 2], point: voxy_core::glam::DVec2) -> Pos2 {
+    let (w, h) = (size[0] as f32, size[1] as f32);
+    let scale = (panel.width() / w).min(panel.height() / h);
+    let image = Rect::from_center_size(panel.center(), vec2(w, h) * scale);
+    image.min + vec2(point.x as f32, point.y as f32) * scale
+}
+
 /// Items dragged over the viewport (or files dropped on it): a marker where
 /// the layers will be centered, and the drop on release. New layers go on
 /// top at the playhead.

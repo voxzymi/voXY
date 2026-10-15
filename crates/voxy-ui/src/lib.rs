@@ -20,6 +20,7 @@ mod empty_state;
 mod footage;
 mod gizmo;
 mod graph_editor;
+mod hit;
 mod import;
 mod layout;
 mod media;

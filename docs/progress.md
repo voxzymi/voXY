@@ -860,9 +860,20 @@ at `86e1edf` (merge of #6). Design note: `docs/design-ux.md`.
   "Select or drop onto a layer". Tests drive a real egui frame: drop on a row,
   on an empty spot with a selection, and with nothing selected. clippy
   `-D warnings` and `fmt --check` clean; 287 `voxy-ui` tests pass.
-- **Remaining U-B steps:** viewport hit-test so a drop lands on the layer under
-  the cursor, with the same feedback (introduces viewport layer picking — see
-  the deferred-list note); drop into the Effect Controls stack at a position.
+- **U-B step 3: viewport hit-test.** New `hit` module: `hit::pick(doc, comp,
+  time, point)` returns the topmost layer under a composition point and its
+  outline (adjustment and unsized layers are not picked), pure over the
+  evaluated composition and unit-tested. `drops::comp_to_view` maps a
+  composition pixel back to the screen. `viewport_effect_drop` replaces
+  `drop_on_rect`: while dragging it hit-tests the layer under the cursor (else
+  the selection), **outlines** it, shows the "Add <effect> to <layer>" badge
+  and the Copy / Not-allowed cursor, and on release applies to that layer (or
+  the selection, or says "Select or drop onto a layer"). This introduces
+  viewport layer picking; `docs/deferred.md` updated (double-click / Alt-replace
+  can now reuse `hit::pick`). Tests: `hit::pick` (topmost / outside /
+  adjustment) and a viewport-drop frame hitting the layer under the cursor.
+  clippy `-D warnings` and `fmt --check` clean; 290 `voxy-ui` tests pass.
+- **Remaining U-B step:** drop into the Effect Controls stack at a position.
 
 ## Design-note / deferred reconciliation
 

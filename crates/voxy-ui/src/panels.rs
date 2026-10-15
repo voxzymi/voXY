@@ -140,15 +140,11 @@ impl Panels<'_> {
             return;
         };
         if let Some(comp) = self.state.comp() {
-            crate::drops::viewport_drop(
-                ui,
-                self.state,
-                comp_id,
-                [comp.width, comp.height],
-                ui.max_rect(),
-            );
+            let size = [comp.width, comp.height];
+            let panel = ui.max_rect();
+            crate::drops::viewport_drop(ui, self.state, comp_id, size, panel);
+            crate::effects_panel::viewport_effect_drop(ui, self.state, comp_id, size, panel);
         }
-        crate::effects_panel::drop_on_rect(ui, self.state, ui.max_rect());
         let Some(viewport) = self.viewport.as_deref_mut() else {
             ui.centered_and_justified(|ui| ui.label("GPU viewport unavailable"));
             return;

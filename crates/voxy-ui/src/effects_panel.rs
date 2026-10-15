@@ -323,14 +323,82 @@ enum Target {
     Selection,
 }
 
-/// Applies a dragged effect released over `rect` (the viewport) to the
-/// selected layer.
-pub fn drop_on_rect(ui: &Ui, state: &mut EditorState, rect: Rect) {
-    let Some(at) = released_at(ui) else { return };
-    if rect.contains(at)
-        && let Some(EffectDrag(def)) = take(ui.ctx())
+/// Live feedback and release handling for an effect dragged over the
+/// viewport. Hit-tests the layer under the pointer, outlines it, shows the
+/// "Add <effect> to <layer>" badge and the matching cursor, and on release
+/// applies to that layer (or the selection where the pointer hits no layer).
+/// Escape cancels.
+pub fn viewport_effect_drop(
+    ui: &Ui,
+    state: &mut EditorState,
+    comp: voxy_core::CompId,
+    size: [u32; 2],
+    panel: Rect,
+) {
+    let ctx = ui.ctx();
+    if cancel_on_escape(ctx) {
+        return;
+    }
+    let Some(drag) = peek(ctx) else { return };
+    let def = &drag.0;
+    let Some(at) = ctx
+        .input(|i| i.pointer.hover_pos())
+        .filter(|p| panel.contains(*p))
+    else {
+        return;
+    };
+    let Some(point) = crate::drops::view_to_comp(panel, size, at) else {
+        return;
+    };
+    let doc = state.history.current().clone();
+
+    // The layer under the pointer, else the selection, with its outline.
+    let picked = crate::hit::pick(&doc, comp, state.time, point);
+    let (target, quad) = match picked {
+        Some(p) => (Some(p.layer), Some(p.quad)),
+        None => match state.selection.filter(|&l| doc.find_layer(l).is_some()) {
+            Some(l) => (Some(l), crate::hit::layer_quad(&doc, comp, state.time, l)),
+            None => (None, None),
+        },
+    };
+    let allowed = target.is_some_and(|l| {
+        doc.find_layer(l)
+            .is_some_and(|(_, m)| can_apply(def, m).is_ok())
+    });
+    let label = match target.and_then(|l| doc.find_layer(l).map(|(_, m)| m.name.clone())) {
+        Some(name) if allowed => format!("Add {} to {name}", def.name),
+        Some(name) => format!("Can’t add {} to {name}", def.name),
+        None => NO_TARGET.to_owned(),
+    };
+
+    if let Some(q) = quad {
+        let col = if allowed {
+            ACCENT
+        } else {
+            ui.visuals().error_fg_color
+        };
+        let pts: Vec<Pos2> = q
+            .iter()
+            .map(|p| crate::drops::comp_to_view(panel, size, *p))
+            .collect();
+        ui.painter_at(panel)
+            .add(egui::Shape::closed_line(pts, Stroke::new(2.0, col)));
+    }
+    drag_badge(ctx, at, &label, allowed);
+    ctx.set_cursor_icon(if allowed {
+        CursorIcon::Copy
+    } else {
+        CursorIcon::NotAllowed
+    });
+
+    if ctx.input(|i| i.pointer.any_released())
+        && let Some(EffectDrag(def)) = take(ctx)
     {
-        apply_to_selection(state, &def);
+        match target {
+            Some(layer) if allowed => apply(state, layer, &def),
+            Some(_) => {}
+            None => state.info(NO_TARGET),
+        }
     }
 }
 
@@ -371,20 +439,6 @@ fn drag_badge(ctx: &Context, at: Pos2, text: &str, allowed: bool) {
         bg,
     );
     painter.galley(origin + pad, galley, Color32::WHITE);
-}
-
-/// Where an effect drag was released this frame, if one was.
-fn released_at(ui: &Ui) -> Option<Pos2> {
-    if !DragAndDrop::has_payload_of_type::<EffectDrag>(ui.ctx()) {
-        return None;
-    }
-    ui.input(|i| {
-        if i.pointer.any_released() {
-            i.pointer.interact_pos()
-        } else {
-            None
-        }
-    })
 }
 
 fn take(ctx: &Context) -> Option<EffectDrag> {
@@ -706,6 +760,64 @@ mod tests {
         run_effect_drop(&mut s, &def, empty);
         assert_eq!(s.history.revision(), before);
         assert_eq!(s.status.as_ref().unwrap().text, NO_TARGET);
+    }
+
+    /// Runs one egui frame with an effect drag released over the viewport at
+    /// composition-pixel `comp_point`.
+    fn run_viewport_drop(
+        s: &mut EditorState,
+        def: &Arc<EffectDef>,
+        comp: voxy_core::CompId,
+        size: [u32; 2],
+        comp_point: voxy_core::glam::DVec2,
+    ) {
+        let screen = Rect::from_min_size(Pos2::ZERO, vec2(400.0, 400.0));
+        let at = crate::drops::comp_to_view(screen, size, comp_point);
+        let input = egui::RawInput {
+            screen_rect: Some(screen),
+            events: vec![
+                egui::Event::PointerMoved(at),
+                egui::Event::PointerButton {
+                    pos: at,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+            ..Default::default()
+        };
+        let ctx = Context::default();
+        let mut full = ctx.run_ui(input, |ui| {
+            DragAndDrop::set_payload(ui.ctx(), EffectDrag(def.clone()));
+            let panel = ui.max_rect();
+            viewport_effect_drop(ui, s, comp, size, panel);
+        });
+        full.textures_delta.clear();
+    }
+
+    #[test]
+    fn dropping_an_effect_on_the_viewport_hits_the_layer_under_the_cursor() {
+        let (mut s, layer) = state_with_layer();
+        let comp = s.comp_id().expect("comp");
+        let (w, h) = {
+            let c = s.comp().expect("comp");
+            (c.width, c.height)
+        };
+        let def = listing(&s, "invert")[0].1[0].clone();
+        s.selection = None;
+        // The centre of the comp is inside the solid that fills it.
+        run_viewport_drop(
+            &mut s,
+            &def,
+            comp,
+            [w, h],
+            voxy_core::glam::DVec2::new(f64::from(w) / 2.0, f64::from(h) / 2.0),
+        );
+        assert_eq!(
+            fx_count(&s, layer),
+            1,
+            "applied to the layer under the cursor"
+        );
     }
 
     #[test]
