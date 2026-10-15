@@ -7,10 +7,12 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use voxy_core::effect::{OfxContext, OfxInstanceData};
+use voxy_core::external::{AUTO_PARAM, CLIP_PARAM_PREFIX, RESERVED_PREFIX};
 use voxy_core::glam::{DVec2, DVec3};
 use voxy_core::registry::{
     Category, EffectDef, EffectOrigin, EffectParamDef, EffectSpace, ParamFlags, ParamGroup,
-    ParamVisibility,
+    ParamVisibility, ValueCheck,
 };
 use voxy_core::{EffectTypeId, LinearRgba, PropertyDesc, Unit, Value, ValueKind};
 use voxy_ofx_sys as ofx;
@@ -234,7 +236,7 @@ pub fn to_param_value(kind: ParamKind, v: &Value) -> Option<ParamValue> {
 /// Why a context could not become an effect.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MapError {
-    /// The plugin has no context this step of voXY maps (filter for now).
+    /// The plugin has no context voXY maps (filter or generator for now).
     NoContext,
     /// A parameter could not be mapped.
     Param { name: String, why: String },
@@ -243,7 +245,7 @@ pub enum MapError {
 impl std::fmt::Display for MapError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            MapError::NoContext => f.write_str("it has no filter context"),
+            MapError::NoContext => f.write_str("it has no filter or generator context"),
             MapError::Param { name, why } => write!(f, "parameter {name}: {why}"),
         }
     }
@@ -251,14 +253,28 @@ impl std::fmt::Display for MapError {
 
 impl std::error::Error for MapError {}
 
-/// The filter context of `plugin` as an effect definition. `binary` and
-/// `index` say where the plugin lives (`EffectOrigin::Ofx`).
-pub fn effect_def(plugin: &PluginDesc, binary: &Path, index: u32) -> Result<EffectDef, MapError> {
-    let ctx = plugin
-        .contexts
+/// The contexts voXY maps, in order of preference.
+pub const MAPPED_CONTEXTS: [&[u8]; 4] = [
+    ofx::kOfxImageEffectContextFilter,
+    ofx::kOfxImageEffectContextTransition,
+    ofx::kOfxImageEffectContextGenerator,
+    ofx::kOfxImageEffectContextGeneral,
+];
+
+/// The context a plugin runs in as a voXY effect: the first it has of
+/// filter, transition, generator (whose output replaces the effect's
+/// input) and general.
+pub fn mapped_context(plugin: &PluginDesc) -> Option<&ContextDesc> {
+    MAPPED_CONTEXTS
         .iter()
-        .find(|c| c.context == ofx_str(ofx::kOfxImageEffectContextFilter))
-        .ok_or(MapError::NoContext)?;
+        .find_map(|want| plugin.contexts.iter().find(|c| c.context == ofx_str(want)))
+}
+
+/// The mapped context of `plugin` (see [`mapped_context`]) as an effect
+/// definition. `binary` and `index` say where the plugin lives
+/// (`EffectOrigin::Ofx`).
+pub fn effect_def(plugin: &PluginDesc, binary: &Path, index: u32) -> Result<EffectDef, MapError> {
+    let ctx = mapped_context(plugin).ok_or(MapError::NoContext)?;
     let tid = type_id(&plugin.identifier);
     let label = string(&plugin.props, ofx::kOfxPropLabel);
     let name = if label.is_empty() {
@@ -276,10 +292,27 @@ pub fn effect_def(plugin: &PluginDesc, binary: &Path, index: u32) -> Result<Effe
     let (groups, group_of) = groups(ctx);
     let mut params = Vec::new();
     for d in &ctx.params {
+        if d.name.starts_with(RESERVED_PREFIX) {
+            return Err(MapError::Param {
+                name: d.name.clone(),
+                why: format!("names starting with {RESERVED_PREFIX} are voXY's"),
+            });
+        }
         if let Some(def) = param_def(&tid, d, &group_of)? {
             params.push(def);
         }
     }
+    let transition = ctx.context == ofx_str(ofx::kOfxImageEffectContextTransition);
+    if transition {
+        params.extend(transition_params(&tid));
+    } else {
+        params.extend(extra_clips(ctx).map(|c| clip_param(&tid, c)));
+    }
+    let category = if transition {
+        Category::Transition
+    } else {
+        category
+    };
     Ok(EffectDef {
         type_id: tid,
         version: plugin.version.0,
@@ -293,8 +326,142 @@ pub fn effect_def(plugin: &PluginDesc, binary: &Path, index: u32) -> Result<Effe
         origin: EffectOrigin::Ofx {
             binary: binary.to_path_buf(),
             index,
+            plugin: OfxInstanceData {
+                plugin: plugin.identifier.as_str().into(),
+                version: [plugin.version.0, plugin.version.1],
+                context: ofx_context(&ctx.context).ok_or(MapError::NoContext)?,
+                bundle: bundle_name(binary),
+            },
         },
     })
+}
+
+/// A context's input clips other than the effect's own input and masks:
+/// each is fed by a layer-reference parameter (design §6.4). Masks are
+/// left unconnected; voXY's effect matte masks the result instead.
+pub fn extra_clips(ctx: &ContextDesc) -> impl Iterator<Item = &crate::protocol::ClipDesc> {
+    let main = [
+        ofx::kOfxImageEffectSimpleSourceClipName.as_slice(),
+        ofx::kOfxImageEffectTransitionSourceFromClipName,
+        ofx::kOfxImageEffectOutputClipName,
+    ];
+    ctx.clips
+        .iter()
+        .filter(move |c| !main.iter().any(|m| c.name == ofx_str(m)))
+        .filter(|c| !flag(&c.props, ofx::kOfxImageClipPropIsMask))
+}
+
+/// The layer-reference parameter feeding an extra clip.
+fn clip_param(tid: &EffectTypeId, clip: &crate::protocol::ClipDesc) -> EffectParamDef {
+    let name = format!("{CLIP_PARAM_PREFIX}{}", clip.name);
+    let label = string(&clip.props, ofx::kOfxPropLabel);
+    let optional = flag(&clip.props, ofx::kOfxImageClipPropOptional);
+    EffectParamDef {
+        desc: Arc::new(PropertyDesc {
+            key: tid.param_key(&name).into(),
+            label: if label.is_empty() {
+                clip.name.clone()
+            } else {
+                label
+            }
+            .into(),
+            kind: ValueKind::Layer,
+            default: Value::Layer(None),
+            range: None,
+            soft_range: None,
+            unit: Unit::None,
+            animatable: true,
+            spatial: false,
+        }),
+        name: name.into(),
+        choices: None,
+        group: None,
+        gizmo: None,
+        hint: Some(
+            format!(
+                "The layer for the plugin's {} input{}. Its own effects are not used.",
+                clip.name,
+                if optional { " (optional)" } else { "" }
+            )
+            .into(),
+        ),
+        flags: ParamFlags::default(),
+        check: None,
+    }
+}
+
+/// The parameters voXY adds to a transition (design §5, §6.4): Auto, and
+/// the layer that is `SourceTo`.
+fn transition_params(tid: &EffectTypeId) -> [EffectParamDef; 2] {
+    let def = |name: &str, label: &str, kind, default, hint: &str| EffectParamDef {
+        name: name.into(),
+        desc: Arc::new(PropertyDesc {
+            key: tid.param_key(name).into(),
+            label: label.into(),
+            kind,
+            default,
+            range: None,
+            soft_range: None,
+            unit: Unit::None,
+            animatable: true,
+            spatial: false,
+        }),
+        choices: None,
+        group: None,
+        gizmo: None,
+        hint: Some(hint.into()),
+        flags: ParamFlags::default(),
+        check: None,
+    };
+    [
+        def(
+            AUTO_PARAM,
+            "Auto",
+            ValueKind::Bool,
+            Value::Bool(true),
+            "Run the transition over the layer's whole duration, instead of following Transition.",
+        ),
+        def(
+            &format!(
+                "{CLIP_PARAM_PREFIX}{}",
+                ofx_str(ofx::kOfxImageEffectTransitionSourceToClipName)
+            ),
+            "Transition To",
+            ValueKind::Layer,
+            Value::Layer(None),
+            "The layer to show at the end. Its own effects are not used.",
+        ),
+    ]
+}
+
+/// voXY's name for an OpenFX context.
+fn ofx_context(name: &str) -> Option<OfxContext> {
+    [
+        (
+            ofx::kOfxImageEffectContextFilter.as_slice(),
+            OfxContext::Filter,
+        ),
+        (ofx::kOfxImageEffectContextGenerator, OfxContext::Generator),
+        (
+            ofx::kOfxImageEffectContextTransition,
+            OfxContext::Transition,
+        ),
+        (ofx::kOfxImageEffectContextGeneral, OfxContext::General),
+    ]
+    .into_iter()
+    .find(|(n, _)| ofx_str(n) == name)
+    .map(|(_, c)| c)
+}
+
+/// The `.ofx.bundle` folder's name for a binary inside one (a hint for the
+/// user when the plugin is missing), else the binary's file name.
+fn bundle_name(binary: &Path) -> Option<String> {
+    binary
+        .ancestors()
+        .find(|a| a.extension().is_some_and(|e| e == "bundle"))
+        .or(Some(binary))
+        .and_then(|p| p.file_name())
+        .map(|n| n.to_string_lossy().into_owned())
 }
 
 /// Group parameters become collapsible groups, in definition order (a
@@ -374,8 +541,7 @@ fn param_def(
     let visibility = if flag(p, ofx::kOfxParamPropSecret) || d.kind == ParamKind::Bytes {
         ParamVisibility::Hidden
     } else if d.kind == ParamKind::PushButton {
-        // Buttons arrive with the parameter UI in a later step.
-        ParamVisibility::ReadOnly
+        ParamVisibility::Button
     } else {
         ParamVisibility::Editable
     };
@@ -427,53 +593,23 @@ fn param_def(
             hide_alpha: d.kind == ParamKind::Rgb,
             visibility,
         },
+        // Plugin state is capped and checked on load (design §6.8).
+        check: match d.kind {
+            ParamKind::Custom => Some(ValueCheck::MaxBytes(crate::suites::MAX_OPAQUE_BYTES)),
+            ParamKind::Bytes => Some(ValueCheck::Base64 {
+                max: crate::suites::MAX_OPAQUE_BYTES,
+            }),
+            _ => None,
+        },
     }))
 }
 
-const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
 /// Standard base64 with padding (Bytes parameters on disk, P-0 Q3).
 pub fn base64_encode(data: &[u8]) -> String {
-    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
-    for chunk in data.chunks(3) {
-        let b = [
-            chunk[0],
-            *chunk.get(1).unwrap_or(&0),
-            *chunk.get(2).unwrap_or(&0),
-        ];
-        let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
-        for (i, shift) in [18, 12, 6, 0].into_iter().enumerate() {
-            if i <= chunk.len() {
-                out.push(char::from(B64[(n >> shift) as usize & 63]));
-            } else {
-                out.push('=');
-            }
-        }
-    }
-    out
+    voxy_core::base64::encode(data)
 }
 
 /// Decodes standard base64 with padding; `None` for anything else.
 pub fn base64_decode(text: &str) -> Option<Vec<u8>> {
-    let t = text.as_bytes();
-    if !t.len().is_multiple_of(4) {
-        return None;
-    }
-    let val = |c: u8| B64.iter().position(|b| *b == c).map(|p| p as u32);
-    let mut out = Vec::with_capacity(t.len() / 4 * 3);
-    for (k, q) in t.chunks(4).enumerate() {
-        let last = k + 1 == t.len() / 4;
-        let pad = q.iter().rev().take_while(|c| **c == b'=').count();
-        if pad > 2 || (pad > 0 && !last) {
-            return None;
-        }
-        let mut n = 0u32;
-        for (i, c) in q.iter().enumerate() {
-            let v = if i >= 4 - pad { 0 } else { val(*c)? };
-            n = (n << 6) | v;
-        }
-        let bytes = [(n >> 16) as u8, (n >> 8) as u8, n as u8];
-        out.extend_from_slice(&bytes[..3 - pad]);
-    }
-    Some(out)
+    voxy_core::base64::decode(text)
 }

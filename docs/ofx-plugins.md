@@ -172,10 +172,35 @@ after O-C.
 
 ## 5. Compatibility table
 
-Filled in from O-A onwards. It has one row per plugin and platform, with a
-status (works, works with notes, host bug fixed, plugin bug or known issue,
-fails) and notes. Empty until a plugin is built.
+One row per plugin, with a status for each CI platform: **works**, **works
+with notes**, **host bug fixed** (voXY was wrong; fixed, and covered by the
+conformance suite), **plugin bug** (upstream; what voXY does about it is in
+the notes), or **fails**. A sample that does not build on a platform is
+listed in its `skip` list in `third_party/ofx-fixtures.toml` and marked
+**not built** here.
 
-| Plugin | Platform | Status | Notes |
-|---|---|---|---|
-| — | — | — | — |
+Source: OpenFX `ab77951` (OFX_Release_1.5.1), built by `cargo xtask
+ofx-fixtures` with each platform's C++ compiler (MSVC on Windows, Apple
+clang on macOS, GCC on Linux) and run by
+`voxy-ofx-sandbox/tests/conformance.rs` (Describe, mapping, render against
+goldens, identity, determinism). Verified in CI run 38711933727 at
+`5dc78b3` (2026-10-15): every sample built and passed on all four
+platforms. Win = Windows x64, mac arm = macOS arm64, mac x64 = macOS x64,
+Linux = Linux x64.
+
+| # | Plugin | Win | mac arm | mac x64 | Linux | Notes |
+|---|---|---|---|---|---|---|
+| 1 | Examples/Invert (`uk.co.thefoundry.OfxInvertExample`) | works | works | works | works | 8-bit only: the host converts float ↔ byte (round half to even); matches the Support Invert within one 8-bit step. |
+| 2 | Examples/Basic (`uk.co.thefoundry.BasicGainPlugin`) | works | works | works | works | Group and page map as designed; an identity at its defaults. |
+| 3 | Examples/Rectangle (`uk.co.thefoundry.GeneratorExample`) | host bug fixed | host bug fixed | host bug fixed | host bug fixed | **Host bug fixed:** parameters whose *default* is normalised were sent as normalised values; they are now converted to canonical. **Plugin bug:** `corner2`'s default is overwritten by a copy of the colour's default, so it starts at (0, 0) instead of (0.6, 0.6). Runs as a filter (it also offers generator and general). |
+| 4 | Examples/ChoiceParams (`org.openfx.ChoiceParamPlugin`) | works | works | works | works | Choice → enum; the 1.5 string-choice parameter → string with its allowed values in the hint. |
+| 5 | Examples/DepthConverter (`uk.co.thefoundry.DepthConverterExample`) | host bug fixed | host bug fixed | host bug fixed | host bug fixed | **Host bug fixed:** the plugin could change the output depth although voXY has no multiple clip depths; now every clip keeps one depth, so it passes the image through (as the spec expects on such a host). **Plugin bug:** its converting path addresses source pixels per component, not per pixel; voXY never reaches it. |
+| 6 | Examples/Test (`net.sf.openfx:PropertyTestPlugin`) | works with notes | works with notes | works with notes | works with notes | Diagnostic: probes every host property and suite; renders black by design. Writes `ofxTestLog.txt` to its working directory, which is now the sandbox's private session folder (host change). |
+| 7 | Support/Invert (`net.sf.openfx.invertPlugin`) | works | works | works | works | Through the C++ Support library and the multi-thread suite. |
+| 8 | Support/Generator (`net.sf.openfx.noisePlugin`) | works with notes | works with notes | works with notes | works with notes | Deterministic per platform, but no golden: its random numbers come from the C++ standard library, which differs between MSVC, libc++ and libstdc++. |
+| 9 | Support/Transition (`net.sf.openfx.crossFade`) | works | works | works | works | Transition context: `SourceTo` from a layer, `Transition` from Auto or the parameter; an identity at 0. |
+| 10 | Support/Tester (`net.sf.openfx.GenericTestPlugin`) | works with notes | works with notes | works with notes | works with notes | Push buttons reach `InstanceChanged`. Its overlay interact (OpenGL) is not used: interacts come in O-D. Links the system OpenGL library to build. |
+| 11 | Support/MultiBundle (`net.sf.openfx.dotexample`, `net.sf.openfx.gammaexample`) | works with notes | works with notes | works with notes | works with notes | Two plugins in one binary, both listed. The dot's normalised position and radius need the host fix in #3. Gamma raises premultiplied values to its scales; `scaleA` defaults to 0, so alpha becomes 1 (the plugin's maths). Overlays not used (O-D). |
+
+voXY's own test plugins (gain, crash, hang, solid, blur, transform, keyer,
+fade, matte, lag) run in the same suite and pass on all four platforms.

@@ -532,7 +532,119 @@ at `743b053` (merge of #3).
    workspace tests pass; CI green on all four platforms at `f04f2f8`
    (run 38560685814). What is left
    for follow-up steps is listed at the end of `docs/ofx-host.md`.
-7. O-C, O-D.
+7. O-C, on a fresh branch from `main` at `75ef443` (merge of #5). Steps:
+   1. **Done:** generator context. A plugin without a filter context runs
+      in its generator context: no `Source` clip, its output replaces the
+      input. New test plugin `org.voxy.test.Solid` (generator only).
+   2. **Done:** identity. IsIdentity before Render; when the plugin names
+      `Source` at the frame, Render is skipped and the input passes
+      through (tested with the crash plugin at gain 1, which never
+      crashes). Other clips or times render instead, for now.
+   3. **Done:** the plugin's region of definition grows the chain buffer
+      (`ExternalEffects::region_of_definition`, capped at 4096 px past
+      the input); regions of interest are covered by always passing the
+      whole buffer; images carry absolute OpenFX coordinates (project =
+      layer, y up). New test plugin `org.voxy.test.Blur` (box blur with
+      RoD, ROI and identity). Tests: RoD through the sandbox, an off-origin
+      buffer blurred correctly, and a GPU test where a provider's RoD
+      widens a layer past its edge.
+   3b. **Done (fix of an O-B bug):** the render planner cleared every
+       non-seeded effect's frame number, OpenFX ones included, so plugins
+       always rendered at time 0. OpenFX effects now keep the frame (and
+       their chains are cached per frame). GPU test added.
+   4. **Done:** transition context. Listed under Transitions; the input is
+      `SourceFrom`; voXY adds Auto (`voxy.auto`, progress from the layer's
+      duration) and Transition To (`voxy.clip.SourceTo`, a layer
+      reference). `CpuFrame::layers` carries referenced layers to the
+      provider (layer-input textures gained `COPY_SRC`). An identity on
+      any input passes it through. New test plugin `org.voxy.test.Fade`.
+      Tests: Auto on/off, identity on `SourceTo`, no B layer, the GPU path
+      delivering the referenced layer, reserved parameter names.
+   5. **Done:** general context. Extra input clips become
+      `voxy.clip.<clip>` layer references; mask clips are never connected
+      (the effect matte masks instead). New test plugin
+      `org.voxy.test.Matte` (extra clip, optional mask that must stay
+      unconnected).
+   5b. **Done:** several layer inputs per effect. `EffectNode::inputs`
+       lists every referenced active layer by parameter name (GPU kernels
+       read the first, as before); OpenFX effects get all of them. The
+       chain content key now hashes the input parameter names too
+       (in-memory cache only; goldens unchanged). GPU test with three
+       clip parameters, one unset.
+   6. **Done:** parameter values at other times and key times. Snapshots
+      carry key times (frames); a query for a keyed parameter at another
+      time is a nested `ValueAt`/`Value` exchange during the action
+      (protocol version 2), answered from `EvaluatedEffect::timeline`
+      (new in `voxy-core`: an OpenFX effect's animated parameters and the
+      frame rate). The sandbox server now owns its channel so plugin
+      threads can ask. New test plugin `org.voxy.test.Lag` (reads its
+      gain one frame back, counts keys).
+   7. **Done:** push buttons, InstanceChanged, and plugin edits as
+      undoable commands. Push buttons are buttons
+      (`ParamVisibility::Button`); edits and button presses in Effect
+      Controls call `OfxRuntime::instance_changed`; the plugin's edits
+      become `PluginParamEdits`, which joins the user edit's undo step via
+      `set_property_merge_key` (a drag stays one step) or is its own step
+      for a button. Messages go to the status bar. The `Lag` test plugin
+      gained a `double` button. Tests: runtime (edits and message come
+      back), core (merging into the drag's step, undo/redo, unknown
+      parameters skipped). The UI glue is not covered end to end (it would
+      need the sandbox binary in `voxy-ui`'s tests).
+   8. **Done:** Begin/EndSequenceRender. `ExternalEffects` gains
+      `begin_sequence`/`end_sequence`; the runtime sends Begin to each
+      instance before its first render in the run and End at the end;
+      renders in between say sequential (and interactive). The editor
+      announces playback (start/stop). There is no video export yet; it
+      will use the same calls. The `Lag` test plugin reports what it
+      sees.
+   9. **Done:** persisted plugin state. New OpenFX instances record their
+      plugin, version and context (`EffectOrigin::Ofx` now carries them;
+      the `ofx` field was already in the 0.7.0 format, so nothing in the
+      format changes). Custom and Bytes parameters carry a `ValueCheck`
+      (1 MiB cap; strict base64) applied to every saved value on load,
+      resetting bad ones with a warning. A plugin that now runs in another
+      context than the saved one gives a placeholder (data kept). base64
+      moved into `voxy-core`. Tests: round trip, damaged values, context
+      change, missing then reinstalled plugin.
+   10. Conformance suite.
+       1. **Done (10a):** the harness
+          (`voxy-ofx-sandbox/tests/conformance.rs`): through the real
+          sandbox, every fixture plugin describes and maps with no
+          problems and passes registry validation; each case renders a
+          fixed 32×24 pattern (a second one for layer inputs) and matches
+          its PNG golden in `tests/golden/ofx/` (±1 per 8-bit channel,
+          `VOXY_UPDATE_GOLDEN=1` rewrites); identity cases must return the
+          input exactly; every case renders the same twice (a fresh
+          instance too). Fixtures: our own plugins, now with
+          `org.voxy.test.Transform` and `org.voxy.test.Keyer` (with the
+          blur, the P-0 Q2 trio). Goldens were checked by eye before
+          being kept. CI at `8a5423a` (run 38709449721) green on every job
+          that finished; macOS arm64 tests were still running.
+       2. **Done (10b, after the owner's go-ahead):** the approved BSD-3
+          samples (#1 to #11). `cargo xtask ofx-fixtures` builds them
+          from `third_party/ofx-fixtures.toml` (pinned tarball; tarball
+          sha256 plus a content hash of the extracted paths, computed from
+          a git checkout of `ab77951`; system C++ compiler via `cc`; one
+          bundle each; per-platform `skip` lists). New xtask dependencies
+          `sha2`, `tar`, `flate2`, `cc` (MIT/Apache-2.0). CI builds them
+          in the runner's temp folder (not cached, not uploaded) and the
+          conformance suite requires them. All 11 build on Linux; all 12
+          plugins describe and map; goldens checked by eye. Two **host
+          bugs** found and fixed: a plugin could change the output depth
+          although the host says it has no multiple clip depths; and
+          parameters with a normalised *default* were sent as normalised
+          values (OpenFX values are always canonical). Two upstream
+          sample bugs noted for the table: DepthConverter addresses
+          source pixels per component when converting, and Rectangle
+          overwrites corner2's default with the colour's.
+   11. **Done:** compatibility table in `docs/ofx-plugins.md` §5, from CI
+       run 38711933727 at `5dc78b3`: all 11 samples built and passed on
+       Windows, macOS arm64, macOS x64 and Linux; none skipped. The
+       tarball sha256 that run downloaded is now pinned.
+
+   **O-C complete.** What is left is listed at the end of
+   `docs/ofx-host.md`.
+8. O-D.
 
 ## Approved decisions
 
@@ -568,6 +680,13 @@ at `743b053` (merge of #3).
   - Q3: Bytes parameters are stored as hidden base64, like Custom, capped
     at 1 MiB per value and validated on load.
   - Q4: no "Get free plugins" for now; revisit after O-C.
+
+- Q-C1 (O-C step 10): the approved BSD-3 samples are built by our own
+  minimal build: an xtask fetches the pinned source tarball (sha256 in
+  `third_party/ofx-fixtures.toml`) and compiles only the needed sources
+  and the Support library with the system C++ compiler. No Conan.
+  OpenGL linked only where a plugin needs it to compile. CI test fixtures
+  only, never uploaded.
 
 ## Open questions waiting on the owner
 

@@ -125,6 +125,12 @@ mod tests {
             origin: EffectOrigin::Ofx {
                 binary: "thing.ofx".into(),
                 index: 0,
+                plugin: voxy_core::effect::OfxInstanceData {
+                    plugin: "org.example.Thing".into(),
+                    version: [1, 0],
+                    context: voxy_core::effect::OfxContext::Filter,
+                    bundle: None,
+                },
             },
         };
         state.install_ofx(OfxStartup {

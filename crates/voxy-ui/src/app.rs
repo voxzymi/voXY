@@ -536,6 +536,7 @@ impl eframe::App for VoxyApp {
         if self.state.transport.is_playing() {
             ctx.request_repaint();
         }
+        self.state.sync_ofx_sequence();
 
         if let Some(text) = self.state.outgoing_clipboard.take() {
             ctx.copy_text(text);

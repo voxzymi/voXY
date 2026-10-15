@@ -423,3 +423,286 @@ fn evaluation_resolves_enabled_effects_at_the_time() {
     // 30 fps by default: one second is frame 30.
     assert_eq!(fx.frame, 30);
 }
+
+/// O-C: an OpenFX effect with keys carries its animation for the plugin's
+/// queries at other times; built-in effects and static ones carry none.
+#[test]
+fn ofx_effects_with_keys_carry_their_timeline() {
+    use voxy_core::command::{Command, SetAnimated};
+    let (mut doc, layer) = doc_with_solid();
+    let ofx = add_effect(
+        &mut doc,
+        layer,
+        "ofx:org.example.Blur",
+        &[("size", Value::Scalar(2.0)), ("mix", Value::Scalar(1.0))],
+    );
+    add_effect(
+        &mut doc,
+        layer,
+        "voxy.blur.gaussian",
+        &[("radius", Value::Scalar(2.0))],
+    );
+    let comp = doc.main_comp.expect("comp");
+    let eval =
+        |doc: &Document| voxy_core::evaluate(doc, comp, voxy_core::Time::ZERO).expect("eval");
+    assert!(
+        eval(&doc).layers[0]
+            .effects
+            .iter()
+            .all(|e| e.timeline.is_none())
+    );
+
+    let size = doc.find_layer(layer).expect("layer").1.effects[0].params[0].id;
+    SetAnimated {
+        prop: size,
+        time: voxy_core::Time::ZERO,
+        animated: true,
+    }
+    .apply(&mut doc)
+    .expect("animate");
+    let e = eval(&doc);
+    let fx = e.layers[0]
+        .effects
+        .iter()
+        .find(|e| e.id == ofx)
+        .expect("ofx");
+    let t = fx.timeline.as_ref().expect("a timeline");
+    assert_eq!(
+        t.params.iter().map(|(n, _)| &**n).collect::<Vec<_>>(),
+        ["size"],
+        "only animated parameters"
+    );
+    assert_eq!(t.key_frames("size"), Some(vec![0.0]));
+    assert_eq!(t.value_at("size", 7.5), Some(Value::Scalar(2.0)));
+    assert_eq!(t.value_at("mix", 0.0), None);
+}
+
+/// O-C: a plugin's edits in response to a user edit join that edit's undo
+/// step; on their own (a push button) they are one step.
+#[test]
+fn plugin_edits_join_the_edit_that_caused_them() {
+    use voxy_core::Time;
+    use voxy_core::command::{PluginEdit, PluginParamEdits, SetProperty, set_property_merge_key};
+    let (mut doc, layer) = doc_with_solid();
+    let fx = add_effect(
+        &mut doc,
+        layer,
+        "ofx:org.example.Linked",
+        &[("a", Value::Scalar(1.0)), ("b", Value::Scalar(1.0))],
+    );
+    let param = |doc: &Document, name: &str| {
+        doc.find_layer(layer).expect("layer").1.effects[0]
+            .param(name)
+            .expect("param")
+            .clone()
+    };
+    let a = param(&doc, "a").id;
+    let mut h = History::new(doc);
+    let plugin = |merge, value: f64| PluginParamEdits {
+        layer,
+        effect: fx,
+        edits: vec![
+            PluginEdit::Set {
+                name: "b".into(),
+                time: Time::ZERO,
+                value: Value::Scalar(value),
+            },
+            PluginEdit::Set {
+                name: "missing".into(),
+                time: Time::ZERO,
+                value: Value::Scalar(0.0),
+            },
+        ],
+        label: "Plugin Edit".into(),
+        merge,
+    };
+    // A drag of `a` over two frames, each answered by the plugin setting `b`.
+    for v in [2.0, 3.0] {
+        h.execute(SetProperty {
+            prop: a,
+            time: Time::ZERO,
+            value: Value::Scalar(v),
+        })
+        .expect("edit");
+        h.execute(plugin(Some(set_property_merge_key(a)), v * 10.0))
+            .expect("plugin edit");
+    }
+    h.end_interaction();
+    assert_eq!(
+        param(h.current(), "b").value_at(Time::ZERO),
+        Value::Scalar(30.0)
+    );
+    assert!(h.undo());
+    assert_eq!(
+        param(h.current(), "a").value_at(Time::ZERO),
+        Value::Scalar(1.0)
+    );
+    assert_eq!(
+        param(h.current(), "b").value_at(Time::ZERO),
+        Value::Scalar(1.0)
+    );
+    assert!(h.redo());
+
+    // A push button: its own step.
+    h.execute(plugin(None, 7.0)).expect("button");
+    assert!(h.undo());
+    assert_eq!(
+        param(h.current(), "b").value_at(Time::ZERO),
+        Value::Scalar(30.0)
+    );
+}
+
+/// An OpenFX definition with plugin state: a Custom parameter (at most 8
+/// bytes) and a Bytes one (base64, at most 4 bytes decoded), in `context`.
+fn ofx_def(context: voxy_core::effect::OfxContext) -> voxy_core::registry::EffectDef {
+    use voxy_core::registry::{
+        Category, EffectDef, EffectOrigin, EffectParamDef, EffectSpace, ParamFlags, ValueCheck,
+    };
+    let tid = EffectTypeId::new("ofx:org.example.Stateful");
+    let param = |name: &str, check| EffectParamDef {
+        name: name.into(),
+        desc: desc(tid.param_key(name), Value::String("".into())),
+        choices: None,
+        group: None,
+        gizmo: None,
+        hint: None,
+        flags: ParamFlags::default(),
+        check: Some(check),
+    };
+    let params = Arc::new([
+        param("custom", ValueCheck::MaxBytes(8)),
+        param("bytes", ValueCheck::Base64 { max: 4 }),
+    ]);
+    EffectDef {
+        type_id: tid,
+        version: 2,
+        name: "Stateful".into(),
+        category: Category::Plugin("Example".into()),
+        description: "".into(),
+        params,
+        groups: Arc::new([]),
+        space: EffectSpace::Working,
+        seeded: false,
+        origin: EffectOrigin::Ofx {
+            binary: "/p/Example.ofx.bundle".into(),
+            index: 0,
+            plugin: voxy_core::effect::OfxInstanceData {
+                plugin: "org.example.Stateful".into(),
+                version: [2, 5],
+                context,
+                bundle: Some("Example.ofx.bundle".into()),
+            },
+        },
+    }
+}
+
+/// O-C (design §6.8): an OpenFX effect records its plugin, version and
+/// context; its Custom and Bytes values round-trip, and damaged ones are
+/// reset on load with a warning.
+#[test]
+fn ofx_plugin_state_round_trips_and_is_checked_on_load() {
+    use voxy_core::effect::OfxContext;
+    use voxy_core::registry::{EffectRegistry, resolve_effects};
+    let mut reg = EffectRegistry::with_builtins();
+    reg.register(ofx_def(OfxContext::Filter)).unwrap();
+    let def = reg
+        .latest(&EffectTypeId::new("ofx:org.example.Stateful"))
+        .unwrap()
+        .clone();
+    let (mut doc, layer) = doc_with_solid();
+    let mut fx = def.instantiate(&mut doc);
+    assert_eq!(fx.ofx.as_ref().unwrap().version, [2, 5]);
+    fx.param_mut("custom")
+        .unwrap()
+        .set_static(Value::String("{\"k\":1}".into()))
+        .unwrap();
+    fx.param_mut("bytes")
+        .unwrap()
+        .set_static(Value::String(voxy_core::base64::encode(&[1, 2, 3]).into()))
+        .unwrap();
+    doc.layer_mut(layer).unwrap().effects.push(fx);
+
+    let json = persist::to_json(&doc).unwrap();
+    let saved = find_effects(&serde_json::from_str(&json).unwrap()).clone();
+    assert_eq!(
+        saved[0]["ofx"],
+        serde_json::json!({
+            "plugin": "org.example.Stateful",
+            "version": [2, 5],
+            "context": "filter",
+            "bundle": "Example.ofx.bundle"
+        })
+    );
+    let mut back = persist::from_json(&json).unwrap();
+    assert_eq!(resolve_effects(&mut back, &reg), Vec::<String>::new());
+    assert_eq!(back, doc);
+
+    // Damaged state: Custom over its cap, Bytes that are not base64.
+    let mut v: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let fxs = find_effects_mut(&mut v).unwrap();
+    for p in fxs[0]["params"].as_array_mut().unwrap() {
+        let bad = if p["key"] == "custom" {
+            "much more than eight bytes"
+        } else {
+            "not base64!"
+        };
+        p["static"]["value"] = bad.into();
+    }
+    let mut damaged = persist::from_json(&serde_json::to_string(&v).unwrap()).unwrap();
+    let warnings = resolve_effects(&mut damaged, &reg);
+    assert_eq!(warnings.len(), 2, "{warnings:?}");
+    let e = &damaged.find_layer(layer).unwrap().1.effects[0];
+    assert!(!e.is_placeholder());
+    for name in ["custom", "bytes"] {
+        assert_eq!(
+            e.param(name).unwrap().value_at(voxy_core::Time::ZERO),
+            Value::String("".into()),
+            "{name} reset"
+        );
+    }
+}
+
+/// An OpenFX effect made in a context the installed plugin no longer runs
+/// in, or whose plugin is missing, keeps its data as a placeholder.
+#[test]
+fn ofx_effects_keep_their_data_when_the_plugin_changed_or_is_gone() {
+    use voxy_core::effect::OfxContext;
+    use voxy_core::registry::{EffectRegistry, resolve_effects};
+    let mut transition = EffectRegistry::with_builtins();
+    transition
+        .register(ofx_def(OfxContext::Transition))
+        .unwrap();
+    let (mut doc, layer) = doc_with_solid();
+    let fx = transition
+        .latest(&EffectTypeId::new("ofx:org.example.Stateful"))
+        .unwrap()
+        .instantiate(&mut doc);
+    doc.layer_mut(layer).unwrap().effects.push(fx);
+    let json = persist::to_json(&doc).unwrap();
+    let original = find_effects(&serde_json::from_str(&json).unwrap())[0].clone();
+
+    // The plugin now runs as a filter.
+    let mut filter = EffectRegistry::with_builtins();
+    filter.register(ofx_def(OfxContext::Filter)).unwrap();
+    let mut back = persist::from_json(&json).unwrap();
+    let warnings = resolve_effects(&mut back, &filter);
+    assert!(warnings[0].contains("transition context"), "{warnings:?}");
+    let e = &back.find_layer(layer).unwrap().1.effects[0];
+    assert!(matches!(
+        e.placeholder.as_ref().map(|p| &p.reason),
+        Some(MissingReason::Unreadable(_))
+    ));
+    let resaved: serde_json::Value =
+        serde_json::from_str(&persist::to_json(&back).unwrap()).unwrap();
+    assert_eq!(find_effects(&resaved)[0], original, "kept verbatim");
+
+    // Not installed, then installed again: restored.
+    let mut gone = persist::from_json(&json).unwrap();
+    resolve_effects(&mut gone, &EffectRegistry::with_builtins());
+    assert!(gone.find_layer(layer).unwrap().1.effects[0].is_placeholder());
+    assert_eq!(
+        resolve_effects(&mut gone, &transition),
+        Vec::<String>::new()
+    );
+    assert_eq!(gone, doc);
+}

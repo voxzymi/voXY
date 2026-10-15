@@ -140,6 +140,19 @@ impl FrameRate {
         f64::from(self.num) / f64::from(self.den)
     }
 
+    /// The time of a fractional frame, to the nearest flick (OpenFX times
+    /// are fractional frames).
+    pub fn time_of_frame(self, frame: f64) -> Time {
+        let flicks = frame * FLICKS_PER_SECOND as f64 * f64::from(self.den) / f64::from(self.num);
+        Time(flicks.round() as i64)
+    }
+
+    /// The fractional frame of `time` (the inverse of
+    /// [`FrameRate::time_of_frame`]).
+    pub fn frame_of_time(self, time: Time) -> f64 {
+        time.0 as f64 * f64::from(self.num) / (FLICKS_PER_SECOND as f64 * f64::from(self.den))
+    }
+
     /// The start time of `frame`: the first flick that belongs to it.
     ///
     /// Rounds up, so `time_to_frame(frame_to_time(f)) == f` holds for every

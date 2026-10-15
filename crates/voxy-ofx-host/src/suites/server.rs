@@ -27,17 +27,65 @@ use crate::shm::SharedMemory;
 /// How often the heartbeat thread beats.
 pub const HEARTBEAT: Duration = Duration::from_millis(25);
 
+/// A channel both ways.
+trait Duplex: Read + Write + Send {}
+impl<T: Read + Write + Send> Duplex for T {}
+
+/// The channel to the editor, shared so that a plugin's parameter query
+/// can be sent in the middle of an action (from any of its threads).
+#[derive(Default)]
+struct Editor {
+    channel: Mutex<Option<Box<dyn Duplex>>>,
+}
+
+impl std::fmt::Debug for Editor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Editor")
+    }
+}
+
+impl Editor {
+    /// Asks the editor for `name` at `time`; `None` when it has no answer
+    /// (or the channel failed, which the serve loop then sees too).
+    fn value_at(&self, name: &str, time: f64) -> Option<ParamValue> {
+        let mut channel = self.channel.lock().unwrap_or_else(PoisonError::into_inner);
+        let ch = channel.as_mut()?;
+        let ask = Reply::ValueAt {
+            name: name.to_owned(),
+            time,
+        };
+        protocol::write_frame(&mut **ch, &ask).ok()?;
+        match protocol::read_frame::<Request, _>(&mut **ch).ok()? {
+            Request::Value { value } => value,
+            _ => None,
+        }
+    }
+}
+
 /// Parameter values from the editor's snapshot, recording what the plugin
-/// changes. Values at other times than the snapshot's hold the snapshot
-/// value for now (queries back to the editor come later in O-B).
-#[derive(Debug, Default)]
+/// changes. A value at another time than the snapshot's, of a parameter
+/// with keys, is asked of the editor (design §6.7).
+#[derive(Debug)]
 struct SnapshotValues {
     values: Mutex<HashMap<String, (ParamValue, Vec<f64>)>>,
+    /// The snapshot's time (NaN before the first `SetParams`).
+    time: Mutex<f64>,
+    editor: Arc<Editor>,
     edits: Mutex<Vec<ParamEdit>>,
 }
 
 impl SnapshotValues {
-    fn load(&self, params: Vec<ParamSnapshot>) {
+    fn new(editor: Arc<Editor>) -> SnapshotValues {
+        SnapshotValues {
+            values: Mutex::default(),
+            time: Mutex::new(f64::NAN),
+            editor,
+            edits: Mutex::default(),
+        }
+    }
+
+    fn load(&self, time: f64, params: Vec<ParamSnapshot>) {
+        *self.time.lock().unwrap_or_else(PoisonError::into_inner) = time;
         let mut v = self.values.lock().unwrap_or_else(PoisonError::into_inner);
         for p in params {
             v.insert(p.name, (p.value, p.keys));
@@ -57,9 +105,17 @@ impl SnapshotValues {
 }
 
 impl ParamValues for SnapshotValues {
-    fn value_at(&self, name: &str, _time: f64) -> Option<ParamValue> {
-        let v = self.values.lock().unwrap_or_else(PoisonError::into_inner);
-        v.get(name).map(|(value, _)| value.clone())
+    fn value_at(&self, name: &str, time: f64) -> Option<ParamValue> {
+        let (value, keyed) = {
+            let v = self.values.lock().unwrap_or_else(PoisonError::into_inner);
+            let (value, keys) = v.get(name)?;
+            (value.clone(), !keys.is_empty())
+        };
+        let at = *self.time.lock().unwrap_or_else(PoisonError::into_inner);
+        if !keyed || time == at {
+            return Some(value);
+        }
+        Some(self.editor.value_at(name, time).unwrap_or(value))
     }
 
     fn key_times(&self, name: &str) -> Vec<f64> {
@@ -160,6 +216,7 @@ pub struct Server {
     shm: Arc<Mutex<Option<Arc<SharedMemory>>>>,
     effects: Arc<Mutex<Vec<Arc<Effect>>>>,
     stop: Arc<AtomicBool>,
+    editor: Arc<Editor>,
 }
 
 impl std::fmt::Debug for Server {
@@ -205,6 +262,7 @@ impl Server {
             shm: Arc::new(Mutex::new(None)),
             effects: Arc::new(Mutex::new(Vec::new())),
             stop: Arc::new(AtomicBool::new(false)),
+            editor: Arc::new(Editor::default()),
         };
         let (shm, effects, stop) = (
             Arc::clone(&server.shm),
@@ -237,9 +295,19 @@ impl Server {
     }
 
     /// Serves frames from `channel` until `Unload` or the channel closes.
-    pub fn serve(&mut self, channel: &mut (impl Read + Write)) -> Result<(), protocol::FrameError> {
+    /// The channel is shared with the instances' parameter queries, which
+    /// use it while an action runs (the lock is free then).
+    pub fn serve(
+        &mut self,
+        channel: impl Read + Write + Send + 'static,
+    ) -> Result<(), protocol::FrameError> {
+        *self.channel() = Some(Box::new(channel));
         loop {
-            let request: Request = match protocol::read_frame(channel) {
+            let read = match self.channel().as_mut() {
+                Some(c) => protocol::read_frame::<Request, _>(&mut **c),
+                None => return Ok(()),
+            };
+            let request = match read {
                 Ok(r) => r,
                 Err(protocol::FrameError::Io(e))
                     if e.kind() == std::io::ErrorKind::UnexpectedEof =>
@@ -251,11 +319,20 @@ impl Server {
             };
             let last = request == Request::Unload;
             let reply = self.handle(request);
-            protocol::write_frame(channel, &reply)?;
+            if let Some(c) = self.channel().as_mut() {
+                protocol::write_frame(&mut **c, &reply)?;
+            }
             if last {
                 return Ok(());
             }
         }
+    }
+
+    fn channel(&self) -> std::sync::MutexGuard<'_, Option<Box<dyn Duplex>>> {
+        self.editor
+            .channel
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 
     fn shutdown(&mut self) {
@@ -321,8 +398,8 @@ impl Server {
                     .iter()
                     .find(|(p, _)| p.identifier == plugin)
                     .ok_or_else(|| Reply::Error(format!("no plugin {plugin}")))?;
-                let values = Arc::new(SnapshotValues::default());
-                values.load(params);
+                let values = Arc::new(SnapshotValues::new(Arc::clone(&self.editor)));
+                values.load(f64::NAN, params);
                 let images = Arc::new(SlotImages::default());
                 let inst = p
                     .create_instance(d, &context, project, values.clone(), images.clone())
@@ -363,7 +440,7 @@ impl Server {
                 params,
             } => {
                 let live = self.live(instance)?;
-                live.values.load(params);
+                live.values.load(time, params);
                 live.inst.fx.params.set_time(time);
                 Self::done(live)
             }
@@ -465,6 +542,11 @@ impl Server {
                     .map_err(|e| failed(e, live.inst.fx.take_messages()))?;
                 Self::done(live)
             }
+            // Only expected inside an action, where `Editor::value_at`
+            // reads it.
+            Request::Value { .. } => {
+                return Err(Reply::Error("a value with no query pending".into()));
+            }
             Request::Unload => {
                 self.shutdown();
                 Reply::Done {
@@ -532,14 +614,17 @@ impl Server {
         let mut rods = HashMap::new();
         for (name, s) in inputs {
             images.insert(name.clone(), read(s)?);
+            // The clip's region in canonical coordinates: its pixel bounds
+            // over the render scale.
             let b = s.bounds;
+            let (sx, sy) = (scale[0].max(1e-9), scale[1].max(1e-9));
             rods.insert(
                 name.clone(),
                 [
-                    f64::from(b[0]),
-                    f64::from(b[1]),
-                    f64::from(b[2]),
-                    f64::from(b[3]),
+                    f64::from(b[0]) / sx,
+                    f64::from(b[1]) / sy,
+                    f64::from(b[2]) / sx,
+                    f64::from(b[3]) / sy,
                 ],
             );
         }

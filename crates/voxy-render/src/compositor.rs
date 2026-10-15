@@ -840,7 +840,7 @@ impl Compositor {
                 // rendered now: rendering one mid-composite would overwrite
                 // this composite's uniforms.
                 DrawSource::Adjustment { chain, .. } => {
-                    for input in chain.effects.iter().filter_map(|n| n.input.as_ref()) {
+                    for (_, input) in chain.effects.iter().flat_map(|n| &n.inputs) {
                         if let DrawSource::Comp { plan: child, .. } = &input.source {
                             self.render_nested(
                                 device,

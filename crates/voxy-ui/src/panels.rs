@@ -403,7 +403,7 @@ impl Panels<'_> {
                         );
                     }
                     self.plugin_problem(ui, fx);
-                    self.effect_params(ui, fx, def.as_deref(), None, &refs, 0);
+                    self.effect_params(ui, layer.id, fx, def.as_deref(), None, &refs, 0);
                 });
         }
     }
@@ -445,10 +445,14 @@ impl Panels<'_> {
 
     /// The parameters of `fx` in `group` (`None`: the top level), then its
     /// subgroups as collapsible sections. Without a definition (a
-    /// placeholder) every parameter is shown at the top level.
+    /// placeholder) every parameter is shown at the top level. An OpenFX
+    /// plugin is told about each edit of its parameters and each press of
+    /// its buttons (design §6.7).
+    #[allow(clippy::too_many_arguments)]
     fn effect_params(
         &mut self,
         ui: &mut Ui,
+        layer: LayerId,
         fx: &EffectInstance,
         def: Option<&voxy_core::registry::EffectDef>,
         group: Option<u32>,
@@ -466,14 +470,40 @@ impl Panels<'_> {
                     {
                         continue;
                     }
+                    let name = fx.param_name(p);
                     if fx.is_placeholder()
                         || pd.is_some_and(|pd| pd.flags.visibility == ParamVisibility::ReadOnly)
                     {
                         ui.label(p.desc.label.as_ref());
                         ui.weak(crate::timeline::value_text(&p.value_at(self.state.time)));
                         ui.end_row();
+                    } else if let Some(pd) =
+                        pd.filter(|pd| pd.flags.visibility == ParamVisibility::Button)
+                    {
+                        ui.label("");
+                        let mut button = ui.button(p.desc.label.as_ref());
+                        if let Some(hint) = pd.hint.as_deref() {
+                            button = button.on_hover_text(hint);
+                        }
+                        if button.clicked() {
+                            self.state
+                                .ofx_param_changed(layer, fx.id, name, None, &p.desc.label);
+                        }
+                        ui.end_row();
                     } else {
+                        let before = self.state.history.revision();
                         self.property_row(ui, p, pd, refs);
+                        if fx.type_id.is_ofx() && self.state.history.revision() != before {
+                            // The plugin's response joins the edit's step.
+                            let merge = voxy_core::command::set_property_merge_key(p.id);
+                            self.state.ofx_param_changed(
+                                layer,
+                                fx.id,
+                                name,
+                                Some(merge),
+                                "Plugin Edit",
+                            );
+                        }
                     }
                 }
             });
@@ -486,7 +516,7 @@ impl Panels<'_> {
                 .id_salt(("effect-group", fx.id, g.id))
                 .default_open(g.open_by_default)
                 .show(ui, |ui| {
-                    self.effect_params(ui, fx, Some(def), Some(g.id), refs, depth + 1);
+                    self.effect_params(ui, layer, fx, Some(def), Some(g.id), refs, depth + 1);
                 });
         }
     }

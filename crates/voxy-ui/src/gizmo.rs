@@ -180,6 +180,7 @@ mod tests {
             gizmo,
             hint: None,
             flags: ParamFlags::default(),
+            check: None,
         };
         Arc::new(EffectDef {
             type_id: type_id.clone(),

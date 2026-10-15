@@ -43,7 +43,7 @@ fn main() -> ExitCode {
         Err(e) => {
             eprintln!("voxy-ofx-sandbox: {e}");
             // Answer the editor's greeting with the reason, then go.
-            let _ = voxy_ofx_host::protocol::read_frame::<voxy_ofx_host::protocol::Request>(
+            let _ = voxy_ofx_host::protocol::read_frame::<voxy_ofx_host::protocol::Request, _>(
                 &mut stream,
             );
             let _ = voxy_ofx_host::protocol::write_frame(
@@ -53,7 +53,7 @@ fn main() -> ExitCode {
             return ExitCode::from(3);
         }
     };
-    match server.serve(&mut stream) {
+    match server.serve(stream) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("voxy-ofx-sandbox: {e}");

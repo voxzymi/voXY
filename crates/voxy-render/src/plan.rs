@@ -145,9 +145,11 @@ pub struct EffectNode {
     /// §3.4), and 0 for every other kernel, so identical unseeded chains
     /// on different layers share one rendered result.
     pub seed: u64,
-    /// The layer the kernel reads (Displacement Map's map, a transition's
-    /// B), when it has one and that layer is active.
-    pub input: Option<Arc<LayerInput>>,
+    /// The layers the kernel reads (Displacement Map's map, a transition's
+    /// B, an OpenFX effect's extra clips), by the name of their
+    /// layer-reference parameter, in parameter order; only those naming an
+    /// active layer. GPU kernels read the first.
+    pub inputs: Vec<(Arc<str>, Arc<LayerInput>)>,
 }
 
 /// Another layer an effect reads (Q-E1, docs/effects.md): its plain
@@ -234,20 +236,28 @@ impl ChainPlan {
                 }
                 None => h.u32(0),
             }
+            // A plugin may read its parameters at other times: the whole
+            // animation is part of its result (in-memory key; Debug output
+            // is deterministic).
+            match &fx.timeline {
+                Some(t) => {
+                    h.u32(1);
+                    h.str(&format!("{t:?}"));
+                }
+                None => h.u32(0),
+            }
             // Zero unless the kernel uses them (see the planner).
             h.u64(fx.frame as u64);
             h.f64(fx.layer_progress);
             h.u64(node.seed);
-            match &node.input {
-                Some(input) => {
-                    h.u32(1);
-                    hash_source(&input.source, h);
-                    hash_size(input.size, h);
-                    for v in input.from_input.to_cols_array() {
-                        h.f64(v);
-                    }
+            h.u32(node.inputs.len() as u32);
+            for (name, input) in &node.inputs {
+                h.str(name);
+                hash_source(&input.source, h);
+                hash_size(input.size, h);
+                for v in input.from_input.to_cols_array() {
+                    h.f64(v);
                 }
-                None => h.u32(0),
             }
         }
         h.f64(self.scale);
@@ -417,23 +427,26 @@ impl Builder<'_> {
         }
         let inverse = world.inverse();
         for node in nodes {
-            let Some(Value::Layer(Some(id))) = node
-                .kernel
-                .layer_input()
-                .and_then(|name| node.effect.param(name))
-            else {
-                continue;
-            };
-            let Some(b) = eval.layers.iter().find(|l| l.id == *id) else {
-                continue;
-            };
-            if let Some((source, size)) = self.plain_source(b, 1.0, false) {
-                node.input = Some(Arc::new(LayerInput {
-                    source,
-                    size,
-                    from_input: inverse * b.world,
-                }));
+            let mut inputs = Vec::new();
+            for name in node.kernel.layer_params(&node.effect) {
+                let Some(Value::Layer(Some(id))) = node.effect.param(name) else {
+                    continue;
+                };
+                let Some(b) = eval.layers.iter().find(|l| l.id == *id) else {
+                    continue;
+                };
+                if let Some((source, size)) = self.plain_source(b, 1.0, false) {
+                    inputs.push((
+                        Arc::from(name),
+                        Arc::new(LayerInput {
+                            source,
+                            size,
+                            from_input: inverse * b.world,
+                        }),
+                    ));
+                }
             }
+            node.inputs = inputs;
         }
     }
 
@@ -476,7 +489,7 @@ impl Builder<'_> {
                             kernel,
                             effect,
                             seed,
-                            input: None,
+                            inputs: Vec::new(),
                         });
                     }
                     None => self.unsupported += 1,

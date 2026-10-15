@@ -11,6 +11,7 @@ use crate::id::{CompId, EffectId, LayerId};
 use crate::keyframe::SpatialTangents;
 use crate::layer::{BlendMode, Layer, LayerKind, Transform};
 use crate::registry::EffectDef;
+use crate::time::Time;
 use crate::value::Value;
 
 fn layer_mut(doc: &mut Document, id: LayerId) -> Result<&mut Layer, CommandError> {
@@ -567,5 +568,74 @@ impl Command for ResetEffect {
             *p = crate::property::Property::with_default(p.id, p.desc.clone());
         }
         Ok(())
+    }
+}
+
+/// One change a plugin made to its own parameters (OpenFX `paramSetValue`
+/// and friends, design §6.7).
+#[derive(Debug, Clone, PartialEq)]
+pub enum PluginEdit {
+    /// Like a user edit at `time`: a static parameter changes its value,
+    /// an animated one gets a key there.
+    Set {
+        name: String,
+        time: Time,
+        value: Value,
+    },
+    RemoveKey {
+        name: String,
+        time: Time,
+    },
+    /// Animation off, keeping the value at `time`.
+    RemoveAllKeys {
+        name: String,
+        time: Time,
+    },
+}
+
+/// The edits a plugin made while handling a change (OpenFX
+/// `InstanceChanged`, a push button), as one undo step. With `merge` set to
+/// the triggering edit's key, they join that edit's step (so a drag stays
+/// one step). Edits to parameters the effect does not have are skipped.
+#[derive(Debug, Clone)]
+pub struct PluginParamEdits {
+    pub layer: LayerId,
+    pub effect: EffectId,
+    pub edits: Vec<PluginEdit>,
+    pub label: Cow<'static, str>,
+    pub merge: Option<super::MergeKey>,
+}
+
+impl Command for PluginParamEdits {
+    fn label(&self) -> Cow<'static, str> {
+        self.label.clone()
+    }
+
+    fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
+        let layer = layer_mut(doc, self.layer)?;
+        let i = effect_index(layer, self.effect)?;
+        let fx = &mut layer.effects[i];
+        for e in &self.edits {
+            let (PluginEdit::Set { name, .. }
+            | PluginEdit::RemoveKey { name, .. }
+            | PluginEdit::RemoveAllKeys { name, .. }) = e;
+            let Some(p) = fx.param_mut(name) else {
+                continue;
+            };
+            match e {
+                PluginEdit::Set { time, value, .. } => p.set_value_at(*time, value.clone())?,
+                PluginEdit::RemoveKey { time, .. } => {
+                    if p.is_animated() {
+                        p.remove_keyframes(&[*time])?;
+                    }
+                }
+                PluginEdit::RemoveAllKeys { time, .. } => p.set_animated(*time, false)?,
+            }
+        }
+        Ok(())
+    }
+
+    fn merge_key(&self) -> Option<super::MergeKey> {
+        self.merge
     }
 }

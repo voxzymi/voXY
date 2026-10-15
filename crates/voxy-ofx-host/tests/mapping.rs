@@ -31,7 +31,13 @@ fn the_gain_plugin_becomes_a_registered_effect() {
         def.origin,
         EffectOrigin::Ofx {
             binary: "/x/VoxyTest.ofx".into(),
-            index: 0
+            index: 0,
+            plugin: voxy_core::effect::OfxInstanceData {
+                plugin: "org.voxy.test.Gain".into(),
+                version: [1, 2],
+                context: voxy_core::effect::OfxContext::Filter,
+                bundle: Some("VoxyTest.ofx".into()),
+            },
         }
     );
 
@@ -217,10 +223,34 @@ fn each_parameter_type_maps_as_designed() {
 }
 
 #[test]
-fn a_plugin_without_a_filter_context_is_not_mapped_yet() {
+fn a_plugin_with_only_unmapped_contexts_is_not_mapped() {
     let mut desc = plugin(vec![]);
-    desc.contexts[0].context = "OfxImageEffectContextGeneral".into();
+    desc.contexts[0].context = "OfxImageEffectContextPaint".into();
     assert!(effect_def(&desc, Path::new("x"), 0).is_err());
+}
+
+#[test]
+fn the_filter_context_is_preferred_and_reserved_names_are_refused() {
+    let mut desc = plugin(vec![param("amount", ParamKind::Double, vec![])]);
+    let mut transition = desc.contexts[0].clone();
+    transition.context = "OfxImageEffectContextTransition".into();
+    desc.contexts.insert(0, transition);
+    let def = effect_def(&desc, Path::new("x"), 0).unwrap();
+    assert_eq!(def.category, Category::Plugin("OpenFX".into()), "filter");
+    desc.contexts.remove(1);
+    let def = effect_def(&desc, Path::new("x"), 0).unwrap();
+    assert_eq!(def.category, Category::Transition);
+    assert_eq!(
+        def.params.iter().map(|p| &*p.name).collect::<Vec<_>>(),
+        ["amount", "voxy.auto", "voxy.clip.SourceTo"]
+    );
+    assert_eq!(
+        def.param("voxy.clip.SourceTo").unwrap().desc.default,
+        Value::Layer(None)
+    );
+
+    let bad = plugin(vec![param("voxy.auto", ParamKind::Boolean, vec![])]);
+    assert!(effect_def(&bad, Path::new("x"), 0).is_err());
 }
 
 #[test]

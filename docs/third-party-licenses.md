@@ -7,7 +7,7 @@ CI fails if this file is stale. The policy that every license must satisfy is in
 The list covers every target platform, so it includes crates that are only
 compiled on Windows, macOS or Linux.
 
-419 crates.
+428 crates.
 
 ## By license
 
@@ -30,8 +30,8 @@ compiled on Windows, macOS or Linux.
 | `BSD-3-Clause OR MIT OR Apache-2.0` | 2 |
 | `BSL-1.0` | 2 |
 | `ISC` | 1 |
-| `MIT` | 90 |
-| `MIT OR Apache-2.0` | 213 |
+| `MIT` | 91 |
+| `MIT OR Apache-2.0` | 221 |
 | `MIT OR Apache-2.0 OR LGPL-2.1-or-later` | 1 |
 | `MIT OR Apache-2.0 OR Zlib` | 6 |
 | `MIT OR Zlib OR Apache-2.0` | 1 |
@@ -85,6 +85,7 @@ compiled on Windows, macOS or Linux.
 | [`bit-set`](https://github.com/contain-rs/bit-set) | 0.10.0, 0.8.0 | `Apache-2.0 OR MIT` |
 | [`bit-vec`](https://github.com/contain-rs/bit-vec) | 0.8.0, 0.9.1 | `Apache-2.0 OR MIT` |
 | [`bitflags`](https://github.com/bitflags/bitflags) | 1.3.2, 2.13.2 | `MIT OR Apache-2.0` |
+| [`block-buffer`](https://github.com/RustCrypto/utils) | 0.10.4 | `MIT OR Apache-2.0` |
 | [`block2`](https://github.com/madsmtm/objc2) | 0.5.1, 0.6.2 | `MIT` |
 | [`blocking`](https://github.com/smol-rs/blocking) | 1.7.0 | `Apache-2.0 OR MIT` |
 | [`bumpalo`](https://github.com/fitzgen/bumpalo) | 3.20.3 | `MIT OR Apache-2.0` |
@@ -112,12 +113,15 @@ compiled on Windows, macOS or Linux.
 | [`core-graphics-types`](https://github.com/servo/core-foundation-rs) | 0.1.3 | `MIT OR Apache-2.0` |
 | [`coreaudio-rs`](https://github.com/RustAudio/coreaudio-rs.git) | 0.14.2 | `MIT OR Apache-2.0` |
 | [`cpal`](https://github.com/RustAudio/cpal) | 0.18.2 | `Apache-2.0` |
+| [`cpufeatures`](https://github.com/RustCrypto/utils) | 0.2.17 | `MIT OR Apache-2.0` |
 | [`crc32fast`](https://github.com/srijs/rust-crc32fast) | 1.5.2 | `MIT OR Apache-2.0` |
 | [`crossbeam-channel`](https://github.com/crossbeam-rs/crossbeam) | 0.5.17 | `MIT OR Apache-2.0` |
 | [`crossbeam-utils`](https://github.com/crossbeam-rs/crossbeam) | 0.8.23 | `MIT OR Apache-2.0` |
 | [`crunchy`](https://github.com/eira-fransham/crunchy) | 0.2.4 | `MIT` |
+| [`crypto-common`](https://github.com/RustCrypto/traits) | 0.1.7 | `MIT OR Apache-2.0` |
 | [`cursor-icon`](https://github.com/rust-windowing/cursor-icon) | 1.2.0 | `MIT OR Apache-2.0 OR Zlib` |
 | [`dasp_sample`](https://github.com/rustaudio/sample.git) | 0.11.0 | `MIT OR Apache-2.0` |
+| [`digest`](https://github.com/RustCrypto/traits) | 0.10.7 | `MIT OR Apache-2.0` |
 | [`dispatch`](http://github.com/SSheldon/rust-dispatch) | 0.2.0 | `MIT` |
 | [`dispatch2`](https://github.com/madsmtm/objc2) | 0.3.1 | `Zlib OR Apache-2.0 OR MIT` |
 | [`dlib`](https://github.com/elinorbgr/dlib) | 0.5.3 | `MIT` |
@@ -154,6 +158,7 @@ compiled on Windows, macOS or Linux.
 | [`fearless_simd`](https://github.com/linebender/fearless_simd) | 0.4.1 | `Apache-2.0 OR MIT` |
 | [`ffmpeg-next`](https://github.com/zmwangx/rust-ffmpeg) | 9.0.0 | `WTFPL` |
 | [`ffmpeg-sys-next`](https://github.com/zmwangx/rust-ffmpeg-sys) | 9.0.0 | `WTFPL` |
+| [`filetime`](https://github.com/alexcrichton/filetime) | 0.2.29 | `MIT OR Apache-2.0` |
 | [`find-msvc-tools`](https://github.com/rust-lang/cc-rs) | 0.1.14 | `MIT OR Apache-2.0` |
 | [`flate2`](https://github.com/rust-lang/flate2-rs) | 1.1.10 | `MIT OR Apache-2.0` |
 | [`fnv`](https://github.com/servo/rust-fnv) | 1.0.7 | `Apache-2.0 OR MIT` |
@@ -169,6 +174,7 @@ compiled on Windows, macOS or Linux.
 | [`futures-macro`](https://github.com/rust-lang/futures-rs) | 0.3.34 | `MIT OR Apache-2.0` |
 | [`futures-task`](https://github.com/rust-lang/futures-rs) | 0.3.34 | `MIT OR Apache-2.0` |
 | [`futures-util`](https://github.com/rust-lang/futures-rs) | 0.3.34 | `MIT OR Apache-2.0` |
+| [`generic-array`](https://github.com/fizyk20/generic-array.git) | 0.14.7 | `MIT` |
 | [`gethostname`](https://codeberg.org/swsnr/gethostname.rs.git) | 1.1.0 | `Apache-2.0` |
 | [`getrandom`](https://github.com/rust-random/getrandom) | 0.3.4, 0.4.3 | `MIT OR Apache-2.0` |
 | [`gl_generator`](https://github.com/brendanzab/gl-rs/) | 0.14.0 | `Apache-2.0` |
@@ -329,6 +335,7 @@ compiled on Windows, macOS or Linux.
 | [`serde_json`](https://github.com/serde-rs/json) | 1.0.151 | `MIT OR Apache-2.0` |
 | [`serde_repr`](https://github.com/dtolnay/serde-repr) | 0.1.21 | `MIT OR Apache-2.0` |
 | [`serde_spanned`](https://github.com/toml-rs/toml) | 1.1.2 | `MIT OR Apache-2.0` |
+| [`sha2`](https://github.com/RustCrypto/hashes) | 0.10.9 | `MIT OR Apache-2.0` |
 | [`sharded-slab`](https://github.com/hawkw/sharded-slab) | 0.1.7 | `MIT` |
 | [`shlex`](https://github.com/comex/rust-shlex) | 1.3.0, 2.0.1 | `MIT OR Apache-2.0` |
 | [`signal-hook-registry`](https://github.com/vorner/signal-hook) | 1.4.8 | `MIT OR Apache-2.0` |
@@ -347,6 +354,7 @@ compiled on Windows, macOS or Linux.
 | [`static_assertions`](https://github.com/nvzqz/static-assertions-rs) | 1.1.0 | `MIT OR Apache-2.0` |
 | [`svg_fmt`](https://github.com/nical/rust_debug) | 0.4.5 | `MIT OR Apache-2.0` |
 | [`syn`](https://github.com/dtolnay/syn) | 2.0.119, 3.0.6 | `MIT OR Apache-2.0` |
+| [`tar`](https://github.com/composefs/tar-rs) | 0.4.46 | `MIT OR Apache-2.0` |
 | [`tempfile`](https://github.com/Stebalien/tempfile) | 3.27.0 | `MIT OR Apache-2.0` |
 | [`termcolor`](https://github.com/BurntSushi/termcolor) | 1.4.1 | `Unlicense OR MIT` |
 | [`thiserror`](https://github.com/dtolnay/thiserror) | 1.0.69, 2.0.21 | `MIT OR Apache-2.0` |
@@ -366,6 +374,7 @@ compiled on Windows, macOS or Linux.
 | [`tracing-subscriber`](https://github.com/tokio-rs/tracing) | 0.3.23 | `MIT` |
 | [`type-map`](https://github.com/kardeiz/type-map) | 0.5.1 | `MIT OR Apache-2.0` |
 | [`typed-path`](https://github.com/chipsenkbeil/typed-path) | 0.12.3 | `MIT OR Apache-2.0` |
+| [`typenum`](https://github.com/paholg/typenum) | 1.20.1 | `MIT OR Apache-2.0` |
 | [`uds_windows`](https://github.com/haraldh/rust_uds_windows) | 1.2.1 | `MIT` |
 | [`unarray`](https://github.com/cameron1024/unarray) | 0.1.4 | `MIT OR Apache-2.0` |
 | [`unicode-general-category`](https://github.com/yeslogic/unicode-general-category) | 1.1.0 | `Apache-2.0` |

@@ -16,7 +16,8 @@ use crate::document::Document;
 use crate::effect::{EffectMatte, EffectTypeId};
 use crate::id::{AssetId, CompId, EffectId, LayerId};
 use crate::layer::{BlendMode, Layer, LayerKind, Transform};
-use crate::time::Time;
+use crate::property::Property;
+use crate::time::{FrameRate, Time};
 use crate::value::Value;
 
 /// A composition with every property resolved at one time.
@@ -65,6 +66,48 @@ pub struct EvaluatedEffect {
     /// Where the time lies between the layer's in and out points, 0 to 1
     /// (for transitions with Auto on, design §5), from exact flicks.
     pub layer_progress: f64,
+    /// An OpenFX effect's animated parameters, for plugins that ask for
+    /// values at other times or for key times (design §6.7). `None` for
+    /// built-in effects and for OpenFX effects without keys.
+    pub timeline: Option<Arc<EffectTimeline>>,
+}
+
+/// The animated parameters of one effect, with the frame rate that maps
+/// OpenFX times (frames of the layer's composition) to voXY times.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EffectTimeline {
+    pub frame_rate: FrameRate,
+    /// `(parameter name, property)` for each animated parameter.
+    pub params: Vec<(Arc<str>, Property)>,
+}
+
+impl EffectTimeline {
+    /// `name`'s value at `frame` (fractional frames allowed), if it is
+    /// animated.
+    pub fn value_at(&self, name: &str, frame: f64) -> Option<Value> {
+        let p = &self.params.iter().find(|(n, _)| &**n == name)?.1;
+        Some(p.value_at(self.time_of(frame)))
+    }
+
+    /// `name`'s key times in frames, if it is animated.
+    pub fn key_frames(&self, name: &str) -> Option<Vec<f64>> {
+        let p = &self.params.iter().find(|(n, _)| &**n == name)?.1;
+        Some(
+            p.track()?
+                .keys()
+                .iter()
+                .map(|k| self.frame_of(k.time))
+                .collect(),
+        )
+    }
+
+    fn time_of(&self, frame: f64) -> Time {
+        self.frame_rate.time_of_frame(frame)
+    }
+
+    fn frame_of(&self, time: Time) -> f64 {
+        self.frame_rate.frame_of_time(time)
+    }
 }
 
 impl EvaluatedEffect {
@@ -188,7 +231,7 @@ fn evaluate_in(
             world: worlds.world(l.id),
             opacity: scalar(&l.transform.opacity, time, 1.0).clamp(0.0, 1.0),
             blend: l.blend_mode,
-            effects: effects(l, time, c.frame_rate.time_to_frame(time), progress(l, time)),
+            effects: effects(l, time, c.frame_rate, progress(l, time)),
             missing_effects: l
                 .effects
                 .iter()
@@ -217,23 +260,43 @@ fn progress(layer: &Layer, time: Time) -> f64 {
     done as f64 / span as f64
 }
 
-fn effects(layer: &Layer, time: Time, frame: i64, layer_progress: f64) -> Vec<EvaluatedEffect> {
+fn effects(
+    layer: &Layer,
+    time: Time,
+    rate: FrameRate,
+    layer_progress: f64,
+) -> Vec<EvaluatedEffect> {
+    let frame = rate.time_to_frame(time);
     layer
         .effects
         .iter()
         .filter(|fx| fx.enabled && !fx.is_placeholder())
-        .map(|fx| EvaluatedEffect {
-            id: fx.id,
-            type_id: fx.type_id.clone(),
-            version: fx.version,
-            params: fx
+        .map(|fx| {
+            let animated: Vec<(Arc<str>, Property)> = fx
                 .params
                 .iter()
-                .map(|p| (Arc::from(fx.param_name(p)), p.value_at(time)))
-                .collect(),
-            matte: fx.matte,
-            frame,
-            layer_progress,
+                .filter(|p| p.is_animated())
+                .map(|p| (Arc::from(fx.param_name(p)), p.clone()))
+                .collect();
+            EvaluatedEffect {
+                id: fx.id,
+                type_id: fx.type_id.clone(),
+                version: fx.version,
+                params: fx
+                    .params
+                    .iter()
+                    .map(|p| (Arc::from(fx.param_name(p)), p.value_at(time)))
+                    .collect(),
+                matte: fx.matte,
+                frame,
+                layer_progress,
+                timeline: (fx.type_id.is_ofx() && !animated.is_empty()).then(|| {
+                    Arc::new(EffectTimeline {
+                        frame_rate: rate,
+                        params: animated,
+                    })
+                }),
+            }
         })
         .collect()
 }

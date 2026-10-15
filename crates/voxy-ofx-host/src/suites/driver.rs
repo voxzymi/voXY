@@ -252,11 +252,20 @@ impl Plugin {
         let desc = description
             .context(context)
             .ok_or_else(|| DriverError::UnknownContext(context.to_owned()))?;
-        let fx = Arc::new(Effect::instance(desc, project, values, images, &|_| {
+        // Mask clips are never connected: voXY's effect matte masks the
+        // result instead (design §6.4).
+        let masks: Vec<String> = desc
+            .clips()
+            .iter()
+            .filter(|c| c.props.int(ofx_str(ofx::kOfxImageClipPropIsMask), 0) == Some(1))
+            .map(|c| c.name.clone())
+            .collect();
+        let fx = Arc::new(Effect::instance(desc, project, values, images, &|name| {
             ClipInfo {
                 frame_rate: project.frame_rate,
                 frame_range: [0.0, (project.duration - 1.0).max(0.0)],
                 pixel_aspect: project.pixel_aspect,
+                connected: !masks.iter().any(|m| m == name),
                 ..ClipInfo::default()
             }
         }));
@@ -275,6 +284,7 @@ impl Plugin {
             project,
             output_premult: Premult::Premultiplied,
             live: true,
+            sequence: std::sync::atomic::AtomicU8::new(0),
         })
     }
 }
@@ -324,6 +334,9 @@ pub struct Instance<'p> {
     project: Project,
     output_premult: Premult,
     live: bool,
+    /// Inside `BeginSequenceRender`/`EndSequenceRender`: 0 no, 1 yes, 2 yes
+    /// and interactive. Render actions report it.
+    sequence: std::sync::atomic::AtomicU8,
 }
 
 impl Instance<'_> {
@@ -404,11 +417,11 @@ impl Instance<'_> {
         let mut prefs = HashMap::new();
         for c in &clips {
             let name = &c.name;
-            let d = outs
-                .0
-                .string(&format!("OfxImageClipPropDepth_{name}"), 0)
-                .and_then(|d| Depth::from_ofx(&d))
-                .unwrap_or(depth);
+            // The host does not support multiple clip depths, so a plugin
+            // may not change them (spec: only such a host "will allow the
+            // plugin to explicitly set the output clip's pixel depth");
+            // every clip keeps the depth chosen above.
+            let d = depth;
             let k = outs
                 .0
                 .string(&format!("OfxImageClipPropComponents_{name}"), 0)
@@ -535,7 +548,8 @@ impl Instance<'_> {
             .collect())
     }
 
-    fn render_args(time: f64, window: [i32; 4], scale: [f64; 2]) -> Args {
+    fn render_args(&self, time: f64, window: [i32; 4], scale: [f64; 2]) -> Args {
+        let sequence = self.sequence.load(std::sync::atomic::Ordering::Relaxed);
         let ins = Args::new();
         ins.0.ro(ofx::kOfxPropTime, Values::Double(vec![time]));
         ins.0.ro(
@@ -552,11 +566,11 @@ impl Instance<'_> {
         );
         ins.0.ro(
             ofx::kOfxImageEffectPropSequentialRenderStatus,
-            Values::Int(vec![0]),
+            Values::Int(vec![i32::from(sequence > 0)]),
         );
         ins.0.ro(
             ofx::kOfxImageEffectPropInteractiveRenderStatus,
-            Values::Int(vec![0]),
+            Values::Int(vec![i32::from(sequence == 2)]),
         );
         ins.0.ro(
             ofx::kOfxImageEffectPropRenderQualityDraft,
@@ -573,7 +587,7 @@ impl Instance<'_> {
         scale: [f64; 2],
     ) -> Result<Identity, DriverError> {
         self.set_time(time);
-        let ins = Self::render_args(time, window, scale);
+        let ins = self.render_args(time, window, scale);
         let outs = Args::new();
         outs.0.rw(ofx::kOfxPropName, Values::strings(&[""]));
         outs.0.rw(ofx::kOfxPropTime, Values::Double(vec![time]));
@@ -601,7 +615,7 @@ impl Instance<'_> {
     pub fn render(&self, time: f64, window: [i32; 4], scale: [f64; 2]) -> Result<(), DriverError> {
         self.set_time(time);
         self.fx.set_abort(false);
-        let ins = Self::render_args(time, window, scale);
+        let ins = self.render_args(time, window, scale);
         self.call(ofx::kOfxImageEffectActionRender, Some(&ins), None)?;
         let out = ofx_str(ofx::kOfxImageEffectOutputClipName);
         if let Some(img) = self.fx.images.as_ref().and_then(|i| i.image(out, time)) {
@@ -649,6 +663,13 @@ impl Instance<'_> {
         } else {
             ofx::kOfxImageEffectActionEndSequenceRender
         };
+        let state = match (begin, interactive) {
+            (false, _) => 0,
+            (true, false) => 1,
+            (true, true) => 2,
+        };
+        self.sequence
+            .store(state, std::sync::atomic::Ordering::Relaxed);
         self.call(action, Some(&ins), None).map(|_| ())
     }
 

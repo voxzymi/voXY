@@ -17,6 +17,7 @@
 //! This crate has no GPU, media or UI dependencies.
 
 mod asset;
+pub mod base64;
 mod color;
 pub mod command;
 mod comp;
@@ -50,8 +51,8 @@ pub use document::{
 pub use easing::{CubicEase, EaseHandle, EasePreset};
 pub use effect::{EffectInstance, EffectMatte, EffectTypeId, MatteChannel, MissingReason};
 pub use evaluate::{
-    EvaluatedComp, EvaluatedContent, EvaluatedEffect, EvaluatedLayer, MAX_NESTING, Nested,
-    evaluate, layer_world, local_matrix,
+    EffectTimeline, EvaluatedComp, EvaluatedContent, EvaluatedEffect, EvaluatedLayer, MAX_NESTING,
+    Nested, evaluate, layer_world, local_matrix,
 };
 pub use history::{History, SharedDocument};
 pub use id::{AssetId, CompId, EffectId, FolderId, LayerId, PropId};

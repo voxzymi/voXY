@@ -164,7 +164,14 @@ fn a_bundle_describes_and_renders_out_of_process() {
         [
             "org.voxy.test.Gain",
             "org.voxy.test.Crash",
-            "org.voxy.test.Hang"
+            "org.voxy.test.Hang",
+            "org.voxy.test.Solid",
+            "org.voxy.test.Blur",
+            "org.voxy.test.Fade",
+            "org.voxy.test.Matte",
+            "org.voxy.test.Lag",
+            "org.voxy.test.Transform",
+            "org.voxy.test.Keyer"
         ]
     );
     assert_eq!(d.plugins[0].props.string("OfxPropLabel"), Some("Test Gain"));
@@ -260,7 +267,7 @@ fn a_crashing_plugin_only_takes_down_the_sandbox() {
     ));
     write_frame(&mut s.stream, &render_request()).unwrap();
     assert!(
-        read_frame::<Reply>(&mut s.stream).is_err(),
+        read_frame::<Reply, _>(&mut s.stream).is_err(),
         "the channel closes"
     );
     let status = s.child.wait().unwrap();

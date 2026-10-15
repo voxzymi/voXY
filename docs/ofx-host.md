@@ -31,7 +31,19 @@ the values of **Custom and Bytes parameters**:
   and a warning.
 - On load, a value that is over the cap, not valid base64 or of the wrong
   type resets only that parameter to its default, with a warning. Nothing
-  panics.
+  panics. (O-C: the rule is each parameter definition's `ValueCheck`,
+  applied when a project's effects are resolved; every key's value is
+  checked, not only the static one.)
+- Each OpenFX effect records its plugin (`ofx` in the file: identifier,
+  version `[major, minor]`, context, bundle name). On load:
+  - plugin missing, or a newer major version saved: a placeholder that
+    keeps every value and saves it back verbatim; it comes back when the
+    plugin is installed;
+  - another minor version installed: loads normally, and the record takes
+    the installed version;
+  - the installed plugin now runs in another context than the one the
+    effect was made in (its clips and parameters may differ): a
+    placeholder, data kept, with the reason.
 
 ## Discovery (O-A, `voxy_ofx_host::discovery`)
 
@@ -72,11 +84,12 @@ Checked against OpenFX 1.5.1, "Packaging OFX Plug-ins".
 
 - API version 1.5, name `org.voxy.voXY`, label `voXY`, version from the
   crate.
-- Contexts: filter and generator so far; transition and general arrive in
-  O-C. Pixel depths: float, short, byte (float preferred). Components:
+- Contexts: filter, generator, transition and general. Pixel depths: float, short, byte (float preferred). Components:
   RGBA, RGB, Alpha.
 - Multi-resolution, tiles and temporal clip access: yes. Overlays: no
-  (interacts arrive in O-D). Multiple clip depths or pixel aspects,
+  (interacts arrive in O-D). Multiple clip depths or pixel aspects
+  (so a plugin's request for another output depth is ignored, as the
+  spec requires: every clip gets one depth; fixed in O-C step 10b),
   settable frame rate or fielding: no. Draft quality: yes.
 - Native origin: bottom-left, as OpenFX images are.
 - No GPU render (`OfxImageEffectPropOpenGLRenderSupported` is `"false"`,
@@ -201,6 +214,9 @@ answers `Hello` with its protocol version and process ID, maps the shared
 memory it is sent, and serves requests until `Unload` or until the channel
 closes (then it unloads everything and exits 0).
 
+- It runs in the editor session's private folder (O-C), so files a plugin
+  writes to its working directory stay out of the editor's and go when
+  the session ends.
 - The binary is the bundle's `Contents/<arch>/NAME.ofx`, or a path to a
   binary. Plugins that fail Load or Describe are listed in the
   description's `failed` with the reason; the rest still work.
@@ -208,10 +224,16 @@ closes (then it unloads everything and exits 0).
   and the output image is copied back into its slot afterwards.
 - A heartbeat thread bumps the counter in the mapping every 25 ms, and
   passes the editor's abort flag on to every instance.
-- Parameter values come from the request's snapshot. A plugin asking for
-  another time gets the snapshot value for now; asking the editor back
-  comes in a later O-B step. Changes the plugin makes return as
-  `ParamEdit`s with the action's reply.
+- Parameter values come from the request's snapshot: each parameter's
+  value at the render time and its key times (in frames), so key queries
+  (`paramGetNumKeys`, `paramGetKeyTime`, …) stay local (O-C). A plugin
+  asking for a keyed parameter at another time sends `Reply::ValueAt` in
+  the middle of the action; the editor evaluates the real animation
+  (voXY's own interpolation, at that fractional frame) and answers with
+  `Request::Value`, then keeps waiting for the action's reply. A
+  parameter without keys never costs a round trip. Protocol version 2.
+  Changes the plugin makes return as `ParamEdit`s with the action's
+  reply.
 - `OfxSetHost` (the optional binary-level export in 1.5) is not called
   yet.
 
@@ -235,14 +257,15 @@ closes (then it unloads everything and exits 0).
 
 ## Plugins as voXY effects (O-B, `voxy_ofx_host::mapping`)
 
-The filter context of each plugin becomes an effect definition
+Each plugin's first context of filter, transition, generator and general
+(the last three since O-C) becomes an effect definition
 `ofx:<pluginIdentifier>`, version = the plugin's major version (a newer
 minor version loads normally). Name: the plugin's label (or identifier);
 category: its grouping (or "OpenFX"); description: its description.
 
 | OFX parameter | voXY |
 |---|---|
-| Double, 2D, 3D | `Scalar`, `Vec2`, `Vec3`. Unit by double type: angle → degrees, scale → factor, X/Y types → pixels, normalised coordinates → normalised (sent as is), others none. |
+| Double, 2D, 3D | `Scalar`, `Vec2`, `Vec3`. Unit by double type: angle → degrees, scale → factor, X/Y types → pixels, normalised default coordinates → normalised: voXY keeps the value as a fraction of the layer, and the plugin gets canonical values (× layer width and/or height, and back for its own edits), since OpenFX normalises only the default (fixed in O-C step 10b); others none. |
 | Integer, 2D, 3D | `Int`, or `Vec2`/`Vec3` shown as integers |
 | Boolean | `Bool` |
 | Choice | `Enum` with the option labels; a default past the options becomes 0 |
@@ -253,9 +276,27 @@ category: its grouping (or "OpenFX"); description: its description.
 | Bytes | hidden `String`, base64 (standard alphabet, padded, strict) |
 | Group | a collapsible group (open state from the plugin) |
 | Page | flattened |
-| PushButton | read-only for now; buttons come with the parameter UI step |
+| PushButton | a button in Effect Controls (`ParamVisibility::Button`); its stored `Bool` means nothing |
 | Parametric | refused at define time (not supported yet) |
 
+- A generator has no `Source` clip: its output replaces the effect's
+  input (best on a solid or adjustment layer, design §6.4).
+- A transition (design §5, §6.4) is listed under Transitions. The effect's
+  input is `SourceFrom`. voXY adds two parameters: **Auto**
+  (`voxy.auto`, on by default), which sets the plugin's `Transition`
+  parameter to the layer's progress through its duration, and
+  **Transition To** (`voxy.clip.SourceTo`), a layer reference whose plain
+  source (Q-E1) is `SourceTo`; no layer means transparency. With Auto off
+  the plugin's own `Transition` parameter is used as keyed.
+- General context: `Source` is the effect's input. Every other input
+  clip that is not a mask gets a layer-reference parameter
+  `voxy.clip.<clip>` (labelled with the clip's label; the hint says
+  whether it is optional); no layer means transparency. Mask clips are
+  never connected (`kOfxImageClipPropConnected` is 0): voXY's own effect
+  matte masks the result, so feeding the plugin a mask would apply it
+  twice.
+- Parameters voXY adds start with `voxy.`; a plugin parameter with such a
+  name is refused at mapping time, so the names cannot collide.
 - Hard range from Min/Max unless they are the "no limit" defaults; the
   display range from DisplayMin/Max, kept inside the hard range.
 - Animatable follows `kOfxParamPropAnimates`; secret parameters are
@@ -272,8 +313,24 @@ the next chain texture; GPU effects after it continue as usual.
 - Without a provider, for a type it does not run, or when the plugin
   fails, the image passes through and the render report lists the effect
   with the reason (for the effect header's error badge).
-- The region of definition stays the input's for now; the plugin's own
-  GetRegionOfDefinition and GetRegionsOfInterest join in a later step.
+- Region of definition (O-C): when the chain is planned, each OpenFX
+  effect's GetRegionOfDefinition is asked with its input's region, and the
+  chain buffer grows to hold it (it always keeps the input too, as one
+  buffer holds every stage; at most 4096 layer pixels past the input, so
+  an infinite region from a generator cannot blow up the buffer). A
+  failure there falls back to the input region; the render then reports
+  it.
+- Region of interest: the plugin is always given the whole chain buffer,
+  which contains its input's full region of definition, so any region it
+  asks for is covered (pixels outside the input's region are transparent,
+  as OpenFX defines). The host therefore does not need GetRegionsOfInterest
+  to size anything and does not call it during renders.
+- Coordinates (O-C): the project is the layer (size and extent = the
+  layer's content size, offset 0). Canonical coordinates are layer pixels
+  with y up from the layer's bottom edge; images carry their real bounds
+  (canonical × render scale), so a buffer that starts off the layer's
+  origin, or a region grown past it, is seen where it is. A layer that
+  changes size gets a new instance.
 - The provider is `runtime::OfxRuntime`. One sandbox per bundle, started
   on first use and again after it dies; one plugin instance per voXY
   effect, created on its first render with the depth and components the
@@ -281,13 +338,79 @@ the next chain texture; GPU effects after it continue as usual.
   parameter values at the frame, then the frame through shared memory,
   rows flipped to OpenFX's bottom-up order and converted to the preferred
   depth. The mapping grows by replacement when a frame does not fit.
-- For now the image's bounds start at (0, 0) and the project is the
-  buffer's size, so plugins that depend on absolute position see the
-  layer's buffer, not the composition. Parameter key times are not sent
-  yet.
+- The plugin is told the frame being rendered (O-C fix: O-B's planner
+  cleared it, as it does for GPU kernels that ignore time, so plugins
+  always saw frame 0). An OpenFX effect's chain is therefore cached per
+  frame.
+- OpenFX time is the frame of the layer's composition (fractional for
+  queries). `EvaluatedEffect::timeline` carries an OpenFX effect's
+  animated parameters for queries; the chain's cache key includes it,
+  since a plugin may read any time.
+- Identity (O-C): before each render the host asks IsIdentity. When the
+  plugin names one of its inputs at the render time, Render is skipped
+  and that input passes through (a transition at 1 shows `SourceTo`). An
+  identity at another time renders instead, until the editor can send
+  images from other times.
+- Extra input clips (a transition's `SourceTo`, a general context's
+  extra clips) are fed from the layer
+  their `voxy.clip.<name>` parameter names, drawn into a buffer the size
+  and placement of the effect's own, read back alongside it, and sent in
+  shared memory at their clip's preferred depth. Every extra clip gets
+  its own layer (O-C step 5b).
 - A crash, hang or protocol error blocks the plugin for the session (other
   plugins of the bundle get a fresh sandbox); a plugin that returns an
   error status is reported but not blocked.
+
+## Sequences (O-C)
+
+- Playback is announced as an interactive sequence over the whole
+  composition: when it starts, `ExternalEffects::begin_sequence`; when it
+  stops, `end_sequence`. Each instance gets `BeginSequenceRender` before
+  its first render in the run (instances created during the run join it
+  then), and `EndSequenceRender` at the end. Renders in between report
+  `kOfxImageEffectPropSequentialRenderStatus` 1 and the interactive status.
+- voXY has no video export yet; an exporter will call the same two
+  functions with `interactive` off.
+
+## Changes and plugin edits (O-C)
+
+- Editing an OpenFX effect's parameter in Effect Controls, or pressing
+  one of its buttons, sends the new values and then `InstanceChanged`
+  (reason "user edited", at the current frame) to the plugin. An effect
+  that has no instance yet gets one first.
+- What the plugin sets in response (`paramSetValue`, `paramSetValueAtTime`,
+  key deletions) comes back with the reply and is applied as one command,
+  `PluginParamEdits`. After a user edit it carries that edit's merge key,
+  so the edit and the plugin's response are one undo step (a drag stays
+  one step); after a button it is its own step, named after the button.
+  Edits to parameters the effect does not have are skipped.
+- The plugin's last message that is not a log entry is shown in the
+  status bar (errors in the error colour).
+- Not covered: edits made elsewhere (keyframes in the timeline, undo) do
+  not send `InstanceChanged`; plugin edits made outside `InstanceChanged`
+  (in Render, for example, which the spec does not allow) are dropped.
+
+## Conformance suite (O-C)
+
+`cargo test -p voxy-ofx-sandbox --test conformance` runs every fixture
+plugin through the real sandbox: Describe and mapping without problems,
+registry validation of each definition, rendering a fixed pattern
+against PNG goldens in `tests/golden/ofx/` (±1 per 8-bit channel;
+`VOXY_UPDATE_GOLDEN=1` rewrites them), exact identities, and the same
+result twice (also from a fresh instance). The fixtures are voXY's own
+test plugins and the approved BSD-3 OpenFX samples.
+
+The samples are built by `cargo xtask ofx-fixtures` from
+`third_party/ofx-fixtures.toml`: the pinned OpenFX tarball is downloaded,
+its sha256 and the content hash of the extracted paths are checked, and
+each sample is compiled with the platform's C++ compiler (found as build
+scripts find it) into its own `.ofx.bundle`. CI builds them in the
+runner's temp folder (never cached or uploaded) and runs the suite with
+`VOXY_OFX_FIXTURES` and `VOXY_REQUIRE_OFX_FIXTURES=1`; locally the sample
+part is skipped without them. Noise has no golden (its random numbers
+come from the C++ standard library, which differs by platform); the
+property tester only has to render; the tester's push buttons are
+pressed.
 
 ## Messages in the editor (O-B)
 
@@ -305,10 +428,10 @@ the next chain texture; GPU effects after it continue as usual.
 
 ## Still to be written (O-A to O-D)
 
-Left after O-B: parameter values at other times than the frame (asked
-back from the editor), key times, the plugin's own regions of definition
-and interest, absolute image coordinates, push buttons, sequence-render
-calls during export and playback, the generator context, cancelling a
+Left after O-B: sequence-render
+calls during export (playback has them since O-C; there is no exporter
+yet), cancelling a
 render from the editor, timeouts in Preferences, and instance clean-up when
-an effect is deleted. Then the transition and general contexts (O-C),
+an effect is deleted. The generator, transition and general contexts
+arrived in O-C. Then
 interacts (O-D) and parametric parameters.

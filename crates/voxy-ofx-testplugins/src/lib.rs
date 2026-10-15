@@ -7,6 +7,16 @@
 //! - `org.voxy.test.Crash`: the same, but Render dereferences null.
 //! - `org.voxy.test.Hang`: the same, but Render never returns and ignores
 //!   abort.
+//! - `org.voxy.test.Solid`: a generator that fills its output with `color`.
+//! - `org.voxy.test.Blur`: a box blur with a region of definition and
+//!   interest grown by its radius.
+//! - `org.voxy.test.Fade`: a cross-fade in the transition context.
+//! - `org.voxy.test.Matte`: a general-context plugin with an extra clip
+//!   and a mask clip.
+//! - `org.voxy.test.Lag`: reads its parameter one frame back and counts its
+//!   keys.
+//! - `org.voxy.test.Transform`, `org.voxy.test.Keyer`: with the blur, our
+//!   own transform and keyer fixtures for the conformance suite (P-0 Q2).
 
 // A test fixture: a missing suite entry may panic (and abort) loudly.
 #![allow(
@@ -20,6 +30,22 @@ use std::ffi::{CStr, c_char, c_int, c_void};
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 
 use voxy_ofx_sys as ofx;
+
+mod blur;
+mod fade;
+mod keyer;
+mod lag;
+mod matte;
+mod solid;
+mod transform;
+
+pub use blur::BLUR;
+pub use fade::FADE;
+pub use keyer::KEYER;
+pub use lag::LAG;
+pub use matte::MATTE;
+pub use solid::SOLID;
+pub use transform::TRANSFORM;
 
 static HOST: AtomicPtr<ofx::OfxHost> = AtomicPtr::new(std::ptr::null_mut());
 static PROPS: AtomicPtr<ofx::OfxPropertySuiteV1> = AtomicPtr::new(std::ptr::null_mut());
@@ -71,6 +97,20 @@ unsafe fn fetch<T>(name: &[u8], version: c_int) -> *mut T {
         host.fetchSuite.unwrap()(host.host, c(name), version)
             .cast_mut()
             .cast()
+    }
+}
+
+/// Fetches the suites the plugins use (in Load).
+///
+/// # Safety
+/// `host` was set by `setHost`.
+unsafe fn fetch_suites() {
+    // SAFETY: the caller's contract.
+    unsafe {
+        PROPS.store(fetch(ofx::kOfxPropertySuite, 1), Ordering::SeqCst);
+        FX.store(fetch(ofx::kOfxImageEffectSuite, 1), Ordering::SeqCst);
+        PARAMS.store(fetch(ofx::kOfxParameterSuite, 1), Ordering::SeqCst);
+        MSG.store(fetch(ofx::kOfxMessageSuite, 2), Ordering::SeqCst);
     }
 }
 
@@ -337,10 +377,7 @@ unsafe extern "C" fn main_entry(
         let h = handle.cast_mut().cast::<ofx::OfxImageEffectStruct>();
         match action {
             a if a == ofx::kOfxActionLoad => {
-                PROPS.store(fetch(ofx::kOfxPropertySuite, 1), Ordering::SeqCst);
-                FX.store(fetch(ofx::kOfxImageEffectSuite, 1), Ordering::SeqCst);
-                PARAMS.store(fetch(ofx::kOfxParameterSuite, 1), Ordering::SeqCst);
-                MSG.store(fetch(ofx::kOfxMessageSuite, 2), Ordering::SeqCst);
+                fetch_suites();
                 LOADS.fetch_add(1, Ordering::SeqCst);
                 ofx::kOfxStatOK
             }
@@ -439,7 +476,9 @@ pub static HANG: StaticPlugin = StaticPlugin(ofx::OfxPlugin {
 });
 
 /// The bundle's plugins, in `OfxGetPlugin` order.
-pub static ALL: [&StaticPlugin; 3] = [&GAIN, &CRASH, &HANG];
+pub static ALL: [&StaticPlugin; 10] = [
+    &GAIN, &CRASH, &HANG, &SOLID, &BLUR, &FADE, &MATTE, &LAG, &TRANSFORM, &KEYER,
+];
 
 /// The OpenFX export: how many plugins the binary holds.
 #[unsafe(no_mangle)]

@@ -16,8 +16,9 @@ use crate::image::{Components, Depth, Premult};
 use crate::params::{ParamKind, ParamValue};
 use crate::props::{PropSet, Values};
 
-/// Bumped on any incompatible change; `Hello` checks it.
-pub const VERSION: u32 = 1;
+/// Bumped on any incompatible change; `Hello` checks it. 2: parameter
+/// queries at other times (`Reply::ValueAt`, `Request::Value`).
+pub const VERSION: u32 = 2;
 
 /// The largest payload accepted (images travel in shared memory, so frames
 /// stay small).
@@ -53,7 +54,7 @@ impl From<io::Error> for FrameError {
 }
 
 /// Writes one message as a frame.
-pub fn write_frame<T: Serialize>(w: &mut impl Write, msg: &T) -> io::Result<()> {
+pub fn write_frame<T: Serialize, W: Write + ?Sized>(w: &mut W, msg: &T) -> io::Result<()> {
     let payload = postcard::to_stdvec(msg).map_err(io::Error::other)?;
     let len = u32::try_from(payload.len())
         .ok()
@@ -65,7 +66,7 @@ pub fn write_frame<T: Serialize>(w: &mut impl Write, msg: &T) -> io::Result<()> 
 }
 
 /// Reads one frame and decodes it.
-pub fn read_frame<T: DeserializeOwned>(r: &mut impl Read) -> Result<T, FrameError> {
+pub fn read_frame<T: DeserializeOwned, R: Read + ?Sized>(r: &mut R) -> Result<T, FrameError> {
     let mut len = [0u8; 4];
     r.read_exact(&mut len)?;
     let len = u32::from_le_bytes(len);
@@ -284,6 +285,11 @@ pub enum Request {
     },
     /// Unload every plugin and exit.
     Unload,
+    /// The answer to [`Reply::ValueAt`]: the value, or `None` to keep the
+    /// snapshot's.
+    Value {
+        value: Option<ParamValue>,
+    },
 }
 
 /// The sandbox's answer to one request.
@@ -316,6 +322,13 @@ pub enum Reply {
     },
     /// The request could not be carried out (unknown instance, bad slot).
     Error(String),
+    /// Not an answer: during an action the plugin asked for a parameter's
+    /// value at another time than the snapshot's. The editor answers with
+    /// [`Request::Value`] and keeps waiting for the action's reply.
+    ValueAt {
+        name: String,
+        time: f64,
+    },
 }
 
 impl PluginDesc {

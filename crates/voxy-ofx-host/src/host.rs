@@ -15,6 +15,8 @@ pub const API_VERSION: [i32; 2] = [1, 5];
 pub const CONTEXTS: &[&[u8]] = &[
     ofx::kOfxImageEffectContextFilter,
     ofx::kOfxImageEffectContextGenerator,
+    ofx::kOfxImageEffectContextTransition,
+    ofx::kOfxImageEffectContextGeneral,
 ];
 
 /// The pixel depths the host can deliver, best first (§6.5: float is

@@ -541,10 +541,11 @@ impl Kernel {
     }
 
     /// Whether the output of `fx` depends on the frame number (animated
-    /// seeded randomness). Only then is the frame part of the cache key, so
-    /// static effects render once.
+    /// seeded randomness, or an OpenFX plugin, which is told the time).
+    /// Only then is the frame part of the cache key, so static effects
+    /// render once.
     pub fn uses_frame(self, fx: &EvaluatedEffect) -> bool {
-        self == Kernel::Grain && flag(fx, "animate")
+        (self == Kernel::Grain && flag(fx, "animate")) || self == Kernel::External
     }
 
     /// The layer-reference parameter naming the layer the kernel reads.
@@ -564,10 +565,28 @@ impl Kernel {
         )
     }
 
+    /// The layer-reference parameters of `fx` naming the layers it reads:
+    /// [`Kernel::layer_input`], or for an OpenFX effect each extra clip's
+    /// parameter, in order.
+    pub fn layer_params(self, fx: &EvaluatedEffect) -> Vec<&str> {
+        match self {
+            Kernel::External => fx
+                .params
+                .iter()
+                .map(|(n, _)| &**n)
+                .filter(|n| n.starts_with(voxy_core::external::CLIP_PARAM_PREFIX))
+                .collect(),
+            k => k.layer_input().into_iter().collect(),
+        }
+    }
+
     /// Whether the output of `fx` depends on the layer's progress through
     /// its duration (a transition with Auto on).
     pub fn uses_layer_progress(self, fx: &EvaluatedEffect) -> bool {
-        self.is_transition() && flag(fx, "auto")
+        match self {
+            Kernel::External => flag(fx, voxy_core::external::AUTO_PARAM),
+            k => k.is_transition() && flag(fx, "auto"),
+        }
     }
 
     /// Whether the kernel combines its result with its own input, so the

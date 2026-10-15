@@ -10,7 +10,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use voxy_core::external::{CpuFrame, ExternalEffects};
+use voxy_core::external::{CpuFrame, ExternalEffects, Region};
 use voxy_core::glam::DVec2;
 use voxy_core::{EffectId, EvaluatedEffect, Value, WorkingSpace};
 use voxy_ofx_host::client::Timeouts;
@@ -30,6 +30,7 @@ fn effect(id: u64, plugin: &str, gain: f64) -> EvaluatedEffect {
         matte: None,
         frame: 0,
         layer_progress: 0.0,
+        timeline: None,
     }
 }
 
@@ -47,8 +48,10 @@ fn frame() -> CpuFrame {
         height: 2,
         origin: DVec2::ZERO,
         texel_scale: 1.0,
+        layer_size: DVec2::new(3.0, 2.0),
         space: WorkingSpace::Linear,
         pixels,
+        layers: Vec::new(),
     }
 }
 
@@ -66,7 +69,18 @@ fn scan_render_block_and_retry() {
     names.sort_unstable();
     assert_eq!(
         names,
-        ["Test Gain", "Test Gain", "Test Gain"],
+        [
+            "Test Blur",
+            "Test Fade",
+            "Test Gain",
+            "Test Gain",
+            "Test Gain",
+            "Test Keyer",
+            "Test Lag",
+            "Test Matte",
+            "Test Solid",
+            "Test Transform"
+        ],
         "gain, crash, hang share the description"
     );
     assert_eq!(scan.problems, vec![]);
@@ -97,13 +111,13 @@ fn scan_render_block_and_retry() {
 
     // The crash plugin kills its sandbox and is blocked.
     let err = rt
-        .render(&effect(2, "org.voxy.test.Crash", 1.0), &mut frame())
+        .render(&effect(2, "org.voxy.test.Crash", 2.0), &mut frame())
         .unwrap_err();
     assert!(err.contains("crashed during Render"), "{err}");
     let blocked = rt.blocked(&plugin_type("org.voxy.test.Crash")).unwrap();
     assert!(!blocked.persistent);
     assert_eq!(
-        rt.render(&effect(2, "org.voxy.test.Crash", 1.0), &mut frame())
+        rt.render(&effect(2, "org.voxy.test.Crash", 2.0), &mut frame())
             .unwrap_err(),
         err,
         "blocked: no new attempt"
@@ -117,7 +131,7 @@ fn scan_render_block_and_retry() {
 
     // A hang times out and blocks too.
     let err = rt
-        .render(&effect(3, "org.voxy.test.Hang", 1.0), &mut frame())
+        .render(&effect(3, "org.voxy.test.Hang", 2.0), &mut frame())
         .unwrap_err();
     assert!(err.contains("did not finish Render"), "{err}");
 
@@ -125,7 +139,7 @@ fn scan_render_block_and_retry() {
     rt.retry(&plugin_type("org.voxy.test.Crash"));
     assert_eq!(rt.blocked(&plugin_type("org.voxy.test.Crash")), None);
     assert!(
-        rt.render(&effect(2, "org.voxy.test.Crash", 1.0), &mut frame())
+        rt.render(&effect(2, "org.voxy.test.Crash", 2.0), &mut frame())
             .is_err()
     );
 }
@@ -185,4 +199,420 @@ fn the_cache_skips_unchanged_bundles_and_redescribes_changed_ones() {
     let c = third.scan_cached(std::slice::from_ref(&bundle), &cache);
     assert_eq!(third.sandboxes_running(), 1, "re-described");
     assert_eq!(c.definitions, a.definitions);
+}
+
+#[test]
+fn a_generator_replaces_the_input() {
+    let tmp = tempfile::tempdir().unwrap();
+    let bundle = common::bundle(tmp.path());
+    let rt = OfxRuntime::new(Path::new(EXE), tmp.path(), Timeouts::default()).unwrap();
+    let scan = rt.scan(std::slice::from_ref(&bundle));
+    let def = scan
+        .definitions
+        .iter()
+        .find(|d| d.type_id == plugin_type("org.voxy.test.Solid"))
+        .expect("the generator-only plugin is mapped");
+    assert_eq!(
+        def.params.iter().map(|p| &*p.name).collect::<Vec<_>>(),
+        ["color"]
+    );
+    let fx = EvaluatedEffect {
+        id: EffectId(1),
+        type_id: plugin_type("org.voxy.test.Solid"),
+        version: 1,
+        params: vec![(
+            Arc::from("color"),
+            Value::Color(voxy_core::LinearRgba::new(0.5, 0.25, 1.0, 0.5)),
+        )],
+        matte: None,
+        frame: 0,
+        layer_progress: 0.0,
+        timeline: None,
+    };
+    let mut f = frame();
+    rt.render(&fx, &mut f).unwrap();
+    for px in f.pixels.as_chunks::<4>().0 {
+        assert_eq!(*px, [0.25, 0.125, 0.5, 0.5], "premultiplied colour");
+    }
+}
+
+#[test]
+fn an_identity_passes_the_input_through_without_rendering() {
+    let tmp = tempfile::tempdir().unwrap();
+    let bundle = common::bundle(tmp.path());
+    let rt = OfxRuntime::new(Path::new(EXE), tmp.path(), Timeouts::default()).unwrap();
+    rt.scan(std::slice::from_ref(&bundle));
+    // The crash plugin is an identity at gain 1, so Render (which would
+    // crash) is never called.
+    let mut f = frame();
+    rt.render(&effect(1, "org.voxy.test.Crash", 1.0), &mut f)
+        .unwrap();
+    assert_eq!(f, frame());
+    assert_eq!(rt.blocked(&plugin_type("org.voxy.test.Crash")), None);
+    // Not an identity: it renders, and crashes.
+    assert!(
+        rt.render(&effect(1, "org.voxy.test.Crash", 2.0), &mut frame())
+            .is_err()
+    );
+}
+
+fn blur(id: u64, radius: f64) -> EvaluatedEffect {
+    EvaluatedEffect {
+        id: EffectId(id),
+        type_id: plugin_type("org.voxy.test.Blur"),
+        version: 1,
+        params: vec![(Arc::from("radius"), Value::Scalar(radius))],
+        matte: None,
+        frame: 0,
+        layer_progress: 0.0,
+        timeline: None,
+    }
+}
+
+#[test]
+fn the_plugins_region_of_definition_and_absolute_coordinates() {
+    let tmp = tempfile::tempdir().unwrap();
+    let bundle = common::bundle(tmp.path());
+    let rt = OfxRuntime::new(Path::new(EXE), tmp.path(), Timeouts::default()).unwrap();
+    rt.scan(std::slice::from_ref(&bundle));
+    let layer = DVec2::new(4.0, 3.0);
+    let input = Region {
+        min: DVec2::ZERO,
+        max: layer,
+    };
+    // Grown by the radius, in layer pixels (y down).
+    assert_eq!(
+        rt.region_of_definition(&blur(1, 2.0), input, layer),
+        Region {
+            min: DVec2::splat(-2.0),
+            max: DVec2::new(6.0, 5.0),
+        }
+    );
+    // A region off the layer's origin maps through canonical (y up) and
+    // back unchanged.
+    let off = Region {
+        min: DVec2::new(1.0, -1.0),
+        max: DVec2::new(3.0, 2.0),
+    };
+    assert_eq!(
+        rt.region_of_definition(&blur(1, 1.0), off, layer),
+        Region {
+            min: DVec2::new(0.0, -2.0),
+            max: DVec2::new(4.0, 3.0),
+        }
+    );
+    // Not a plugin's effect: the input.
+    assert_eq!(
+        rt.region_of_definition(&effect(5, "nope", 1.0), off, layer),
+        off
+    );
+
+    // A dot at layer (2, 1) in a buffer covering layer x 1..4, y 0..3 (not
+    // at the layer's origin). The blur (radius 1) spreads it over the 3×3
+    // box around it, which is the whole buffer.
+    let (w, h) = (3u32, 3u32);
+    let mut pixels = vec![0.0f32; (w * h * 4) as usize];
+    let dot = ((w + 1) * 4) as usize; // buffer (1, 1) = layer (2, 1)
+    pixels[dot..dot + 4].copy_from_slice(&[9.0, 9.0, 9.0, 9.0]);
+    let mut f = CpuFrame {
+        width: w,
+        height: h,
+        origin: DVec2::new(1.0, 0.0),
+        texel_scale: 1.0,
+        layer_size: layer,
+        space: WorkingSpace::Linear,
+        pixels,
+        layers: Vec::new(),
+    };
+    rt.render(&blur(2, 1.0), &mut f).unwrap();
+    for px in f.pixels.as_chunks::<4>().0 {
+        assert_eq!(*px, [1.0; 4], "every pixel averages the dot over 9");
+    }
+}
+
+fn fade(id: u64, auto: bool, transition: f64, progress: f64) -> EvaluatedEffect {
+    EvaluatedEffect {
+        id: EffectId(id),
+        type_id: plugin_type("org.voxy.test.Fade"),
+        version: 1,
+        params: vec![
+            (Arc::from("Transition"), Value::Scalar(transition)),
+            (Arc::from("voxy.auto"), Value::Bool(auto)),
+            (Arc::from("voxy.clip.SourceTo"), Value::Layer(None)),
+        ],
+        matte: None,
+        frame: 0,
+        layer_progress: progress,
+        timeline: None,
+    }
+}
+
+#[test]
+fn a_transition_mixes_its_input_into_the_layer_it_names() {
+    let tmp = tempfile::tempdir().unwrap();
+    let bundle = common::bundle(tmp.path());
+    let rt = OfxRuntime::new(Path::new(EXE), tmp.path(), Timeouts::default()).unwrap();
+    let scan = rt.scan(std::slice::from_ref(&bundle));
+    let def = scan
+        .definitions
+        .iter()
+        .find(|d| d.type_id == plugin_type("org.voxy.test.Fade"))
+        .unwrap();
+    assert_eq!(def.category, voxy_core::registry::Category::Transition);
+    assert_eq!(
+        def.params.iter().map(|p| &*p.name).collect::<Vec<_>>(),
+        ["Transition", "voxy.auto", "voxy.clip.SourceTo"]
+    );
+
+    let a = frame();
+    let with_b = |f: &mut CpuFrame| {
+        f.layers = vec![(Arc::from("voxy.clip.SourceTo"), vec![1.0; f.pixels.len()])];
+    };
+    // Auto off: Transition 0.25.
+    let mut f = frame();
+    with_b(&mut f);
+    rt.render(&fade(1, false, 0.25, 0.9), &mut f).unwrap();
+    for (out, a) in f.pixels.iter().zip(&a.pixels) {
+        assert!((out - (a * 0.75 + 0.25)).abs() < 1e-6, "{out} from {a}");
+    }
+    // Auto on: the layer's progress (0.5) wins over Transition.
+    let mut f = frame();
+    with_b(&mut f);
+    rt.render(&fade(1, true, 0.25, 0.5), &mut f).unwrap();
+    for (out, a) in f.pixels.iter().zip(&a.pixels) {
+        assert!((out - (a * 0.5 + 0.5)).abs() < 1e-6);
+    }
+    // At 1 the plugin is an identity on SourceTo: B is passed through.
+    let mut f = frame();
+    with_b(&mut f);
+    rt.render(&fade(1, true, 0.0, 1.0), &mut f).unwrap();
+    assert_eq!(f.pixels, vec![1.0; a.pixels.len()]);
+    // No B layer: a fade to transparency.
+    let mut f = frame();
+    rt.render(&fade(1, false, 0.5, 0.0), &mut f).unwrap();
+    for (out, a) in f.pixels.iter().zip(&a.pixels) {
+        assert!((out - a * 0.5).abs() < 1e-6);
+    }
+}
+
+fn matte(id: u64, invert: bool) -> EvaluatedEffect {
+    EvaluatedEffect {
+        id: EffectId(id),
+        type_id: plugin_type("org.voxy.test.Matte"),
+        version: 1,
+        params: vec![
+            (Arc::from("invert"), Value::Bool(invert)),
+            (Arc::from("voxy.clip.Matte"), Value::Layer(None)),
+        ],
+        matte: None,
+        frame: 0,
+        layer_progress: 0.0,
+        timeline: None,
+    }
+}
+
+#[test]
+fn a_general_context_plugin_reads_its_extra_clip_and_never_gets_a_mask() {
+    let tmp = tempfile::tempdir().unwrap();
+    let bundle = common::bundle(tmp.path());
+    let rt = OfxRuntime::new(Path::new(EXE), tmp.path(), Timeouts::default()).unwrap();
+    let scan = rt.scan(std::slice::from_ref(&bundle));
+    let def = scan
+        .definitions
+        .iter()
+        .find(|d| d.type_id == plugin_type("org.voxy.test.Matte"))
+        .unwrap();
+    // The extra clip is a layer reference; the mask clip has none.
+    assert_eq!(
+        def.params.iter().map(|p| &*p.name).collect::<Vec<_>>(),
+        ["invert", "voxy.clip.Matte"]
+    );
+    let clip = def.param("voxy.clip.Matte").unwrap();
+    assert_eq!(&*clip.desc.label, "Matte Layer");
+    assert!(clip.hint.as_deref().unwrap().contains("(optional)"));
+
+    // The matte layer's alpha: 0.25 everywhere.
+    let a = frame();
+    let mut f = frame();
+    f.layers = vec![(
+        Arc::from("voxy.clip.Matte"),
+        [0.0, 0.0, 0.0, 0.25].repeat(f.pixels.len() / 4),
+    )];
+    let layers = f.layers.clone();
+    rt.render(&matte(1, false), &mut f).unwrap();
+    for (out, a) in f.pixels.iter().zip(&a.pixels) {
+        assert!((out - a * 0.25).abs() < 1e-6);
+    }
+    let mut f = frame();
+    f.layers = layers;
+    rt.render(&matte(1, true), &mut f).unwrap();
+    for (out, a) in f.pixels.iter().zip(&a.pixels) {
+        assert!((out - a * 0.75).abs() < 1e-6);
+    }
+    // No matte layer: transparent, so the output is too.
+    let mut f = frame();
+    rt.render(&matte(1, false), &mut f).unwrap();
+    assert!(f.pixels.iter().all(|v| *v == 0.0));
+}
+
+#[test]
+fn a_plugin_reads_parameters_at_other_times_and_their_keys() {
+    use voxy_core::{EffectTimeline, FrameRate, PropId, Property, PropertyDesc, Unit, ValueKind};
+    let tmp = tempfile::tempdir().unwrap();
+    let bundle = common::bundle(tmp.path());
+    let rt = OfxRuntime::new(Path::new(EXE), tmp.path(), Timeouts::default()).unwrap();
+    rt.scan(std::slice::from_ref(&bundle));
+
+    // `gain` keyed 1 at frame 0 and 3 at frame 10 (linear), at 25 fps.
+    let desc = Arc::new(PropertyDesc {
+        key: "ofx:org.voxy.test.Lag/gain".into(),
+        label: "gain".into(),
+        kind: ValueKind::Scalar,
+        default: Value::Scalar(1.0),
+        range: None,
+        soft_range: None,
+        unit: Unit::None,
+        animatable: true,
+        spatial: false,
+    });
+    let rate = FrameRate::FPS_25;
+    let mut gain = Property::with_default(PropId(1), desc);
+    gain.set_animated(rate.frame_to_time(0), true).unwrap();
+    gain.add_keyframe(rate.frame_to_time(10)).unwrap();
+    gain.set_value_at(rate.frame_to_time(10), Value::Scalar(3.0))
+        .unwrap();
+    let timeline = Arc::new(EffectTimeline {
+        frame_rate: rate,
+        params: vec![(Arc::from("gain"), gain)],
+    });
+    let at = |frame: f64| match timeline.value_at("gain", frame).unwrap() {
+        Value::Scalar(v) => v,
+        other => panic!("{other:?}"),
+    };
+    assert!((at(4.0) - 1.8).abs() < 1e-9 && (at(5.0) - 2.0).abs() < 1e-9);
+    assert_eq!(timeline.key_frames("gain").unwrap(), vec![0.0, 10.0]);
+
+    // Rendered at frame 5, the plugin multiplies by gain at frame 4, which
+    // only the editor knows, and writes the key count (2) into alpha.
+    let fx = EvaluatedEffect {
+        id: EffectId(1),
+        type_id: plugin_type("org.voxy.test.Lag"),
+        version: 1,
+        params: vec![(Arc::from("gain"), Value::Scalar(at(5.0)))],
+        matte: None,
+        frame: 5,
+        layer_progress: 0.0,
+        timeline: Some(Arc::clone(&timeline)),
+    };
+    let a = frame();
+    let mut f = frame();
+    rt.render(&fx, &mut f).unwrap();
+    for (out, a) in f
+        .pixels
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(a.pixels.as_chunks::<4>().0)
+    {
+        for k in 0..3 {
+            assert!((out[k] - a[k] * 1.8).abs() < 1e-5, "{out:?} from {a:?}");
+        }
+        assert_eq!(out[3], 2.0, "two keys");
+    }
+
+    // Without keys there is nothing to ask: the snapshot value holds.
+    let still = EvaluatedEffect {
+        timeline: None,
+        params: vec![(Arc::from("gain"), Value::Scalar(2.0))],
+        id: EffectId(2),
+        ..fx
+    };
+    let mut f = frame();
+    rt.render(&still, &mut f).unwrap();
+    assert!((f.pixels[0] - a.pixels[0] * 2.0).abs() < 1e-6);
+    assert_eq!(f.pixels[3], 0.0, "no keys");
+}
+
+#[test]
+fn a_push_button_returns_the_plugins_edits_and_messages() {
+    use voxy_ofx_host::runtime::PluginChange;
+    let tmp = tempfile::tempdir().unwrap();
+    let bundle = common::bundle(tmp.path());
+    let rt = OfxRuntime::new(Path::new(EXE), tmp.path(), Timeouts::default()).unwrap();
+    let scan = rt.scan(std::slice::from_ref(&bundle));
+    let def = scan
+        .definitions
+        .iter()
+        .find(|d| d.type_id == plugin_type("org.voxy.test.Lag"))
+        .unwrap();
+    assert_eq!(
+        def.param("double").unwrap().flags.visibility,
+        voxy_core::registry::ParamVisibility::Button
+    );
+    let fx = EvaluatedEffect {
+        id: EffectId(1),
+        type_id: plugin_type("org.voxy.test.Lag"),
+        version: 1,
+        params: vec![
+            (Arc::from("gain"), Value::Scalar(1.5)),
+            (Arc::from("double"), Value::Bool(false)),
+        ],
+        matte: None,
+        frame: 3,
+        layer_progress: 0.0,
+        timeline: None,
+    };
+    let change = rt
+        .instance_changed(&fx, DVec2::new(3.0, 2.0), "double")
+        .unwrap();
+    assert_eq!(
+        change.changes,
+        vec![PluginChange::Set {
+            name: "gain".into(),
+            frame: None,
+            value: Value::Scalar(3.0),
+        }]
+    );
+    assert_eq!(change.messages.len(), 1);
+    assert_eq!(change.messages[0].text, "Gain doubled");
+    // Another parameter: the plugin changes nothing.
+    let none = rt
+        .instance_changed(&fx, DVec2::new(3.0, 2.0), "gain")
+        .unwrap();
+    assert_eq!(none.changes, vec![]);
+}
+
+#[test]
+fn renders_in_a_sequence_are_announced_to_the_plugin() {
+    let tmp = tempfile::tempdir().unwrap();
+    let bundle = common::bundle(tmp.path());
+    let rt = OfxRuntime::new(Path::new(EXE), tmp.path(), Timeouts::default()).unwrap();
+    rt.scan(std::slice::from_ref(&bundle));
+    let fx = EvaluatedEffect {
+        id: EffectId(1),
+        type_id: plugin_type("org.voxy.test.Lag"),
+        version: 1,
+        params: vec![(Arc::from("gain"), Value::Scalar(1.0))],
+        matte: None,
+        frame: 0,
+        layer_progress: 0.0,
+        timeline: None,
+    };
+    let alpha = || {
+        let mut f = frame();
+        rt.render(&fx, &mut f).unwrap();
+        f.pixels[3]
+    };
+    assert_eq!(alpha(), 0.0, "not in a sequence");
+    rt.begin_sequence([0, 24], true);
+    assert_eq!(alpha(), 110.0, "begun, and the render says sequential");
+    assert_eq!(alpha(), 110.0, "begun once");
+    rt.end_sequence();
+    assert_eq!(alpha(), 0.0, "ended");
+    // A new sequence starts over; ending twice is harmless.
+    rt.begin_sequence([3, 4], false);
+    assert_eq!(alpha(), 110.0);
+    rt.end_sequence();
+    rt.end_sequence();
+    assert_eq!(alpha(), 0.0);
 }

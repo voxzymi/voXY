@@ -76,6 +76,9 @@ pub enum ParamVisibility {
     ReadOnly,
     /// Not shown at all (for example plugin state).
     Hidden,
+    /// Shown as a button that tells the plugin it was pressed (an OpenFX
+    /// push button); its value means nothing.
+    Button,
 }
 
 /// UI flags of a parameter.
@@ -111,16 +114,43 @@ pub struct EffectParamDef {
     pub gizmo: Option<GizmoKind>,
     pub hint: Option<Arc<str>>,
     pub flags: ParamFlags,
+    /// A check on saved values beyond their kind; one that fails is reset
+    /// to the default on load, with a warning (design §6.8).
+    pub check: Option<ValueCheck>,
+}
+
+/// A rule a parameter's value must follow, beyond its kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ValueCheck {
+    /// A string of at most this many bytes (OpenFX Custom parameters).
+    MaxBytes(usize),
+    /// Strict standard base64 that decodes to at most this many bytes
+    /// (OpenFX Bytes parameters, P-0 Q3).
+    Base64 { max: usize },
+}
+
+impl ValueCheck {
+    pub fn accepts(self, v: &Value) -> bool {
+        let Value::String(s) = v else {
+            return false;
+        };
+        match self {
+            ValueCheck::MaxBytes(max) => s.len() <= max,
+            ValueCheck::Base64 { max } => crate::base64::decode(s).is_some_and(|b| b.len() <= max),
+        }
+    }
 }
 
 /// Where a definition comes from.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum EffectOrigin {
     Builtin,
-    /// Plugin number `index` in the OpenFX binary at `binary`.
+    /// Plugin number `index` in the OpenFX binary at `binary`; `plugin` is
+    /// what each instance records (design §6.8).
     Ofx {
         binary: PathBuf,
         index: u32,
+        plugin: crate::effect::OfxInstanceData,
     },
 }
 
@@ -161,7 +191,10 @@ impl EffectDef {
             enabled: true,
             params,
             matte: None,
-            ofx: None,
+            ofx: match &self.origin {
+                EffectOrigin::Ofx { plugin, .. } => Some(plugin.clone()),
+                EffectOrigin::Builtin => None,
+            },
             extra: ForeignData::default(),
             placeholder: None,
         }
@@ -380,6 +413,22 @@ fn resolve_one(
         warnings.push(format!("“{}”: {}", fx.name, missing_reason(fx, reg)));
         return;
     };
+    // An OpenFX instance belongs to the context it was made in; a plugin
+    // that now runs in another one gets a placeholder (its data kept).
+    if let EffectOrigin::Ofx { plugin, .. } = &def.origin {
+        if let Some(saved) = &fx.ofx
+            && saved.context != plugin.context
+        {
+            let why = format!(
+                "it was made in the plugin's {} context, which voXY no longer uses for it",
+                saved.context.name()
+            );
+            fx.mark_missing(MissingReason::Unreadable(why.clone()));
+            warnings.push(format!("“{}”: {why}", fx.name));
+            return;
+        }
+        fx.ofx = Some(plugin.clone());
+    }
     let mut saved = std::mem::take(&mut fx.params);
     if let Some(p) = saved.iter().find(|p| def.param(fx.param_name(p)).is_none()) {
         let why = format!(
@@ -403,7 +452,12 @@ fn resolve_one(
                     p.animation().clone(),
                     Some(pd.desc.clone()),
                 )
-                .unwrap_or_else(|_| {
+                .ok()
+                .filter(|p| {
+                    pd.check
+                        .is_none_or(|c| all_values(p).all(|v| c.accepts(&v)))
+                })
+                .unwrap_or_else(|| {
                     warnings.push(format!(
                         "“{}”: the saved value of “{}” was damaged and was reset",
                         fx.name, pd.desc.label
@@ -416,6 +470,16 @@ fn resolve_one(
         params.push(p);
     }
     fx.params = params;
+}
+
+/// Every value a property holds: its static value or each key's.
+fn all_values(p: &Property) -> impl Iterator<Item = Value> + '_ {
+    let keys = p
+        .track()
+        .map(crate::keyframe::KeyframeTrack::keys)
+        .unwrap_or_default();
+    let fixed = (!p.is_animated()).then(|| p.value_at(crate::time::Time::ZERO));
+    keys.iter().map(|k| k.value.clone()).chain(fixed)
 }
 
 fn missing_reason(fx: &EffectInstance, reg: &EffectRegistry) -> MissingReason {
@@ -480,6 +544,7 @@ impl ParamBuilder {
             gizmo: None,
             hint: None,
             flags: ParamFlags::default(),
+            check: None,
         });
         self.params.last_mut().unwrap_or_else(|| unreachable!())
     }
