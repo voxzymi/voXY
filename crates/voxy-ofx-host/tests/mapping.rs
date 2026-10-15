@@ -31,7 +31,13 @@ fn the_gain_plugin_becomes_a_registered_effect() {
         def.origin,
         EffectOrigin::Ofx {
             binary: "/x/VoxyTest.ofx".into(),
-            index: 0
+            index: 0,
+            plugin: voxy_core::effect::OfxInstanceData {
+                plugin: "org.voxy.test.Gain".into(),
+                version: [1, 2],
+                context: voxy_core::effect::OfxContext::Filter,
+                bundle: Some("VoxyTest.ofx".into()),
+            },
         }
     );
 

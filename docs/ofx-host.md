@@ -31,7 +31,19 @@ the values of **Custom and Bytes parameters**:
   and a warning.
 - On load, a value that is over the cap, not valid base64 or of the wrong
   type resets only that parameter to its default, with a warning. Nothing
-  panics.
+  panics. (O-C: the rule is each parameter definition's `ValueCheck`,
+  applied when a project's effects are resolved; every key's value is
+  checked, not only the static one.)
+- Each OpenFX effect records its plugin (`ofx` in the file: identifier,
+  version `[major, minor]`, context, bundle name). On load:
+  - plugin missing, or a newer major version saved: a placeholder that
+    keeps every value and saves it back verbatim; it comes back when the
+    plugin is installed;
+  - another minor version installed: loads normally, and the record takes
+    the installed version;
+  - the installed plugin now runs in another context than the one the
+    effect was made in (its clips and parameters may differ): a
+    placeholder, data kept, with the reason.
 
 ## Discovery (O-A, `voxy_ofx_host::discovery`)
 

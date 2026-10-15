@@ -93,8 +93,20 @@ pub enum OfxContext {
     General,
 }
 
+impl OfxContext {
+    /// The name in messages and on disk.
+    pub fn name(self) -> &'static str {
+        match self {
+            OfxContext::Filter => "filter",
+            OfxContext::Generator => "generator",
+            OfxContext::Transition => "transition",
+            OfxContext::General => "general",
+        }
+    }
+}
+
 /// What an OpenFX effect remembers about its plugin (design §6.8).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct OfxInstanceData {
     /// The plugin's `pluginIdentifier`.
     pub plugin: Arc<str>,

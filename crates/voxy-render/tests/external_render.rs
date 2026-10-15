@@ -36,6 +36,12 @@ fn def() -> EffectDef {
         origin: EffectOrigin::Ofx {
             binary: "test.ofx".into(),
             index: 0,
+            plugin: voxy_core::effect::OfxInstanceData {
+                plugin: "org.voxy.test.CpuInvert".into(),
+                version: [1, 0],
+                context: voxy_core::effect::OfxContext::Filter,
+                bundle: None,
+            },
         },
     }
 }
@@ -312,6 +318,7 @@ fn clip_param(tid: &EffectTypeId, name: &str) -> voxy_core::registry::EffectPara
         gizmo: None,
         hint: None,
         flags: voxy_core::registry::ParamFlags::default(),
+        check: None,
     }
 }
 

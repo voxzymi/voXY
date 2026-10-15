@@ -597,8 +597,15 @@ at `743b053` (merge of #3).
       announces playback (start/stop). There is no video export yet; it
       will use the same calls. The `Lag` test plugin reports what it
       sees.
-   9. Persisted plugin state: plugin version and context, load
-      validation of Custom/Bytes, placeholders for missing plugins.
+   9. **Done:** persisted plugin state. New OpenFX instances record their
+      plugin, version and context (`EffectOrigin::Ofx` now carries them;
+      the `ofx` field was already in the 0.7.0 format, so nothing in the
+      format changes). Custom and Bytes parameters carry a `ValueCheck`
+      (1 MiB cap; strict base64) applied to every saved value on load,
+      resetting bad ones with a warning. A plugin that now runs in another
+      context than the saved one gives a placeholder (data kept). base64
+      moved into `voxy-core`. Tests: round trip, damaged values, context
+      change, missing then reinstalled plugin.
    10. Conformance suite: the approved BSD-3 samples (#1 to #11) plus our
        blur, transform and keyer test plugins; Describe, mapping, goldens,
        identity.

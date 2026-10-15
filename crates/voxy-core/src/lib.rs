@@ -17,6 +17,7 @@
 //! This crate has no GPU, media or UI dependencies.
 
 mod asset;
+pub mod base64;
 mod color;
 pub mod command;
 mod comp;
