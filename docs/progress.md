@@ -717,3 +717,55 @@ at `743b053` (merge of #3).
 - `recovery::Session` IDs could collide on macOS (microsecond clock), which
   made `two_sessions_never_share_a_file` fail on macOS arm64 CI. IDs now
   include a per-process counter.
+
+---
+
+# UX overhaul (voXY feel) — U-A … U-I
+
+Working branch: `claude/gifted-fermat-93dqjr`, started fresh from `origin/main`
+at `86e1edf` (merge of #6). Design note: `docs/design-ux.md`.
+
+## Done
+
+- **Step U-0: repo sync and state report.** Local `main` fast-forwarded to
+  `origin/main`; the working branch is at the same commit (0 ahead / 0 behind),
+  so it is already a fresh branch from latest main. Surveyed what exists so
+  nothing is duplicated — full table in `docs/design-ux.md` §1. Headlines:
+
+  | Area | State |
+  |---|---|
+  | Import File… | **Exists.** `Action::FileImport` (`file.import`, Ctrl/Cmd+I) opens one multi-select picker accepting every supported type; `import_paths` is one undo step; type detected from contents/extension; failures named in the status bar, no crash. Legacy `LayerImportImage` / `LayerImportVideo` menu entries still present (to remove in U-A). |
+  | OS drag-and-drop | **Exists** onto Project panel, timeline, viewport and empty state (`drops.rs`, `project_panel::os_drops`, `empty_state::pool_drop`), with highlight, label, snapping and modifiers. Missing: folder drop, content-hash reuse, paste import, background import with progress/cancel. |
+  | Effect drag-and-drop | **Exists** (`effects_panel.rs`): onto a timeline layer, onto the viewport (applies to selection), double-click applies, user presets. Missing: viewport hit-test, multi-layer, Effect-Controls stack position, empty-target message, not-allowed cursor. |
+  | Context menus | **Layer** and **effect** menus exist; Project rows have menus. Missing: empty-area menus (timeline/viewport/project) with New ▸, Apply Effect ▸ on a layer, viewport menu. |
+  | Preferences | **Exist** (`prefs.rs`): TOML in OS config dir, tolerant loader. Missing: version/migration field, Settings dialog, appearance (theme/scale/density/accent/font), behavior prefs beyond precomp/tips, interface level. |
+  | Layout / workspaces | Dock layout persists (`layout.rs`); Window menu + Reset Layout exist (`app.rs`); per-project layout in `ui_state`. Missing: named workspaces, reopen closed panels. |
+  | Shortcut editor | **Exists** with rebind, Reset/Reset All, conflict detection. Missing: search, import/export keymap, presets. |
+  | Action table | **Exists** (`actions.rs`) as the single source for menus/tooltips/shortcuts/editor. |
+  | Project panel | Tree with sort/filter/search/missing/details header (`project_view.rs`). Missing: grid/compact/thumbnail views, breadcrumbs/folder nav, smart bins, favorites, hover preview, extended details strip. |
+  | Command palette | **None.** |
+  | Markers | **Deferred** (`deferred.md`, "After Milestone F"); needs a project-format change → owner decision before building. |
+
+- **Step U-1: design note** `docs/design-ux.md` — what exists, the drop-target
+  and menu tables, the central text-selection approach, the preferences schema
+  and storage, the workspace model, and the §8 After-Effects-familiarity
+  proposal with a recommendation per item. Awaiting owner approval of §8 before
+  U-I. U-A … U-D may start now (nothing contradicts an approved decision).
+
+## Next, in order
+
+- **U-A:** single Import File… (remove the separate Image/Video entries),
+  folder drop with skipped count, content-hash reuse ("reused …"), paste import
+  (Ctrl/Cmd+V), background import with progress + cancel.
+- **U-B:** effect drag-and-drop gaps (viewport hit-test, multi-layer,
+  Effect-Controls stack position, empty-target message, not-allowed cursor).
+- **U-C:** central text-selection fix + guard test.
+- **U-D:** empty-area context menus, New-layer-from-menu placement, Apply Effect ▸.
+- **U-E … U-I:** per `docs/design-ux.md` (U-I waits for the §8 approval).
+
+## Open questions waiting on the owner
+
+- **§8 list:** which After-Effects-familiarity items to build (recommendation:
+  8.1/8.3/8.5 first, then 8.2/8.4 as small groups). See `design-ux.md` §8.
+- **Markers:** approve the project-format change (and its migration) before the
+  markers panel / timeline markers are built; until then they are left out of U-H.
