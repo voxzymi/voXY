@@ -425,6 +425,23 @@ impl Inner {
             time,
             params,
         })?;
+        // An identity skips Render: the input passes through. An identity
+        // on another clip or time needs images the editor does not send
+        // yet, so the plugin renders instead.
+        let window = [0, 0, w as i32, h as i32];
+        let scale = [frame.texel_scale, frame.texel_scale];
+        if entry.has_source
+            && let Reply::Identity(Some((clip, at))) = sb.request(Request::IsIdentity {
+                instance: live.instance,
+                time,
+                window,
+                scale,
+            })?
+            && clip == SOURCE
+            && at == time
+        {
+            return Ok(Ok(()));
+        }
         let mut slots = Slots::new(sb.shm.len());
         let (Some(src), Some(dst)) = (slots.take(source_len), slots.take(session_len(live.output)))
         else {
@@ -448,8 +465,8 @@ impl Inner {
         let reply = sb.request(Request::Render {
             instance: live.instance,
             time,
-            window: [0, 0, w as i32, h as i32],
-            scale: [frame.texel_scale, frame.texel_scale],
+            window,
+            scale,
             inputs,
             output: slot_for(dst, w, h, live.output),
         })?;

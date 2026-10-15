@@ -289,6 +289,10 @@ the next chain texture; GPU effects after it continue as usual.
   buffer's size, so plugins that depend on absolute position see the
   layer's buffer, not the composition. Parameter key times are not sent
   yet.
+- Identity (O-C): before each render the host asks IsIdentity. When the
+  plugin names `Source` at the render time, Render is skipped and the
+  input passes through. An identity on another clip or time renders
+  instead, until the editor can send images from other times.
 - A crash, hang or protocol error blocks the plugin for the session (other
   plugins of the bundle get a fresh sandbox); a plugin that returns an
   error status is reported but not blocked.

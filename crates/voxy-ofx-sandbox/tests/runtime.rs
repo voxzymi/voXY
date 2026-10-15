@@ -97,13 +97,13 @@ fn scan_render_block_and_retry() {
 
     // The crash plugin kills its sandbox and is blocked.
     let err = rt
-        .render(&effect(2, "org.voxy.test.Crash", 1.0), &mut frame())
+        .render(&effect(2, "org.voxy.test.Crash", 2.0), &mut frame())
         .unwrap_err();
     assert!(err.contains("crashed during Render"), "{err}");
     let blocked = rt.blocked(&plugin_type("org.voxy.test.Crash")).unwrap();
     assert!(!blocked.persistent);
     assert_eq!(
-        rt.render(&effect(2, "org.voxy.test.Crash", 1.0), &mut frame())
+        rt.render(&effect(2, "org.voxy.test.Crash", 2.0), &mut frame())
             .unwrap_err(),
         err,
         "blocked: no new attempt"
@@ -117,7 +117,7 @@ fn scan_render_block_and_retry() {
 
     // A hang times out and blocks too.
     let err = rt
-        .render(&effect(3, "org.voxy.test.Hang", 1.0), &mut frame())
+        .render(&effect(3, "org.voxy.test.Hang", 2.0), &mut frame())
         .unwrap_err();
     assert!(err.contains("did not finish Render"), "{err}");
 
@@ -125,7 +125,7 @@ fn scan_render_block_and_retry() {
     rt.retry(&plugin_type("org.voxy.test.Crash"));
     assert_eq!(rt.blocked(&plugin_type("org.voxy.test.Crash")), None);
     assert!(
-        rt.render(&effect(2, "org.voxy.test.Crash", 1.0), &mut frame())
+        rt.render(&effect(2, "org.voxy.test.Crash", 2.0), &mut frame())
             .is_err()
     );
 }
@@ -219,4 +219,24 @@ fn a_generator_replaces_the_input() {
     for px in f.pixels.as_chunks::<4>().0 {
         assert_eq!(*px, [0.25, 0.125, 0.5, 0.5], "premultiplied colour");
     }
+}
+
+#[test]
+fn an_identity_passes_the_input_through_without_rendering() {
+    let tmp = tempfile::tempdir().unwrap();
+    let bundle = common::bundle(tmp.path());
+    let rt = OfxRuntime::new(Path::new(EXE), tmp.path(), Timeouts::default()).unwrap();
+    rt.scan(std::slice::from_ref(&bundle));
+    // The crash plugin is an identity at gain 1, so Render (which would
+    // crash) is never called.
+    let mut f = frame();
+    rt.render(&effect(1, "org.voxy.test.Crash", 1.0), &mut f)
+        .unwrap();
+    assert_eq!(f, frame());
+    assert_eq!(rt.blocked(&plugin_type("org.voxy.test.Crash")), None);
+    // Not an identity: it renders, and crashes.
+    assert!(
+        rt.render(&effect(1, "org.voxy.test.Crash", 2.0), &mut frame())
+            .is_err()
+    );
 }

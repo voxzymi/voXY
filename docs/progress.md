@@ -536,8 +536,10 @@ at `743b053` (merge of #3).
    1. **Done:** generator context. A plugin without a filter context runs
       in its generator context: no `Source` clip, its output replaces the
       input. New test plugin `org.voxy.test.Solid` (generator only).
-   2. Identity: IsIdentity before Render; pass-through when the plugin
-      says so.
+   2. **Done:** identity. IsIdentity before Render; when the plugin names
+      `Source` at the frame, Render is skipped and the input passes
+      through (tested with the crash plugin at gain 1, which never
+      crashes). Other clips or times render instead, for now.
    3. The plugin's regions of definition and interest in chain planning,
       and absolute image coordinates.
    4. Transition context (`SourceTo` as a layer reference, `Transition` as
