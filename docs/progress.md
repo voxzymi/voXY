@@ -851,11 +851,18 @@ at `86e1edf` (merge of #6). Design note: `docs/design-ux.md`.
   take `&Arc<EffectDef>`. Tests: multi-layer one-undo-step, the empty-target
   message, and applying to an adjustment layer. clippy `-D warnings` and
   `fmt --check` clean; 9 `effects_panel` tests pass.
-- **Remaining U-B steps:** live feedback over timeline rows (highlight + "Add
-  <Effect> to <Layer>" label + not-allowed cursor, Escape cancels); viewport
-  hit-test so a drop lands on the layer under the cursor (introduces viewport
-  layer picking — see the deferred-list note); drop into the Effect Controls
-  stack at a position.
+- **U-B step 2: live feedback over the timeline.** `timeline_effect_drop`
+  replaces `drop_on_rows`: while an effect is dragged over the timeline it
+  highlights the row under the pointer (or, on an empty spot, targets the
+  selection), shows an "Add <effect> to <layer>" badge at the cursor, and sets
+  a Copy / Not-allowed cursor; **Escape cancels** the drag. On release it
+  applies to that row's layer, or to the selection on an empty spot, or says
+  "Select or drop onto a layer". Tests drive a real egui frame: drop on a row,
+  on an empty spot with a selection, and with nothing selected. clippy
+  `-D warnings` and `fmt --check` clean; 287 `voxy-ui` tests pass.
+- **Remaining U-B steps:** viewport hit-test so a drop lands on the layer under
+  the cursor, with the same feedback (introduces viewport layer picking — see
+  the deferred-list note); drop into the Effect Controls stack at a position.
 
 ## Design-note / deferred reconciliation
 

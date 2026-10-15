@@ -8,12 +8,15 @@
 
 use std::sync::Arc;
 
-use egui::{Color32, DragAndDrop, Pos2, Rect, Sense, Stroke, Ui, vec2};
+use egui::{
+    Color32, Context, CursorIcon, DragAndDrop, FontId, Pos2, Rect, Sense, Stroke, Ui, vec2,
+};
 use voxy_core::command::AddEffect;
 use voxy_core::registry::{Category, EffectDef};
 use voxy_core::{Layer, LayerId};
 
 use crate::state::EditorState;
+use crate::theme::ACCENT;
 
 /// Shown when an effect is dropped with no layer under it and nothing
 /// selected.
@@ -229,20 +232,95 @@ pub fn show(ui: &mut Ui, state: &mut EditorState) {
         });
 }
 
-/// Applies a dragged effect released over one of the timeline's layer rows.
-pub fn drop_on_rows(ui: &Ui, state: &mut EditorState) {
-    let Some(at) = released_at(ui) else { return };
+/// Live feedback and release handling for an effect dragged over the
+/// timeline. Highlights the row under the pointer (or, on an empty spot, the
+/// selection), shows an "Add <effect> to <layer>" badge and the matching
+/// cursor, and on release applies the effect as one undo step. Escape cancels.
+pub fn timeline_effect_drop(ui: &Ui, state: &mut EditorState) {
+    let ctx = ui.ctx();
+    if cancel_on_escape(ctx) {
+        return;
+    }
+    let Some(drag) = peek(ctx) else { return };
+    let def = &drag.0;
+    let area = ui.max_rect();
+    let Some(at) = ctx.input(|i| i.pointer.hover_pos()) else {
+        return;
+    };
+    if !area.contains(at) {
+        return;
+    }
+    let doc = state.history.current().clone();
     let row = state
         .timeline
         .rows
         .iter()
         .find(|(_, r)| r.contains(at))
-        .map(|(id, _)| *id);
-    if let Some(layer) = row
-        && let Some(EffectDrag(def)) = take(ui)
-    {
-        apply(state, layer, &def);
+        .map(|(id, r)| (*id, *r));
+
+    // Decide the target, the highlight, the label and whether it may apply.
+    let (target, highlight, label, allowed) = match row {
+        Some((layer, rect)) => {
+            let (ok, name) = doc
+                .find_layer(layer)
+                .map_or((false, String::new()), |(_, m)| {
+                    (can_apply(def, m).is_ok(), m.name.clone())
+                });
+            let label = if ok {
+                format!("Add {} to {name}", def.name)
+            } else {
+                format!("Can’t add {} to {name}", def.name)
+            };
+            (Target::Layer(layer), Some(rect), label, ok)
+        }
+        None => match state
+            .selection
+            .and_then(|l| doc.find_layer(l).map(|(_, m)| m.name.clone()))
+        {
+            Some(name) => (
+                Target::Selection,
+                None,
+                format!("Add {} to {name}", def.name),
+                true,
+            ),
+            None => (Target::Selection, None, NO_TARGET.to_owned(), false),
+        },
+    };
+
+    if let Some(rect) = highlight {
+        let p = ui.painter_at(area);
+        let col = if allowed {
+            ACCENT
+        } else {
+            ui.visuals().error_fg_color
+        };
+        p.rect_filled(rect, 2.0, col.linear_multiply(0.18));
+        p.rect_stroke(rect, 2.0, Stroke::new(1.5, col), egui::StrokeKind::Inside);
     }
+    drag_badge(ctx, at, &label, allowed);
+    ctx.set_cursor_icon(if allowed {
+        CursorIcon::Copy
+    } else {
+        CursorIcon::NotAllowed
+    });
+
+    if ctx.input(|i| i.pointer.any_released())
+        && let Some(EffectDrag(def)) = take(ctx)
+    {
+        match target {
+            Target::Layer(layer) if allowed => apply(state, layer, &def),
+            // Incompatible layer: the badge already said why.
+            Target::Layer(_) => {}
+            // Empty spot: apply to the selection, or say there is none.
+            Target::Selection => apply_to_selection(state, &def),
+        }
+    }
+}
+
+/// Where a released effect drag landed on the timeline.
+enum Target {
+    Layer(LayerId),
+    Selection,
 }
 
 /// Applies a dragged effect released over `rect` (the viewport) to the
@@ -250,10 +328,49 @@ pub fn drop_on_rows(ui: &Ui, state: &mut EditorState) {
 pub fn drop_on_rect(ui: &Ui, state: &mut EditorState, rect: Rect) {
     let Some(at) = released_at(ui) else { return };
     if rect.contains(at)
-        && let Some(EffectDrag(def)) = take(ui)
+        && let Some(EffectDrag(def)) = take(ui.ctx())
     {
         apply_to_selection(state, &def);
     }
+}
+
+/// The effect drag in progress, without taking it.
+fn peek(ctx: &Context) -> Option<std::sync::Arc<EffectDrag>> {
+    DragAndDrop::payload::<EffectDrag>(ctx)
+}
+
+/// Clears an effect drag on Escape. Returns `true` if it did.
+fn cancel_on_escape(ctx: &Context) -> bool {
+    if DragAndDrop::has_payload_of_type::<EffectDrag>(ctx)
+        && ctx.input(|i| i.key_pressed(egui::Key::Escape))
+    {
+        DragAndDrop::clear_payload(ctx);
+        return true;
+    }
+    false
+}
+
+/// A floating label at the pointer naming what the drop will do.
+fn drag_badge(ctx: &Context, at: Pos2, text: &str, allowed: bool) {
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Tooltip,
+        egui::Id::new("effect-drag-badge"),
+    ));
+    let origin = at + vec2(14.0, 8.0);
+    let galley =
+        painter.layout_no_wrap(text.to_owned(), FontId::proportional(13.0), Color32::WHITE);
+    let pad = vec2(6.0, 4.0);
+    let bg = if allowed {
+        ACCENT
+    } else {
+        Color32::from_rgb(170, 60, 60)
+    };
+    painter.rect_filled(
+        Rect::from_min_size(origin, galley.size() + pad * 2.0),
+        4.0,
+        bg,
+    );
+    painter.galley(origin + pad, galley, Color32::WHITE);
 }
 
 /// Where an effect drag was released this frame, if one was.
@@ -270,8 +387,8 @@ fn released_at(ui: &Ui) -> Option<Pos2> {
     })
 }
 
-fn take(ui: &Ui) -> Option<EffectDrag> {
-    DragAndDrop::take_payload::<EffectDrag>(ui.ctx()).map(|p| (*p).clone())
+fn take(ctx: &Context) -> Option<EffectDrag> {
+    DragAndDrop::take_payload::<EffectDrag>(ctx).map(|p| (*p).clone())
 }
 
 /// The presets group's glyph: two stacked cards.
@@ -524,6 +641,71 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    /// Runs one egui frame with an effect drag released at `at` over the
+    /// timeline and returns, having applied the drop.
+    fn run_effect_drop(s: &mut EditorState, def: &Arc<EffectDef>, at: Pos2) {
+        let ctx = Context::default();
+        let input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(400.0, 400.0))),
+            events: vec![
+                egui::Event::PointerMoved(at),
+                egui::Event::PointerButton {
+                    pos: at,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(input, |ui| {
+            DragAndDrop::set_payload(ui.ctx(), EffectDrag(def.clone()));
+            timeline_effect_drop(ui, s);
+        });
+        out.textures_delta.clear();
+    }
+
+    fn fx_count(s: &EditorState, layer: LayerId) -> usize {
+        s.history
+            .current()
+            .find_layer(layer)
+            .expect("layer")
+            .1
+            .effects
+            .len()
+    }
+
+    #[test]
+    fn dropping_an_effect_on_a_timeline_row_applies_to_that_layer() {
+        let (mut s, layer) = state_with_layer();
+        let def = listing(&s, "invert")[0].1[0].clone();
+        let rect = Rect::from_min_size(Pos2::new(0.0, 20.0), vec2(200.0, 18.0));
+        s.timeline.rows = vec![(layer, rect)];
+        s.selection = None;
+        run_effect_drop(&mut s, &def, rect.center());
+        assert_eq!(fx_count(&s, layer), 1, "applied to the row's layer");
+    }
+
+    #[test]
+    fn dropping_on_an_empty_spot_uses_the_selection_or_says_to_pick_one() {
+        let (mut s, layer) = state_with_layer();
+        let def = listing(&s, "invert")[0].1[0].clone();
+        s.timeline.rows = vec![]; // pointer will miss every row
+        let empty = Pos2::new(100.0, 100.0);
+
+        // With a selection: applies to it.
+        s.selection = Some(layer);
+        run_effect_drop(&mut s, &def, empty);
+        assert_eq!(fx_count(&s, layer), 1);
+
+        // With nothing selected: says so, changes nothing.
+        s.selection = None;
+        let before = s.history.revision();
+        run_effect_drop(&mut s, &def, empty);
+        assert_eq!(s.history.revision(), before);
+        assert_eq!(s.status.as_ref().unwrap().text, NO_TARGET);
     }
 
     #[test]

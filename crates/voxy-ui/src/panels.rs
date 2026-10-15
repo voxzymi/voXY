@@ -276,7 +276,7 @@ impl Panels<'_> {
         self.time_scrubber(ui, &comp);
         ui.separator();
         crate::timeline::show(ui, self.state);
-        crate::effects_panel::drop_on_rows(ui, self.state);
+        crate::effects_panel::timeline_effect_drop(ui, self.state);
     }
 
     fn properties_ui(&mut self, ui: &mut Ui) {
