@@ -123,32 +123,38 @@ impl EditorState {
         }
     }
 
-    /// The same from files (picked or dropped on the tile).
+    /// The same from files (picked or dropped on the tile). A dropped folder
+    /// contributes its supported files; unsupported ones are counted.
     pub fn new_comp_from_files(&mut self, paths: &[PathBuf]) {
+        let (files, skipped) = crate::state::expand_dropped_paths(paths);
         let root = self.asset_root();
         let mut entries = Vec::new();
         let mut failures = Vec::new();
-        for path in paths {
+        for path in &files {
             match crate::state::probe_asset(path, root.as_deref()) {
                 Ok(asset) => entries.push(Entry::New(asset)),
                 Err(e) => failures.push(format!("{}: {e}", path.display())),
             }
         }
         if entries.is_empty() {
-            if !failures.is_empty() {
-                self.error(format!("Could not read {}", failures.join("; ")));
+            if !failures.is_empty() || skipped > 0 {
+                self.error(crate::state::import_summary(0, 0, skipped, &failures));
             }
             return;
         }
         self.begin_from_footage(entries);
-        if !failures.is_empty() {
-            // After the success line: say what was skipped.
-            let text = self.status.as_ref().map(|s| s.text.clone());
-            self.error(format!(
-                "{} Skipped {}",
-                text.unwrap_or_default(),
-                failures.join("; ")
-            ));
+        if !failures.is_empty() || skipped > 0 {
+            // After the success line: say what was left out.
+            let head = self.status.as_ref().map(|s| s.text.clone()).unwrap_or_default();
+            let mut tail = String::new();
+            if skipped > 0 {
+                let f = if skipped == 1 { "file" } else { "files" };
+                tail = format!("{tail}; skipped {skipped} unsupported {f}");
+            }
+            if !failures.is_empty() {
+                tail = format!("{tail}; could not import {}", failures.join("; "));
+            }
+            self.error(format!("{head}{tail}"));
         }
     }
 

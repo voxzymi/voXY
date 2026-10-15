@@ -116,25 +116,47 @@ pub fn row_at(rows: &[Rect], y: f32) -> Option<usize> {
 impl EditorState {
     /// Probes dropped or picked files for a drop. Files that cannot be read
     /// are named in the status bar; the rest are returned.
-    pub fn drop_items_from_files(&mut self, paths: &[PathBuf]) -> Vec<DropItem> {
+    /// Imports files dropped from the operating system and runs the drop as
+    /// one undo step. A dropped folder contributes its supported files;
+    /// unsupported files inside it are counted as skipped, and unreadable or
+    /// corrupt files named by path. Never a silent no-op.
+    pub fn drop_files(&mut self, target: DropTarget, paths: &[PathBuf], placement: Placement) {
+        let (files, skipped) = crate::state::expand_dropped_paths(paths);
         let root = self.asset_root();
         let mut items = Vec::new();
         let mut failures = Vec::new();
-        for path in paths {
+        for path in &files {
             match crate::state::probe_asset(path, root.as_deref()) {
                 Ok(asset) => items.push(DropItem::File(asset)),
                 Err(e) => failures.push(format!("{}: {e}", path.display())),
             }
         }
-        if !failures.is_empty() {
-            self.error(format!("Could not read {}", failures.join("; ")));
+        if items.is_empty() {
+            if !failures.is_empty() || skipped > 0 {
+                self.error(crate::state::import_summary(0, 0, skipped, &failures));
+            }
+            return;
         }
-        items
+        self.perform_drop_inner(target, items, placement, skipped, &failures);
     }
 
-    /// Runs a drop as one undo step and reports what happened. A blocked drop
-    /// says why in the status bar and changes nothing.
+    /// Runs a drop of already-resolved items (a Project-panel drag) as one
+    /// undo step and reports what happened.
     pub fn perform_drop(&mut self, target: DropTarget, items: Vec<DropItem>, placement: Placement) {
+        self.perform_drop_inner(target, items, placement, 0, &[]);
+    }
+
+    /// Shared drop execution. `skipped` and `failures` describe files left
+    /// out while gathering an OS-file drop, so the single status line can
+    /// mention them alongside what was placed.
+    fn perform_drop_inner(
+        &mut self,
+        target: DropTarget,
+        items: Vec<DropItem>,
+        placement: Placement,
+        skipped: usize,
+        failures: &[String],
+    ) {
         if items.is_empty() {
             return;
         }
@@ -183,6 +205,13 @@ impl EditorState {
         let reused = report.reused_assets.len();
         if reused > 0 {
             text = format!("{text} (reused {reused} already in the project)");
+        }
+        if skipped > 0 {
+            let files = if skipped == 1 { "file" } else { "files" };
+            text = format!("{text}; skipped {skipped} unsupported {files}");
+        }
+        if !failures.is_empty() {
+            text = format!("{text}; could not import {}", failures.join("; "));
         }
         for w in &report.warnings {
             text.push(' ');
@@ -339,8 +368,7 @@ pub fn viewport_drop(
         pos,
     };
     if !files.is_empty() {
-        let items = state.drop_items_from_files(&files);
-        state.perform_drop(target, items, mods.placement());
+        state.drop_files(target, &files, mods.placement());
         return;
     }
     let Some(items) = dragged else { return };

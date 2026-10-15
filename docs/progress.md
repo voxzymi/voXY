@@ -774,6 +774,18 @@ at `86e1edf` (merge of #6). Design note: `docs/design-ux.md`.
   `import_summary`. `cargo clippy -D warnings` clean on `voxy-core` and
   `voxy-ui`; all core + UI tests pass.
 
+- **U-A step 3: folder drop.** `expand_dropped_paths` walks a dropped folder
+  (recursively, sorted, bounded to 10 000 entries), importing its supported
+  files and counting unsupported ones as skipped; a top-level file is kept
+  as-is and still named if it fails to probe. Wired into `import_paths`
+  (Project panel), the new `drop_files` entry (timeline / viewport OS-file
+  drops, replacing the old `drop_items_from_files` + `perform_drop` pair with a
+  shared `perform_drop_inner`) and `new_comp_from_files` (empty-state footage
+  tile). The status line reports skipped and failed counts and is never a
+  silent no-op. Tests: `expand_dropped_paths` walk/count, folder import as one
+  undo step with a "skipped N unsupported" status. clippy `-D warnings` clean;
+  276 `voxy-ui` tests pass.
+
 ## Next, in order
 
 - **U-A:** single Import File… (remove the separate Image/Video entries),

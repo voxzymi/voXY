@@ -1382,18 +1382,19 @@ impl EditorState {
     /// created or changed. Files that cannot be read are skipped and named
     /// in the status bar.
     pub fn import_paths(&mut self, paths: &[PathBuf]) {
+        let (files, skipped) = expand_dropped_paths(paths);
         let root = self.asset_root();
         let mut assets = Vec::new();
         let mut failures = Vec::new();
-        for path in paths {
+        for path in &files {
             match probe_asset(path, root.as_deref()) {
                 Ok(asset) => assets.push(asset),
                 Err(e) => failures.push(format!("{}: {e}", path.display())),
             }
         }
         if assets.is_empty() {
-            if !failures.is_empty() {
-                self.error(format!("Could not import {}", failures.join("; ")));
+            if !failures.is_empty() || skipped > 0 {
+                self.error(import_summary(0, 0, skipped, &failures));
             }
             return;
         }
@@ -1406,7 +1407,7 @@ impl EditorState {
         let text = import_summary(
             report.created_assets.len(),
             report.reused_assets.len(),
-            0,
+            skipped,
             &failures,
         );
         if failures.is_empty() {
@@ -2282,6 +2283,49 @@ fn media_kind(path: &Path) -> Option<AssetKind> {
 
 /// Reads a media file's facts into an [`Asset`] (path stored relative to
 /// `root` when inside it). Fails with a short reason.
+/// Expands dropped paths for import: top-level files are kept as-is (an
+/// unsupported one is named later, when probing fails), while a dropped
+/// folder contributes its supported files and reports the rest as skipped.
+/// Folders are walked in sorted order, within a bounded number of entries so
+/// a huge tree cannot stall the drop.
+pub(crate) fn expand_dropped_paths(paths: &[PathBuf]) -> (Vec<PathBuf>, usize) {
+    const MAX_ENTRIES: usize = 10_000;
+    let mut files = Vec::new();
+    let mut skipped = 0usize;
+    let mut budget = MAX_ENTRIES;
+    for p in paths {
+        if p.is_dir() {
+            collect_dir(p, &mut files, &mut skipped, &mut budget);
+        } else {
+            files.push(p.clone());
+        }
+    }
+    (files, skipped)
+}
+
+/// Adds the supported files under `dir` (recursively, sorted) to `files` and
+/// counts unsupported files in `skipped`, stopping once `budget` runs out.
+fn collect_dir(dir: &Path, files: &mut Vec<PathBuf>, skipped: &mut usize, budget: &mut usize) {
+    let Ok(read) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut entries: Vec<PathBuf> = read.flatten().map(|e| e.path()).collect();
+    entries.sort();
+    for path in entries {
+        if *budget == 0 {
+            return;
+        }
+        *budget -= 1;
+        if path.is_dir() {
+            collect_dir(&path, files, skipped, budget);
+        } else if media_kind(&path).is_some() {
+            files.push(path);
+        } else {
+            *skipped += 1;
+        }
+    }
+}
+
 /// A status line for an import: how many files were added, reused (already
 /// in the project by content), skipped (unsupported, e.g. inside a dropped
 /// folder) and could not be read. Reads naturally and never stays silent.
@@ -2842,7 +2886,14 @@ mod tests {
     }
 
     fn write_png(path: &Path) {
-        image::RgbaImage::new(2, 3).save(path).unwrap();
+        // Vary one pixel by file name so two PNGs are distinct files and are
+        // not merged by content-hash reuse.
+        let mut img = image::RgbaImage::new(2, 3);
+        let tint = path.file_name().map_or(0, |n| {
+            n.as_encoded_bytes().iter().fold(0u8, |a, &b| a.wrapping_add(b))
+        });
+        img.put_pixel(0, 0, image::Rgba([tint, tint, tint, 255]));
+        img.save(path).unwrap();
     }
 
     #[test]
@@ -2969,6 +3020,29 @@ mod tests {
         assert!(
             s.history.current().assets.iter().next().is_none(),
             "one undo"
+        );
+    }
+
+    #[test]
+    fn dropping_a_folder_imports_supported_files_and_reports_skipped() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write_png(&root.join("a.png"));
+        write_png(&root.join("b.png"));
+        std::fs::write(root.join("notes.txt"), b"x").unwrap();
+        let mut s = state();
+        s.import_paths(&[root.to_path_buf()]);
+        let doc = s.history.current();
+        assert_eq!(doc.assets.iter().count(), 2, "both PNGs imported");
+        let status = s.status.as_ref().unwrap();
+        assert!(
+            !status.is_error && status.text.contains("skipped 1 unsupported"),
+            "{status:?}"
+        );
+        s.history.undo();
+        assert!(
+            s.history.current().assets.iter().next().is_none(),
+            "one undo removes the whole folder import"
         );
     }
 
@@ -3936,6 +4010,30 @@ mod tests {
         assert_eq!(ha.algo, "fnv1a64-sampled");
         assert_eq!(ha.size, 500_000);
         assert!(content_hash(dir.path().join("missing.bin").as_path()).is_none());
+    }
+
+    #[test]
+    fn expand_dropped_paths_walks_folders_and_counts_unsupported() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(root.join("a.png"), b"a").unwrap();
+        std::fs::write(root.join("b.mp4"), b"b").unwrap();
+        std::fs::write(root.join("notes.txt"), b"x").unwrap();
+        std::fs::write(root.join("readme.md"), b"y").unwrap();
+        let sub = root.join("clips");
+        std::fs::create_dir(&sub).unwrap();
+        std::fs::write(sub.join("c.png"), b"c").unwrap();
+        std::fs::write(sub.join("data.bin"), b"z").unwrap();
+
+        // Dropping the folder: 3 supported files, 3 unsupported skipped.
+        let (files, skipped) = expand_dropped_paths(&[root.to_path_buf()]);
+        assert_eq!(files.len(), 3, "a.png, b.mp4 and clips/c.png");
+        assert_eq!(skipped, 3, "notes.txt, readme.md and clips/data.bin");
+
+        // A top-level file is kept as-is even if unsupported (named later).
+        let (files, skipped) = expand_dropped_paths(&[root.join("notes.txt")]);
+        assert_eq!(files, vec![root.join("notes.txt")]);
+        assert_eq!(skipped, 0);
     }
 
     #[test]

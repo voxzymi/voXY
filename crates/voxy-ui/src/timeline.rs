@@ -260,8 +260,7 @@ fn drop_on_timeline(ui: &Ui, state: &mut EditorState, comp: &Composition, cx: Cx
     };
     // Files arrive already dropped: probe and place them now.
     if !files.is_empty() {
-        let items = state.drop_items_from_files(&files);
-        state.perform_drop(target, items, mods.placement());
+        state.drop_files(target, &files, mods.placement());
         return;
     }
     let Some(items) = dragged else { return };
