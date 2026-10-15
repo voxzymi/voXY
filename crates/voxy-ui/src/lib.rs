@@ -5,6 +5,7 @@ mod actions;
 mod app;
 #[cfg(test)]
 mod audit;
+mod clipboard;
 mod comp_dialog;
 mod comp_draft;
 mod compat;

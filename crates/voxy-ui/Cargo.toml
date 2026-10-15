@@ -26,7 +26,11 @@ serde_json.workspace = true
 toml.workspace = true
 tracing.workspace = true
 wgpu.workspace = true
+# Reading images and file paths off the system clipboard for paste-to-import.
+# Already in the tree via eframe; pinned to the same version.
+arboard = "3.6.1"
+# Encoding a pasted image to a PNG on disk before importing it.
+image.workspace = true
 
 [dev-dependencies]
-image.workspace = true
 tempfile.workspace = true

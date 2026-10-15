@@ -71,6 +71,7 @@ pub enum Action {
     FileSave,
     FileSaveAs,
     FileImport,
+    FilePaste,
     FileQuit,
     CompositionSettings,
     CompositionGoToParent,
@@ -184,6 +185,7 @@ impl Action {
         Action::FileSave,
         Action::FileSaveAs,
         Action::FileImport,
+        Action::FilePaste,
         Action::FileQuit,
         Action::CompositionSettings,
         Action::CompositionGoToParent,
@@ -305,6 +307,13 @@ impl Action {
                     const { &[cmd(Key::I)] },
                 )
             },
+            Action::FilePaste => def(
+                "file.paste",
+                "Paste",
+                Nothing,
+                Global,
+                const { &[cmd(Key::V)] },
+            ),
             Action::FileQuit => ActionDef {
                 fires_while_typing: true,
                 ..def(

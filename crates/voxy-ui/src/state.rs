@@ -1417,6 +1417,35 @@ impl EditorState {
         }
     }
 
+    /// Pastes from the clipboard (`Ctrl/Cmd+V`): a bitmap image or file
+    /// paths. With a composition open it imports and adds layers at the
+    /// playhead as one undo step; otherwise it imports into the project.
+    /// Always says something, never a silent no-op.
+    pub fn paste_import(&mut self) {
+        let dir = self.asset_root();
+        let paths = match crate::clipboard::read_clipboard_imports(dir.as_deref()) {
+            Ok(paths) => paths,
+            Err(e) => {
+                self.error(format!("Could not read the clipboard: {e}"));
+                return;
+            }
+        };
+        if paths.is_empty() {
+            self.info("The clipboard has no image or files to import");
+            return;
+        }
+        if let Some(comp) = self.comp_id() {
+            let target = voxy_core::command::DropTarget::Timeline {
+                comp,
+                time: self.time,
+                index: 0,
+            };
+            self.drop_files(target, &paths, voxy_core::command::Placement::default());
+        } else {
+            self.import_paths(&paths);
+        }
+    }
+
     /// Asks for a `.cube` file and imports it as a LUT for parameter
     /// `prop` (the LUT effect's "Import LUT…").
     pub fn import_lut_for(&mut self, prop: voxy_core::PropId) {
@@ -1867,6 +1896,7 @@ impl EditorState {
                 self.save_as_dialog();
             }
             Action::FileImport => self.import_dialog(),
+            Action::FilePaste => self.paste_import(),
             Action::EditUndo => {
                 self.undo();
             }

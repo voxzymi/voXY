@@ -205,6 +205,7 @@ impl VoxyApp {
                 });
                 self.item(ui, Action::FileOpen);
                 self.item(ui, Action::FileImport);
+                self.item(ui, Action::FilePaste);
                 ui.separator();
                 self.item(ui, Action::FileSave);
                 self.item(ui, Action::FileSaveAs);

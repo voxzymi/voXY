@@ -786,6 +786,20 @@ at `86e1edf` (merge of #6). Design note: `docs/design-ux.md`.
   undo step with a "skipped N unsupported" status. clippy `-D warnings` clean;
   276 `voxy-ui` tests pass.
 
+- **U-A step 4: paste import.** New `Action::FilePaste` (`file.paste`,
+  Ctrl/Cmd+V, in the File menu) pastes from the system clipboard: a bitmap
+  image (written to a PNG under the project's asset dir or a temp dir, then
+  imported) or newline-separated file paths / `file://` URIs. With a
+  composition open it imports and adds layers at the playhead as one undo step
+  (via `drop_files`), otherwise imports into the project; an empty or unusable
+  clipboard says so rather than doing nothing. Clipboard access is isolated in
+  a new `clipboard` module (`arboard`, already in the tree via eframe; `image`
+  promoted to a normal dep for PNG encoding); its pure parts — path parsing
+  (plain paths, `file://`, `%XX`, junk skipped) and image-to-PNG writing — are
+  unit-tested. `Ctrl/Cmd+V` keeps working inside text fields because the action
+  does not fire while typing. clippy `-D warnings` clean; 279 `voxy-ui` tests
+  pass.
+
 ## Next, in order
 
 - **U-A:** single Import File… (remove the separate Image/Video entries),
