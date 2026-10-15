@@ -838,17 +838,33 @@ at `86e1edf` (merge of #6). Design note: `docs/design-ux.md`.
   macOS arm64 / macOS x64, plus rustfmt, cargo-deny, and the OpenFX bindings
   check. No PR opened.
 
-## Next step (single)
+## U-B: effect drag-and-drop with live feedback (in progress)
 
-- **U-B: effect drag-and-drop with live feedback.** Fill the gaps over the
-  existing effect drag (`effects_panel.rs`): viewport **hit-test** so a drop
-  lands on the layer under the cursor; apply to **multiple selected layers**;
-  drop into the **Effect Controls** stack at a position; show **"Select or
-  drop onto a layer"** when nothing is targeted; and a **not-allowed cursor**
-  over an incompatible layer (e.g. a visual effect on an audio-only layer).
-  One undo step per drop; Escape cancels. Then U-C, U-D as in
-  `docs/design-ux.md` (U-I waits for the §8 approval, already given; markers in
-  U-H, format bump approved).
+- **U-B step 1: multi-layer apply + compatibility + empty-target message.**
+  `effects_panel::apply_to_layers` applies an effect to several layers as
+  **one** undo step (skipping missing/incompatible ones); `apply` and
+  `apply_to_selection` route through it, so a drop with a multi-layer selection
+  already works once multi-select lands. A `can_apply(def, layer)` predicate is
+  the hook for incompatible targets (no current layer kind is incompatible — it
+  is for future audio-only layers). A drop with nothing to apply to shows
+  `"Select or drop onto a layer"` instead of doing nothing. Apply helpers now
+  take `&Arc<EffectDef>`. Tests: multi-layer one-undo-step, the empty-target
+  message, and applying to an adjustment layer. clippy `-D warnings` and
+  `fmt --check` clean; 9 `effects_panel` tests pass.
+- **Remaining U-B steps:** live feedback over timeline rows (highlight + "Add
+  <Effect> to <Layer>" label + not-allowed cursor, Escape cancels); viewport
+  hit-test so a drop lands on the layer under the cursor (introduces viewport
+  layer picking — see the deferred-list note); drop into the Effect Controls
+  stack at a position.
+
+## Design-note / deferred reconciliation
+
+- **Viewport hit-test (U-B):** `docs/deferred.md` deferred "Viewport
+  double-click and layer picking" for want of viewport hit testing. U-B's
+  viewport effect-drop needs exactly that, so the hit-test is being built now
+  (as an approved part of U-B). It also unblocks the deferred double-click /
+  Alt-replace, which stay out of scope until their own step. `deferred.md` will
+  be updated when the hit-test lands.
 
 ## Open questions waiting on the owner
 

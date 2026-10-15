@@ -1639,7 +1639,7 @@ impl EditorState {
 
     // ----------------------------------------------------------- reveal
 
-    fn selected_layer_ids(&self) -> Vec<LayerId> {
+    pub(crate) fn selected_layer_ids(&self) -> Vec<LayerId> {
         self.selection.into_iter().collect()
     }
 
@@ -2038,7 +2038,7 @@ impl EditorState {
         match (action, target) {
             (Action::EffectApplyLast, _) => {
                 if let Some(def) = self.last_effect.clone() {
-                    crate::effects_panel::apply(self, layer, def);
+                    crate::effects_panel::apply(self, layer, &def);
                 }
             }
             (Action::EffectCopy, Some((_, fx, _, _))) => self.effect_clipboard = vec![fx],

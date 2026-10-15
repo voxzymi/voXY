@@ -721,7 +721,7 @@ impl Panels<'_> {
                             .on_hover_text(def.description.as_ref())
                             .clicked()
                         {
-                            crate::effects_panel::apply(self.state, layer, def);
+                            crate::effects_panel::apply(self.state, layer, &def);
                             ui.close();
                         }
                     }
