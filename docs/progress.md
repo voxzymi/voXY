@@ -903,3 +903,71 @@ one undo step per drop. Pending the per-job CI report.
   8.1/8.3/8.5 first, then 8.2/8.4 as small groups). See `design-ux.md` §8.
 - **Markers:** approve the project-format change (and its migration) before the
   markers panel / timeline markers are built; until then they are left out of U-H.
+
+## U-C and U-D landed, merged into `main` (PR #7)
+
+U-C (labels are not selectable: `theme::apply` turns off
+`selectable_labels` / `multi_widget_text_select` globally, About dialog
+"Copy version", a guard test) and U-D (empty-area context menus with New ▸;
+Apply Effect ▸ on a layer; a transform-only **Null** layer at project format
+`0.8.0`, written only when a project contains one; layer Duplicate, Rename
+and new-layer placement above the selection at the playhead; Precompose with
+a Move / Leave submenu) were completed on `claude/gifted-fermat-93dqjr` and
+**merged into `main` via PR #7** (merge commit `c029103`). `main` now carries
+U-A … U-D. This branch was restarted fresh from `origin/main` for the work
+below. (The per-step U-C / U-D notes lived on the pre-merge branch; this entry
+is the summary that survived into `main`.)
+
+## Flaky-test hardening: `voxy-media` playback (done, this branch)
+
+- **What and why.** CI run #64 (U-D head) was green on 10 of 11 jobs on both
+  attempts; only `build + clippy + test (macOS x64 / Intel)` failed, at the
+  `-p voxy-media --test playback` target. A dispatched run on `main` (#65,
+  identical code after the PR #7 merge) showed the same Intel-runner trouble,
+  while macOS arm64 / Linux x64 / Windows x64 ran the target green everywhere —
+  so this is an environmental timing issue on the deprecated `macos-15-intel`
+  runner, not a U-D regression (U-D never touched `voxy-media`). These are the
+  audio-engine timing tests, which drain the ring faster than real time and
+  assume a background feeder thread refilled it within a fixed `sleep`.
+- **Fix (tests only, no production audio changes).** `crates/voxy-media/tests/
+  playback.rs`: a new `pull_ready` helper polls with a **bounded deadline** on
+  the engine's read-only `underrun_frames` counter — it returns the next buffer
+  the feeder had *fully* ready (no underrun across the pull, hence gapless by
+  construction) instead of sleeping a fixed 2 ms / 50 ms and asserting. The
+  three feeder-dependent tests (`delivers_sample_accurate_audio…`,
+  `underruns_keep_time_and_realign_audio`, `maps_stereo_to_any_channel_count`)
+  now use it and assert gapless audio with forward progress rather than a fixed
+  absolute stride (the first buffer still pins the absolute play position).
+  Every test now **drops its `AudioEngine` explicitly** at the end so the feeder
+  / null-output threads are joined before the test returns (`AudioEngine::drop`
+  already sends `Shutdown` and joins; this just makes it happen before teardown,
+  not during harness unwind). The real-time null-output measurement windows are
+  unchanged (they already poll for the start condition and measure wall time
+  directly).
+- **Verified (Linux):** `fmt --check` clean, `clippy -p voxy-media --tests -D
+  warnings` clean, the `playback` suite passes 8/8 on five consecutive runs.
+  Per-job CI to follow; this is one small PR and is **not** to be merged without
+  the owner's say-so.
+
+## Next, in order (UX overhaul)
+
+1. **U-E — preferences foundation** (held for the owner's go-ahead; beyond the
+   U-A … U-D block that was authorized to run unattended). Versioned settings
+   store + defensive loader with migration, a Settings dialog shell, appearance
+   (theme dark / light / high-contrast, accent, UI scale, density) and the first
+   behavior prefs. See `design-ux.md` §5.
+2. **U-F … U-I** — browsing and customization (project-panel views and
+   navigation, workspaces, command palette, the interface-level work), in that
+   order.
+3. **Shape layer milestone** — its own milestone *after* U-D. Needs a short
+   design note (new `LayerKind`, rendering, project-format bump written only
+   when a project contains shapes, older builds refusing it as
+   newer-than-supported) and the **owner's approval before any code**. Text
+   layers remain deferred (`deferred.md`).
+4. **Markers (in U-H)** — build with a project-format bump **written only when a
+   project contains markers**, so older builds refuse those files as
+   newer-than-supported and marker-free projects keep their version. A short
+   marker note (what is stored, migration, tests) comes first. Approved in
+   principle; the format change still wants the owner's explicit sign-off.
+5. **§8 After-Effects familiarity** — 8.1 / 8.3 / 8.5 first, then 8.2 / 8.4 as
+   small groups, after U-H.
