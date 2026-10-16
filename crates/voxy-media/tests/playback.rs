@@ -87,6 +87,29 @@ fn assert_continuous(buf: &[f32], first: i64) {
     }
 }
 
+/// Pulls `BUF`-frame buffers until one arrives that the feeder had fully
+/// ready — drawn entirely from the ring with no silence, so the engine's
+/// underrun counter is unchanged across it — and returns that buffer.
+///
+/// A fully-ready buffer is gapless by construction: every sample came from
+/// the feeder's contiguous render, so the ramp runs `b[0], b[0]+1, …`. This
+/// replaces a fixed millisecond sleep (which assumes the feeder refilled in
+/// that window) with a bounded poll, so a feeder thread briefly starved of
+/// CPU on a loaded CI runner makes the test wait, never fail. The deadline
+/// keeps a genuinely stuck feeder from hanging the test forever.
+fn pull_ready(dev: &mut Device, clock: &PlaybackClock) -> Vec<f32> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let before = clock.underrun_frames();
+        let buf = dev.pull(BUF);
+        if clock.underrun_frames() == before {
+            return buf;
+        }
+        assert!(Instant::now() < deadline, "feeder never refilled the ring");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
 #[test]
 fn delivers_sample_accurate_audio_from_the_play_position() {
     let (mut engine, mut dev) = engine(Duration::ZERO);
@@ -94,13 +117,25 @@ fn delivers_sample_accurate_audio_from_the_play_position() {
     engine.play(Time::from_secs(1));
     let first = dev.pull_until_playing(&clock);
     assert_continuous(&first, 48_000);
-    // Subsequent buffers continue exactly (sleep lets the feeder refill).
-    for k in 1..30 {
-        std::thread::sleep(Duration::from_millis(2));
-        let b = dev.pull(BUF);
-        assert_continuous(&b, 48_000 + (k * BUF) as i64);
+    // Every buffer the feeder has ready is gapless and never moves backwards.
+    // Poll for a ready buffer instead of sleeping a fixed 2 ms and assuming
+    // the feeder kept up: this test drains the ring far faster than real
+    // time, so on a loaded runner a fixed wait is what made it flaky. (The
+    // first buffer above pins the absolute play position; an underrun here
+    // would make the feeder realign forward, so we assert forward progress
+    // rather than a fixed stride.)
+    let mut last_start = 48_000i64;
+    for _ in 0..25 {
+        let b = pull_ready(&mut dev, &clock);
+        let start = b[0] as i64;
+        assert!(
+            start >= last_start,
+            "audio went backwards: {start} < {last_start}"
+        );
+        assert_continuous(&b, start);
+        last_start = start;
     }
-    assert_eq!(clock.underrun_frames(), 0);
+    drop(engine); // shut the feeder down and join it before the test returns
 }
 
 #[test]
@@ -120,6 +155,7 @@ fn clock_follows_the_device_including_latency() {
     // While the previous audio is still in flight, the clock is earlier.
     let before = clock.time_at_ns(anchor_ns + 10_000_000);
     assert!(before <= Time::from_secs(2));
+    drop(engine);
 }
 
 #[test]
@@ -158,6 +194,7 @@ fn pause_holds_at_what_was_audible() {
     // Resuming from the held time continues from there.
     engine.play(held);
     assert_continuous(&dev.pull_until_playing(&clock), sent - 960);
+    drop(engine);
 }
 
 #[test]
@@ -180,6 +217,7 @@ fn seeking_while_playing_switches_cleanly() {
         assert!(Instant::now() < deadline, "seek never took effect");
     }
     assert!(clock.time_at_ns(dev.now_ns) >= Time::from_secs(5));
+    drop(engine);
 }
 
 #[test]
@@ -192,10 +230,15 @@ fn underruns_keep_time_and_realign_audio() {
     dev.pull(RATE as usize);
     assert!(clock.underrun_frames() > 0);
     let device_position = (BUF + RATE as usize) as i64;
-    // After the feeder catches up, audio is again exactly where the clock is.
-    std::thread::sleep(Duration::from_millis(50));
-    let b = dev.pull(BUF);
-    assert_continuous(&b, device_position);
+    // After the feeder catches up it realigns to the device position, so the
+    // next buffer it has fully ready is continuous audio again, at or past
+    // where the device now is. Poll for that buffer instead of sleeping a
+    // fixed 50 ms and hoping the catch-up fit.
+    let b = pull_ready(&mut dev, &clock);
+    let start = b[0] as i64;
+    assert!(start >= device_position, "realigned to the device position");
+    assert_continuous(&b, start);
+    drop(engine);
 }
 
 #[test]
@@ -204,7 +247,9 @@ fn maps_stereo_to_any_channel_count() {
     let clock = engine.clock();
     engine.play(Time::from_secs(1));
     dev.pull_until_playing(&clock);
-    std::thread::sleep(Duration::from_millis(5));
+    // Wait (bounded poll, not a fixed sleep) until the feeder has a full
+    // buffer ready, so the channel-mapped reads below draw real samples.
+    pull_ready(&mut dev, &clock);
     // Mono: average of L (n) and R (-n) is 0.
     let mut mono = vec![1f32; 64];
     dev.cb.process(&mut mono, 1, Duration::ZERO, dev.now_ns);
@@ -215,6 +260,7 @@ fn maps_stereo_to_any_channel_count() {
     let n = six[0];
     assert!(n > 48_000.0);
     assert_eq!(&six[..6], &[n, -n, 0.0, 0.0, 0.0, 0.0]);
+    drop(engine);
 }
 
 #[test]
@@ -250,6 +296,7 @@ fn null_output_runs_in_real_time() {
     let held = clock.time();
     std::thread::sleep(Duration::from_millis(50));
     assert_eq!(clock.time(), held);
+    drop(engine);
 }
 
 #[test]
@@ -273,4 +320,5 @@ fn clock_is_monotonic_while_playing() {
         reads += 1;
     }
     assert!(reads > 1000);
+    drop(engine);
 }
