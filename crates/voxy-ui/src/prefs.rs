@@ -95,9 +95,32 @@ impl Default for DialogMemory {
 /// Seconds of unsaved editing after which the project is autosaved.
 pub const DEFAULT_AUTOSAVE_SECONDS: u32 = 60;
 
+/// The current preferences schema version. Bump it when the on-disk shape
+/// changes in a way older files need help with, and add a step to
+/// [`Preferences::migrate`] (design §5).
+pub const CURRENT_PREFS_VERSION: u32 = 1;
+
+/// Schema bookkeeping. `version` gates migration of older files.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Meta {
+    pub version: u32,
+}
+
+impl Default for Meta {
+    /// `0` marks a file written before versioning existed; a freshly created
+    /// [`Preferences`] overrides this with the current version, and
+    /// [`Preferences::migrate`] turns a loaded `0` into the current one.
+    fn default() -> Self {
+        Meta { version: 0 }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Preferences {
+    /// Schema version, for migrating older files (design §5).
+    pub meta: Meta,
     pub user_presets: Vec<UserPreset>,
     /// Saved keyframe easings, shown in the graph editor's preset strip.
     #[serde(deserialize_with = "lenient_list")]
@@ -151,6 +174,9 @@ where
 impl Default for Preferences {
     fn default() -> Self {
         Preferences {
+            meta: Meta {
+                version: CURRENT_PREFS_VERSION,
+            },
             user_presets: Vec::new(),
             easing_presets: Vec::new(),
             comp_dialog: DialogMemory::default(),
@@ -204,10 +230,38 @@ impl Preferences {
     }
 
     pub fn parse(text: &str) -> Preferences {
-        toml::from_str(text).unwrap_or_else(|e| {
-            tracing::warn!("ignoring corrupt preferences: {e}");
-            Preferences::default()
-        })
+        match toml::from_str::<Preferences>(text) {
+            Ok(mut prefs) => {
+                prefs.migrate();
+                prefs
+            }
+            Err(e) => {
+                tracing::warn!("ignoring corrupt preferences: {e}");
+                Preferences::default()
+            }
+        }
+    }
+
+    /// Brings a freshly parsed file up to the current schema. Runs after a
+    /// successful parse; future schema changes add a step here (design §5).
+    fn migrate(&mut self) {
+        match self.meta.version {
+            // Written before versioning existed: nothing has moved yet, so
+            // adopting the current version is all that is needed.
+            0 => self.meta.version = CURRENT_PREFS_VERSION,
+            // From a newer build: load the settings this build understands and
+            // leave the recorded version alone, so the newer build still
+            // recognises its own file. (Keys this build does not know are not
+            // yet preserved across a save — that is the next U-E step.)
+            v if v > CURRENT_PREFS_VERSION => {
+                tracing::warn!(
+                    "preferences.toml is version {v}, newer than this build (v{CURRENT_PREFS_VERSION}); \
+                     loading the settings this build understands"
+                );
+            }
+            // The current version, or a known older one a future step migrates.
+            _ => {}
+        }
     }
 
     /// Writes the file atomically, creating the directory.
@@ -483,6 +537,50 @@ mod tests {
         assert_eq!(q.user_presets.len(), 1);
         assert_eq!(q.user_presets[0].width, 720);
         assert!(q.remove_preset("Mine") && !q.remove_preset("Mine"));
+    }
+
+    #[test]
+    fn schema_version_defaults_to_current_and_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("p.toml");
+        let p = Preferences::default();
+        assert_eq!(p.meta.version, CURRENT_PREFS_VERSION);
+        p.save_to(&path).unwrap();
+        let loaded = Preferences::load_from(&path);
+        assert_eq!(loaded.meta.version, CURRENT_PREFS_VERSION);
+        assert_eq!(loaded, p);
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            text.contains("[meta]") && text.contains("version = 1"),
+            "the version is written to the file:\n{text}"
+        );
+    }
+
+    #[test]
+    fn an_unversioned_file_migrates_to_current_keeping_its_values() {
+        // A file written before versioning existed has no [meta] table.
+        let p = Preferences::parse("autosave_seconds = 30\nshow_tips = false\n");
+        assert_eq!(
+            p.meta.version, CURRENT_PREFS_VERSION,
+            "it adopts the current schema version"
+        );
+        assert_eq!(p.autosave_seconds, 30);
+        assert!(!p.show_tips, "its settings survive the migration");
+    }
+
+    #[test]
+    fn a_newer_version_file_still_loads_what_this_build_understands() {
+        let text = format!(
+            "[meta]\nversion = {}\n\n[comp_dialog]\nlock_aspect = true\n",
+            CURRENT_PREFS_VERSION + 1
+        );
+        let p = Preferences::parse(&text);
+        assert_eq!(
+            p.meta.version,
+            CURRENT_PREFS_VERSION + 1,
+            "the newer version is kept, not silently downgraded"
+        );
+        assert!(p.comp_dialog.lock_aspect, "known settings still load");
     }
 
     #[test]

@@ -949,13 +949,46 @@ is the summary that survived into `main`.)
   Per-job CI to follow; this is one small PR and is **not** to be merged without
   the owner's say-so.
 
+## U-E: preferences foundation (in progress)
+
+Branch: `claude/ue-preferences`, started fresh from `origin/main` (which now
+carries U-A … U-D and the playback-test hardening, PR #7 and #8 merged). One
+small PR for U-E when it is ready; not opened yet.
+
+- **U-E step 1: schema version + migration scaffold.** `Preferences` gains a
+  `[meta] version` table (`CURRENT_PREFS_VERSION = 1`) and a `migrate` hook run
+  after every successful parse (design §5). A file written before versioning
+  has no `[meta]` (version `0`) and is migrated to the current version with its
+  settings intact; a file from a newer build keeps its higher version and still
+  loads the settings this build understands (a warning is logged; preserving
+  keys this build does not know is the next step). A freshly created
+  `Preferences` is stamped with the current version. The tolerant loader is
+  unchanged otherwise: a missing / corrupt file still gives defaults, a bad
+  value still costs only its own key. Tests: the version defaults to current and
+  round-trips to disk; an unversioned file migrates while keeping its values; a
+  newer-version file still loads known settings. `fmt --check` and
+  `clippy -p voxy-ui --all-targets -D warnings` clean; 295 `voxy-ui` tests pass.
+
+### U-E remaining steps (planned)
+
+- **Appearance section** `[appearance]` (theme dark / light / high-contrast,
+  accent, UI scale, timeline density, font size) with per-key tolerant parsing
+  (a bad enum value falls back to its default, others kept).
+- **Unknown-key preservation** so a newer build's keys survive a round trip
+  through this build (completes the §5 defensive loader).
+- **Settings dialog shell** — a searchable dialog with the appearance controls
+  wired through the command/undo-free preferences path (preferences are not
+  document state).
+- **Wire appearance** to the theme / UI scale / density actually applied.
+- **First behavior prefs** (default still seconds, new-layer placement/length,
+  snapping, confirmations) surfaced in the dialog.
+
 ## Next, in order (UX overhaul)
 
-1. **U-E — preferences foundation** (held for the owner's go-ahead; beyond the
-   U-A … U-D block that was authorized to run unattended). Versioned settings
-   store + defensive loader with migration, a Settings dialog shell, appearance
-   (theme dark / light / high-contrast, accent, UI scale, density) and the first
-   behavior prefs. See `design-ux.md` §5.
+1. **U-E — preferences foundation** — in progress (see the section above).
+   Versioned settings store + defensive loader with migration, a Settings
+   dialog shell, appearance (theme dark / light / high-contrast, accent, UI
+   scale, density) and the first behavior prefs. See `design-ux.md` §5.
 2. **U-F … U-I** — browsing and customization (project-panel views and
    navigation, workspaces, command palette, the interface-level work), in that
    order.
