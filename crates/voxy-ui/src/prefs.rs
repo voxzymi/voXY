@@ -116,11 +116,130 @@ impl Default for Meta {
     }
 }
 
+/// The default accent colour: voXY violet.
+pub const DEFAULT_ACCENT: &str = "#7C5CFF";
+
+/// Overall look of the interface.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Theme {
+    #[default]
+    Dark,
+    Light,
+    HighContrast,
+}
+
+/// Interface scale. `Auto` follows the operating system; the rest are fixed
+/// multipliers.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum UiScale {
+    #[default]
+    #[serde(rename = "auto")]
+    Auto,
+    #[serde(rename = "1.0")]
+    X1,
+    #[serde(rename = "1.25")]
+    X1_25,
+    #[serde(rename = "1.5")]
+    X1_5,
+    #[serde(rename = "2.0")]
+    X2,
+}
+
+/// Base font size for the interface.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FontSize {
+    Small,
+    #[default]
+    Normal,
+    Large,
+}
+
+/// How tightly timeline rows are packed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TimelineDensity {
+    Compact,
+    #[default]
+    Normal,
+    Large,
+}
+
+/// Appearance settings (design §5). Each field parses leniently: a value this
+/// build does not recognise falls back to its default and the others are kept.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Appearance {
+    #[serde(deserialize_with = "lenient_value")]
+    pub theme: Theme,
+    /// Accent colour as `#RRGGBB`; an unparseable value falls back to
+    /// [`DEFAULT_ACCENT`].
+    #[serde(deserialize_with = "lenient_accent")]
+    pub accent: String,
+    #[serde(deserialize_with = "lenient_value")]
+    pub ui_scale: UiScale,
+    #[serde(deserialize_with = "lenient_value")]
+    pub font_size: FontSize,
+    #[serde(deserialize_with = "lenient_value")]
+    pub timeline_density: TimelineDensity,
+}
+
+impl Default for Appearance {
+    fn default() -> Self {
+        Appearance {
+            theme: Theme::default(),
+            accent: DEFAULT_ACCENT.to_string(),
+            ui_scale: UiScale::default(),
+            font_size: FontSize::default(),
+            timeline_density: TimelineDensity::default(),
+        }
+    }
+}
+
+/// Deserializes one value, falling back to the type's default (with a warning)
+/// when it does not match — so one bad setting never discards the rest.
+fn lenient_value<'de, D, T>(d: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de> + Default,
+{
+    let value = toml::Value::deserialize(d)?;
+    Ok(T::deserialize(value.clone()).unwrap_or_else(|e| {
+        tracing::warn!("ignoring invalid preference value {value}: {e}");
+        T::default()
+    }))
+}
+
+/// `true` for a `#RRGGBB` hex colour.
+fn is_hex_color(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    bytes.len() == 7 && bytes[0] == b'#' && bytes[1..].iter().all(u8::is_ascii_hexdigit)
+}
+
+/// Reads an accent colour, falling back to [`DEFAULT_ACCENT`] when it is not a
+/// `#RRGGBB` string.
+fn lenient_accent<'de, D>(d: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = toml::Value::deserialize(d)?;
+    match value.as_str() {
+        Some(s) if is_hex_color(s) => Ok(s.to_string()),
+        _ => {
+            tracing::warn!("ignoring invalid accent colour {value}");
+            Ok(DEFAULT_ACCENT.to_string())
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Preferences {
     /// Schema version, for migrating older files (design §5).
     pub meta: Meta,
+    /// Appearance: theme, accent, scale, font size, timeline density.
+    pub appearance: Appearance,
     pub user_presets: Vec<UserPreset>,
     /// Saved keyframe easings, shown in the graph editor's preset strip.
     #[serde(deserialize_with = "lenient_list")]
@@ -177,6 +296,7 @@ impl Default for Preferences {
             meta: Meta {
                 version: CURRENT_PREFS_VERSION,
             },
+            appearance: Appearance::default(),
             user_presets: Vec::new(),
             easing_presets: Vec::new(),
             comp_dialog: DialogMemory::default(),
@@ -581,6 +701,52 @@ mod tests {
             "the newer version is kept, not silently downgraded"
         );
         assert!(p.comp_dialog.lock_aspect, "known settings still load");
+    }
+
+    #[test]
+    fn appearance_defaults_and_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("p.toml");
+        let a = Preferences::default().appearance;
+        assert_eq!(a.theme, Theme::Dark);
+        assert_eq!(a.accent, DEFAULT_ACCENT);
+        assert_eq!(a.ui_scale, UiScale::Auto);
+        assert_eq!(a.font_size, FontSize::Normal);
+        assert_eq!(a.timeline_density, TimelineDensity::Normal);
+
+        let mut p = Preferences::default();
+        p.appearance.theme = Theme::HighContrast;
+        p.appearance.accent = "#112233".into();
+        p.appearance.ui_scale = UiScale::X1_25;
+        p.appearance.timeline_density = TimelineDensity::Compact;
+        p.save_to(&path).unwrap();
+        assert_eq!(Preferences::load_from(&path), p);
+    }
+
+    #[test]
+    fn a_bad_appearance_value_falls_back_but_keeps_the_others() {
+        let p = Preferences::parse(
+            "[appearance]\n\
+             theme = \"banana\"\n\
+             accent = \"#AABBCC\"\n\
+             ui_scale = \"3.0\"\n\
+             timeline_density = \"compact\"\n",
+        );
+        assert_eq!(p.appearance.theme, Theme::Dark, "unknown theme falls back");
+        assert_eq!(
+            p.appearance.ui_scale,
+            UiScale::Auto,
+            "unknown scale falls back"
+        );
+        assert_eq!(p.appearance.accent, "#AABBCC", "a valid neighbour is kept");
+        assert_eq!(
+            p.appearance.timeline_density,
+            TimelineDensity::Compact,
+            "a valid neighbour is kept"
+        );
+        // A non-hex accent falls back to the default.
+        let q = Preferences::parse("[appearance]\naccent = \"purple\"\n");
+        assert_eq!(q.appearance.accent, DEFAULT_ACCENT);
     }
 
     #[test]

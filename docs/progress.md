@@ -969,11 +969,21 @@ small PR for U-E when it is ready; not opened yet.
   newer-version file still loads known settings. `fmt --check` and
   `clippy -p voxy-ui --all-targets -D warnings` clean; 295 `voxy-ui` tests pass.
 
+- **U-E step 2: appearance section.** `Preferences` gains an `[appearance]`
+  table (design §5): `theme` (dark / light / high_contrast), `accent`
+  (`#RRGGBB`, default voXY violet `#7C5CFF`), `ui_scale` (auto / 1.0 / 1.25 /
+  1.5 / 2.0), `font_size` (small / normal / large) and `timeline_density`
+  (compact / normal / large). Each field parses **leniently**: a value this
+  build does not recognise (an unknown enum variant, or a non-`#RRGGBB` accent)
+  falls back to its own default while the neighbouring values are kept, so one
+  bad setting never discards the section. Appearance is data only — it is not
+  applied to the interface yet (that is a later step). Tests: defaults and a
+  round trip through disk; a bad theme / scale / accent each falls back while
+  valid neighbours survive. `fmt --check` and `clippy -p voxy-ui --all-targets
+  -D warnings` clean; 295 `voxy-ui` tests pass.
+
 ### U-E remaining steps (planned)
 
-- **Appearance section** `[appearance]` (theme dark / light / high-contrast,
-  accent, UI scale, timeline density, font size) with per-key tolerant parsing
-  (a bad enum value falls back to its default, others kept).
 - **Unknown-key preservation** so a newer build's keys survive a round trip
   through this build (completes the §5 defensive loader).
 - **Settings dialog shell** — a searchable dialog with the appearance controls
