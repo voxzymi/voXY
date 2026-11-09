@@ -1053,15 +1053,34 @@ first behaviour preferences. CI to be reported per job, then a PR into `main`
   placement / length, a snapping default (today Shift toggles snapping),
   confirmations, and "new composition opens in a tab".
 
+## U-F: customizable layout (next, not started)
+
+Planned for after the owner says "start U-F". Design §5–§6. Small steps, push
+after each, CI per job once at the end, one PR into `main` when green.
+
+a. **Named workspaces.** Edit, Effects, Animate, Minimal (voXY's own names and
+   arrangements). Switch from the Window menu; Save, Rename, Delete; Reset
+   Layout (exists). Workspaces are **global preferences** (`preferences.toml`
+   `[workspaces]`, reusing `layout.rs` encode/decode + soundness check);
+   **per-project layout stays in `ui_state`** and wins on open when present.
+b. **Window menu: close and reopen every panel.** Today the menu only focuses
+   an open panel; closed panels cannot be brought back. Let each panel be
+   closed and reopened (egui_dock already supports close/float/tab).
+c. **Interface level.** `[interface] level = simple | standard | advanced`
+   (default standard), hiding professional-only options at lower levels.
+d. **Shortcut editor upgrades.** Search, conflict warnings, per-action reset,
+   keymap import / export, and presets — a voXY default and an After-Effects-
+   style map. (Builds on the existing `shortcut_editor` and action table.)
+e. **Live accent colour** — only if it needs no large refactor; today `ACCENT`
+   is a `const` used across many modules, so this is contingent, not committed.
+
 ## Next, in order (UX overhaul)
 
-1. **U-E — preferences foundation** — in progress (see the section above).
-   Versioned settings store + defensive loader with migration, a Settings
-   dialog shell, appearance (theme dark / light / high-contrast, accent, UI
-   scale, density) and the first behavior prefs. See `design-ux.md` §5.
-2. **U-F … U-I** — browsing and customization (project-panel views and
-   navigation, workspaces, command palette, the interface-level work), in that
-   order.
+1. **U-E — preferences foundation** — **complete** (see the U-E section above;
+   pending the per-job CI report and a PR into `main`).
+2. **U-F — customizable layout** — next, not started (plan above). Then
+   **U-G … U-I** browsing (project-panel views and navigation, command palette),
+   in that order.
 3. **Shape layer milestone** — its own milestone *after* U-D. Needs a short
    design note (new `LayerKind`, rendering, project-format bump written only
    when a project contains shapes, older builds refusing it as
