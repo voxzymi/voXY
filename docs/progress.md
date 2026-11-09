@@ -1103,10 +1103,21 @@ U-E has merged by then, else stacked on U-E).
   -p voxy-ui -p voxy-app --all-targets -D warnings` clean; 311 `voxy-ui` tests
   pass and `voxy-app` builds.
 
-### U-F remaining steps (plan)
+- **U-F step 4: per-project layout in `ui_state` (plan a, complete).** A
+  project now remembers its own dock arrangement: `compat::to_ui_state` writes
+  an optional `layout` key and `layout_from_ui_state` reads it (UI-only, no
+  project-format change). `EditorState` keeps the live layout in
+  `current_layout` (saved into the project's `ui_state`) and exposes a
+  `pending_layout` set on open; the app keeps `current_layout` in sync and, the
+  frame after an open, applies a project's saved layout **over** the active
+  workspace (design §6). Global workspaces still track the latest arrangement;
+  a project with its own layout wins on open. Tests: the layout round-trips
+  through `ui_state` and is optional; a saved project offers its layout on
+  open. `fmt --check` and `clippy -p voxy-ui -p voxy-app --all-targets -D
+  warnings` clean; 313 `voxy-ui` tests pass and `voxy-app` builds. **Plan a
+  (workspaces) is complete.**
 
-a. **Per-project layout in `ui_state`** winning over the active workspace on
-   open when present (the rest of plan a; switching / manage done in steps 2–3).
+### U-F remaining steps (plan)
 b. **Window menu: close and reopen every panel.** Today the menu only focuses
    an open panel; closed panels cannot be brought back. Let each panel be
    closed and reopened (egui_dock already supports close/float/tab).

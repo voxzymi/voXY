@@ -122,6 +122,11 @@ impl VoxyApp {
             state.offer_orphaned_recovery();
         }
         let dock = restore_workspace(&state.prefs);
+        // A project opened at startup may carry its own layout; otherwise the
+        // active workspace's layout is the live one.
+        if state.pending_layout.is_none() {
+            state.current_layout = crate::layout::to_text(&dock);
+        }
         VoxyApp {
             saved_layout: crate::layout::to_text(&dock),
             layout_dirty: false,
@@ -182,26 +187,36 @@ impl VoxyApp {
                 ws.layout.clone_from(&text);
                 self.state.save_prefs();
             }
+            self.state.current_layout = Some(text.clone());
             self.saved_layout = Some(text);
         }
+    }
+
+    /// Records `self.dock`'s text as both the last-saved layout and the live
+    /// per-project layout (saved into the project's `ui_state`).
+    fn remember_layout(&mut self) {
+        let text = crate::layout::to_text(&self.dock);
+        self.saved_layout.clone_from(&text);
+        self.state.current_layout = text;
     }
 
     /// Switches to the workspace `name`: applies its layout and makes it
     /// active.
     fn apply_workspace(&mut self, name: &str) {
-        let Some(ws) = self
+        let Some(layout) = self
             .state
             .prefs
             .workspaces
             .list
             .iter()
             .find(|w| w.name == name)
+            .map(|w| w.layout.clone())
         else {
             return;
         };
-        self.dock = crate::layout::restore(Some(&ws.layout));
-        self.saved_layout = crate::layout::to_text(&self.dock);
+        self.dock = crate::layout::restore(Some(&layout));
         name.clone_into(&mut self.state.prefs.workspaces.active);
+        self.remember_layout();
         self.state.save_prefs();
     }
 
@@ -211,8 +226,8 @@ impl VoxyApp {
         let Some(layout) = crate::layout::to_text(&self.dock) else {
             return;
         };
-        self.saved_layout = Some(layout.clone());
         self.state.prefs.workspaces.add(name.to_owned(), layout);
+        self.remember_layout();
         self.state.save_prefs();
     }
 
@@ -226,7 +241,7 @@ impl VoxyApp {
     fn delete_active_workspace(&mut self) {
         if let Some(layout) = self.state.prefs.workspaces.delete_active() {
             self.dock = crate::layout::restore(Some(&layout));
-            self.saved_layout = crate::layout::to_text(&self.dock);
+            self.remember_layout();
         }
         self.state.save_prefs();
     }
@@ -720,6 +735,13 @@ impl eframe::App for VoxyApp {
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.apply_appearance(&ctx);
+
+        // A project just opened may carry its own layout; it wins over the
+        // active workspace (design §6). Applied once, the frame after the open.
+        if let Some(layout) = self.state.pending_layout.take() {
+            self.dock = crate::layout::restore(Some(&layout));
+            self.remember_layout();
+        }
 
         if ctx.input(|i| i.viewport().close_requested())
             && !self.allow_close
