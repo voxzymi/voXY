@@ -270,6 +270,12 @@ pub struct Preferences {
     /// OpenFX plugins that failed three times, with the reason; they stay
     /// blocked until Retry (design §6.7).
     pub ofx_blocked: Vec<(String, String)>,
+    /// Top-level keys this build does not recognise, kept verbatim so a file
+    /// written by a newer build survives a round trip (design §5). Not part
+    /// of the schema and never goes through serde — captured after parsing
+    /// and merged back when saving.
+    #[serde(skip)]
+    pub unknown: toml::Table,
 }
 
 /// Reads the shortcut table entry by entry (like [`lenient_list`]).
@@ -308,6 +314,7 @@ impl Default for Preferences {
             precomp_double_click: PrecompOpen::CurrentTab,
             ofx_plugin_paths: Vec::new(),
             ofx_blocked: Vec::new(),
+            unknown: toml::Table::new(),
         }
     }
 }
@@ -353,6 +360,7 @@ impl Preferences {
         match toml::from_str::<Preferences>(text) {
             Ok(mut prefs) => {
                 prefs.migrate();
+                prefs.capture_unknown(text);
                 prefs
             }
             Err(e) => {
@@ -360,6 +368,23 @@ impl Preferences {
                 Preferences::default()
             }
         }
+    }
+
+    /// Records top-level keys the schema does not know (from a newer build),
+    /// so [`save_to`](Self::save_to) can write them back unchanged (design §5).
+    fn capture_unknown(&mut self, text: &str) {
+        let Ok(raw) = toml::from_str::<toml::Table>(text) else {
+            return;
+        };
+        // The keys this build emits for itself; everything else in the file
+        // belongs to another build and is preserved verbatim.
+        let Ok(toml::Value::Table(known)) = toml::Value::try_from(&*self) else {
+            return;
+        };
+        self.unknown = raw
+            .into_iter()
+            .filter(|(key, _)| !known.contains_key(key))
+            .collect();
     }
 
     /// Brings a freshly parsed file up to the current schema. Runs after a
@@ -384,9 +409,19 @@ impl Preferences {
         }
     }
 
-    /// Writes the file atomically, creating the directory.
+    /// Writes the file atomically, creating the directory. Unknown keys from a
+    /// newer build (see [`unknown`](Self::unknown)) are merged back in, never
+    /// overwriting a key this build owns.
     pub fn save_to(&self, path: &Path) -> Result<(), String> {
-        let text = toml::to_string_pretty(self).map_err(|e| e.to_string())?;
+        let toml::Value::Table(mut table) =
+            toml::Value::try_from(self).map_err(|e| e.to_string())?
+        else {
+            return Err("preferences did not serialize to a table".into());
+        };
+        for (key, value) in &self.unknown {
+            table.entry(key.clone()).or_insert(value.clone());
+        }
+        let text = toml::to_string_pretty(&table).map_err(|e| e.to_string())?;
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
@@ -701,6 +736,37 @@ mod tests {
             "the newer version is kept, not silently downgraded"
         );
         assert!(p.comp_dialog.lock_aspect, "known settings still load");
+    }
+
+    #[test]
+    fn unknown_top_level_keys_survive_a_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("p.toml");
+        // A stray key and a whole section this build does not know, as a newer
+        // build might write.
+        let text = "show_tips = false\n\
+                    future_scalar = 7\n\
+                    \n[future_section]\n\
+                    enabled = true\n\
+                    name = \"x\"\n";
+        let p = Preferences::parse(text);
+        assert!(!p.show_tips, "known settings still load");
+        assert!(
+            p.unknown.contains_key("future_scalar") && p.unknown.contains_key("future_section"),
+            "unknown keys were captured: {:?}",
+            p.unknown
+        );
+        p.save_to(&path).unwrap();
+        let reloaded = Preferences::load_from(&path);
+        assert_eq!(
+            reloaded, p,
+            "the file round-trips with its unknown keys intact"
+        );
+        let on_disk = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            on_disk.contains("future_scalar") && on_disk.contains("[future_section]"),
+            "unknown keys are written back to disk:\n{on_disk}"
+        );
     }
 
     #[test]

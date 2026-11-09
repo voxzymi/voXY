@@ -982,10 +982,20 @@ small PR for U-E when it is ready; not opened yet.
   valid neighbours survive. `fmt --check` and `clippy -p voxy-ui --all-targets
   -D warnings` clean; 295 `voxy-ui` tests pass.
 
+- **U-E step 3: unknown-key preservation.** `Preferences` gains a skipped
+  `unknown: toml::Table`. After a successful parse, top-level keys the schema
+  does not know (a key or a whole `[section]` written by a newer build) are
+  captured by diffing the raw document against the keys this build emits for
+  itself; `save_to` merges them back verbatim, never overwriting a key this
+  build owns. This completes the §5 defensive loader: a newer build's settings
+  now survive a round trip through an older build instead of being dropped.
+  (Unknown keys *nested* inside a known section are still ignored, as before.)
+  Test: a stray top-level key and a whole unknown section are captured, written
+  back to disk, and reload identically. `fmt --check` and `clippy -p voxy-ui
+  --all-targets -D warnings` clean; 298 `voxy-ui` tests pass.
+
 ### U-E remaining steps (planned)
 
-- **Unknown-key preservation** so a newer build's keys survive a round trip
-  through this build (completes the §5 defensive loader).
 - **Settings dialog shell** — a searchable dialog with the appearance controls
   wired through the command/undo-free preferences path (preferences are not
   document state).
