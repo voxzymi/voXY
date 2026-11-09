@@ -48,7 +48,7 @@ impl std::fmt::Debug for VoxyApp {
 
 impl VoxyApp {
     pub fn new(cc: &eframe::CreationContext<'_>, open: Option<PathBuf>) -> Self {
-        crate::theme::apply(&cc.egui_ctx);
+        crate::theme::apply(&cc.egui_ctx, crate::prefs::Theme::default());
         let viewport = cc
             .wgpu_render_state
             .clone()
@@ -143,6 +143,19 @@ impl VoxyApp {
             self.state.prefs.dock_layout = Some(text.clone());
             self.state.save_prefs();
             self.saved_layout = Some(text);
+        }
+    }
+
+    /// Applies the live appearance preferences to the egui context each frame,
+    /// so a change in Settings takes effect without a restart. Theme sets the
+    /// visuals; interface scale sets the zoom. Timeline density is read where
+    /// the timeline draws its rows.
+    fn apply_appearance(&self, ctx: &egui::Context) {
+        let appearance = &self.state.prefs.appearance;
+        crate::theme::apply(ctx, appearance.theme);
+        let zoom = appearance.ui_scale.factor().unwrap_or(1.0);
+        if (ctx.zoom_factor() - zoom).abs() > f32::EPSILON {
+            ctx.set_zoom_factor(zoom);
         }
     }
 
@@ -518,6 +531,7 @@ impl eframe::App for VoxyApp {
 
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        self.apply_appearance(&ctx);
 
         if ctx.input(|i| i.viewport().close_requested())
             && !self.allow_close

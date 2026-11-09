@@ -197,6 +197,18 @@ impl UiScale {
             UiScale::X2 => "200%",
         }
     }
+
+    /// The fixed zoom multiplier, or `None` for [`UiScale::Auto`] (follow the
+    /// operating system — no extra zoom).
+    pub fn factor(self) -> Option<f32> {
+        match self {
+            UiScale::Auto => None,
+            UiScale::X1 => Some(1.0),
+            UiScale::X1_25 => Some(1.25),
+            UiScale::X1_5 => Some(1.5),
+            UiScale::X2 => Some(2.0),
+        }
+    }
 }
 
 impl FontSize {
@@ -223,6 +235,15 @@ impl TimelineDensity {
             TimelineDensity::Compact => "Compact",
             TimelineDensity::Normal => "Normal",
             TimelineDensity::Large => "Large",
+        }
+    }
+
+    /// Height of one timeline row, in points.
+    pub fn row_height(self) -> f32 {
+        match self {
+            TimelineDensity::Compact => 20.0,
+            TimelineDensity::Normal => 24.0,
+            TimelineDensity::Large => 30.0,
         }
     }
 }
@@ -848,6 +869,17 @@ mod tests {
         p.appearance.timeline_density = TimelineDensity::Compact;
         p.save_to(&path).unwrap();
         assert_eq!(Preferences::load_from(&path), p);
+    }
+
+    #[test]
+    fn scale_factors_and_densities_map_as_expected() {
+        assert_eq!(UiScale::Auto.factor(), None);
+        assert_eq!(UiScale::X1.factor(), Some(1.0));
+        assert_eq!(UiScale::X2.factor(), Some(2.0));
+        assert!(
+            TimelineDensity::Compact.row_height() < TimelineDensity::Normal.row_height()
+                && TimelineDensity::Normal.row_height() < TimelineDensity::Large.row_height()
+        );
     }
 
     #[test]

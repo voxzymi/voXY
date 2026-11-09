@@ -25,7 +25,6 @@ use crate::panels::timecode_at;
 use crate::state::EditorState;
 use crate::theme::ACCENT;
 
-const ROW_H: f32 = 24.0;
 const HEADER_W: f32 = 230.0;
 const RULER_H: f32 = 24.0;
 const HANDLE_W: f32 = 7.0;
@@ -109,6 +108,8 @@ struct Cx {
     /// The composition's start timecode and drop-frame display.
     start: Time,
     drop: bool,
+    /// Height of one row, from the timeline-density preference.
+    row_h: f32,
 }
 
 pub fn show(ui: &mut Ui, state: &mut EditorState) {
@@ -181,6 +182,7 @@ pub fn show(ui: &mut Ui, state: &mut EditorState) {
         time: state.time,
         start: comp.start_offset,
         drop: comp.drop_frame,
+        row_h: state.prefs.appearance.timeline_density.row_height(),
     };
 
     ruler(ui, state, comp.duration, cx);
@@ -289,10 +291,10 @@ fn drop_on_timeline(ui: &Ui, state: &mut EditorState, comp: &Composition, cx: Cx
             for (k, l) in layers.iter().enumerate() {
                 let x0 = cx.axis.x(l.in_point);
                 let x1 = cx.axis.x(l.in_point + l.length).max(x0 + 2.0);
-                let top = y + k as f32 * ROW_H + 3.0;
+                let top = y + k as f32 * cx.row_h + 3.0;
                 ghost_bar(
                     painter,
-                    Rect::from_min_max(pos2(x0, top), pos2(x1, top + ROW_H - 6.0)),
+                    Rect::from_min_max(pos2(x0, top), pos2(x1, top + cx.row_h - 6.0)),
                 );
             }
         }
@@ -472,13 +474,13 @@ fn bar_color(layer: &Layer, time: Time) -> Color32 {
 fn layer_rows(ui: &mut Ui, state: &mut EditorState, layer: &Layer, cx: Cx) {
     let selected = state.selection == Some(layer.id);
     let expanded = state.timeline.expanded.contains(&layer.id);
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), cx.row_h), Sense::hover());
     state.timeline.rows.push((layer.id, rect));
     if state.timeline.reveal == Some(layer.id) {
         ui.scroll_to_rect(rect, Some(egui::Align::Center));
         state.timeline.reveal = None;
     }
-    let header = Rect::from_min_size(rect.min, vec2(HEADER_W, ROW_H));
+    let header = Rect::from_min_size(rect.min, vec2(HEADER_W, cx.row_h));
     let lane = Rect::from_min_max(pos2(cx.axis.left, rect.top()), rect.max);
     let painter = ui.painter_at(rect);
     let lane_painter = ui.painter_at(lane.with_min_x(lane.left() - 6.0));
@@ -524,7 +526,7 @@ fn layer_rows(ui: &mut Ui, state: &mut EditorState, layer: &Layer, cx: Cx) {
             crate::menu::action_item(ui, state, a);
         }
     });
-    let arrow = Rect::from_min_size(header.min + vec2(2.0, 0.0), vec2(18.0, ROW_H));
+    let arrow = Rect::from_min_size(header.min + vec2(2.0, 0.0), vec2(18.0, cx.row_h));
     if ui
         .interact(arrow, Id::new(("tl-expand", layer.id)), Sense::click())
         .clicked()
@@ -551,7 +553,7 @@ fn layer_rows(ui: &mut Ui, state: &mut EditorState, layer: &Layer, cx: Cx) {
     };
     painter.add(Shape::convex_polygon(tri, weak, Stroke::NONE));
 
-    let eye = Rect::from_min_size(header.min + vec2(22.0, 0.0), vec2(18.0, ROW_H));
+    let eye = Rect::from_min_size(header.min + vec2(22.0, 0.0), vec2(18.0, cx.row_h));
     let eye_resp = ui
         .interact(eye, Id::new(("tl-vis", layer.id)), Sense::click())
         .on_hover_text("Visible");
@@ -697,7 +699,8 @@ pub(crate) fn value_text(v: &Value) -> String {
 }
 
 fn property_row(ui: &mut Ui, state: &mut EditorState, layer: &Layer, p: &Property, cx: Cx) {
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H - 4.0), Sense::hover());
+    let (rect, _) =
+        ui.allocate_exact_size(vec2(ui.available_width(), cx.row_h - 4.0), Sense::hover());
     let header = Rect::from_min_size(rect.min, vec2(HEADER_W, rect.height()));
     let lane = Rect::from_min_max(pos2(cx.axis.left, rect.top()), rect.max);
     let painter = ui.painter_at(rect);

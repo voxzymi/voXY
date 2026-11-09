@@ -1009,9 +1009,23 @@ small PR for U-E when it is ready; not opened yet.
   the hex⇄RGB helpers behave. `fmt --check` and `clippy -p voxy-ui
   --all-targets -D warnings` clean; 301 `voxy-ui` tests pass.
 
+- **U-E step 5: apply theme, interface scale and timeline density live.**
+  `theme::apply` now takes the `Theme` and builds the visuals for dark, light
+  or high-contrast (a near-black, white-text, heavy-stroke dark variant); the
+  app calls it every frame from `prefs.appearance`, so switching theme in
+  Settings takes effect with no restart. Interface scale is applied the same
+  way via `ctx.set_zoom_factor` (`UiScale::factor`; Auto → follow the system).
+  Timeline density now drives the row height: `TimelineDensity::row_height`
+  (compact 20 / normal 24 / large 30 pt) rides on the timeline's `Cx`, replacing
+  the former `const ROW_H`. Accent and font size remain stored-only for now
+  (the accent is a `const` used across many modules; applying it live is a
+  separate change the owner has not asked for). Tests: every theme applies
+  without panicking; the scale factors and density heights map as expected.
+  `fmt --check` and `clippy -p voxy-ui -p voxy-app --all-targets -D warnings`
+  clean; 303 `voxy-ui` tests pass and `voxy-app` builds.
+
 ### U-E remaining steps (planned)
 
-- **Wire appearance** to the theme / UI scale / density actually applied.
 - **First behavior prefs** (default still seconds, new-layer placement/length,
   snapping, confirmations) surfaced in the dialog.
 
