@@ -349,6 +349,43 @@ pub struct Workspaces {
     pub list: Vec<Workspace>,
 }
 
+impl Workspaces {
+    /// Whether a workspace named `name` already exists.
+    pub fn contains(&self, name: &str) -> bool {
+        self.list.iter().any(|w| w.name == name)
+    }
+
+    /// Adds a workspace with `layout` and makes it active. The caller ensures
+    /// the name is non-empty and not already taken.
+    pub fn add(&mut self, name: String, layout: String) {
+        self.active.clone_from(&name);
+        self.list.push(Workspace { name, layout });
+    }
+
+    /// Renames the active workspace to `new` (and the active marker with it).
+    pub fn rename_active(&mut self, new: String) {
+        let active = self.active.clone();
+        if let Some(ws) = self.list.iter_mut().find(|w| w.name == active) {
+            ws.name.clone_from(&new);
+        }
+        self.active = new;
+    }
+
+    /// Removes the active workspace and makes the first remaining one active,
+    /// returning its layout. Keeps (and returns `None` for) the last workspace,
+    /// so there is always at least one.
+    pub fn delete_active(&mut self) -> Option<String> {
+        if self.list.len() <= 1 {
+            return None;
+        }
+        let active = self.active.clone();
+        self.list.retain(|w| w.name != active);
+        let first = self.list.first()?;
+        self.active.clone_from(&first.name);
+        Some(first.layout.clone())
+    }
+}
+
 impl Default for Workspaces {
     fn default() -> Self {
         let list = crate::panels::builtin_workspaces()
@@ -975,6 +1012,32 @@ mod tests {
         }
         p.save_to(&path).unwrap();
         assert_eq!(Preferences::load_from(&path), p);
+    }
+
+    #[test]
+    fn workspaces_add_rename_and_delete() {
+        let mut ws = Workspaces::default();
+        assert!(ws.contains("Edit") && !ws.contains("Mine"));
+
+        ws.add("Mine".to_owned(), "layout-text".to_owned());
+        assert_eq!(ws.active, "Mine");
+        assert!(ws.contains("Mine"));
+        assert_eq!(ws.list.last().unwrap().layout, "layout-text");
+
+        ws.rename_active("Yours".to_owned());
+        assert_eq!(ws.active, "Yours");
+        assert!(ws.contains("Yours") && !ws.contains("Mine"));
+
+        let next = ws.delete_active().expect("other workspaces remain");
+        assert!(!ws.contains("Yours"));
+        assert_eq!(ws.active, "Edit", "the first remaining becomes active");
+        assert_eq!(next, ws.list[0].layout);
+
+        // Deleting down to the last one returns None and keeps it.
+        ws.list.truncate(1);
+        ws.active.clone_from(&ws.list[0].name);
+        assert!(ws.delete_active().is_none());
+        assert_eq!(ws.list.len(), 1, "the last workspace is kept");
     }
 
     #[test]

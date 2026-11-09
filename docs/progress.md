@@ -1091,11 +1091,22 @@ U-E has merged by then, else stacked on U-E).
   --check` and `clippy -p voxy-ui -p voxy-app --all-targets -D warnings` clean;
   310 `voxy-ui` tests pass and `voxy-app` builds.
 
+- **U-F step 3: workspace management (plan a, manage).** The Window menu gains
+  **Save Workspace…**, **Rename Workspace…** and **Delete Workspace**. Save and
+  Rename open a small modal name prompt that rejects an empty or already-used
+  name (Rename may keep the active workspace's own name); Delete is disabled for
+  the last workspace and otherwise switches to the first remaining one. The list
+  edits are pure, tested methods on `Workspaces` (`contains`, `add`,
+  `rename_active`, `delete_active`); the app wires them plus the dock, and the
+  prompt gates shortcuts while open. Tests: add / rename / delete on
+  `Workspaces`, including keeping the last one. `fmt --check` and `clippy
+  -p voxy-ui -p voxy-app --all-targets -D warnings` clean; 311 `voxy-ui` tests
+  pass and `voxy-app` builds.
+
 ### U-F remaining steps (plan)
 
-a. **Named workspaces (manage).** Save-as-new, Rename, Delete workspaces; and
-   **per-project layout in `ui_state`** winning over the active workspace on
-   open when present. (Switching / apply / Reset Layout done in step 2.)
+a. **Per-project layout in `ui_state`** winning over the active workspace on
+   open when present (the rest of plan a; switching / manage done in steps 2–3).
 b. **Window menu: close and reopen every panel.** Today the menu only focuses
    an open panel; closed panels cannot be brought back. Let each panel be
    closed and reopened (egui_dock already supports close/float/tab).

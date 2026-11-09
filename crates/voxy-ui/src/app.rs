@@ -48,6 +48,22 @@ pub struct VoxyApp {
     pending: Option<Discarding>,
     allow_close: bool,
     show_about: bool,
+    /// An open Save / Rename Workspace name prompt.
+    workspace_prompt: Option<WorkspacePrompt>,
+}
+
+/// Which name-prompt the Window menu opened.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WorkspaceAction {
+    SaveNew,
+    Rename,
+}
+
+/// The Save / Rename Workspace dialog's state.
+#[derive(Debug, Clone)]
+struct WorkspacePrompt {
+    action: WorkspaceAction,
+    name: String,
 }
 
 impl std::fmt::Debug for VoxyApp {
@@ -115,6 +131,7 @@ impl VoxyApp {
             pending: None,
             allow_close: false,
             show_about: false,
+            workspace_prompt: None,
         }
     }
 
@@ -188,6 +205,86 @@ impl VoxyApp {
         self.state.save_prefs();
     }
 
+    /// Saves the current arrangement as a new workspace named `name` and makes
+    /// it active. The caller ensures `name` is free.
+    fn save_workspace_as(&mut self, name: &str) {
+        let Some(layout) = crate::layout::to_text(&self.dock) else {
+            return;
+        };
+        self.saved_layout = Some(layout.clone());
+        self.state.prefs.workspaces.add(name.to_owned(), layout);
+        self.state.save_prefs();
+    }
+
+    /// Renames the active workspace.
+    fn rename_active_workspace(&mut self, name: &str) {
+        self.state.prefs.workspaces.rename_active(name.to_owned());
+        self.state.save_prefs();
+    }
+
+    /// Deletes the active workspace and switches to the first remaining one.
+    fn delete_active_workspace(&mut self) {
+        if let Some(layout) = self.state.prefs.workspaces.delete_active() {
+            self.dock = crate::layout::restore(Some(&layout));
+            self.saved_layout = crate::layout::to_text(&self.dock);
+        }
+        self.state.save_prefs();
+    }
+
+    /// Draws the Save / Rename Workspace name prompt if it is open.
+    fn workspace_prompt(&mut self, ctx: &egui::Context) {
+        let Some(mut prompt) = self.workspace_prompt.take() else {
+            return;
+        };
+        let mut outcome: Option<bool> = None;
+        let title = match prompt.action {
+            WorkspaceAction::SaveNew => "Save Workspace",
+            WorkspaceAction::Rename => "Rename Workspace",
+        };
+        egui::Modal::new(egui::Id::new("voxy-workspace-prompt")).show(ctx, |ui| {
+            ui.set_width(320.0);
+            ui.heading(title);
+            ui.horizontal(|ui| {
+                ui.label("Name:");
+                let edit = ui.text_edit_singleline(&mut prompt.name);
+                edit.request_focus();
+            });
+            let trimmed = prompt.name.trim();
+            // A name is valid when non-empty and free — except that Rename may
+            // keep the active workspace's own name.
+            let active = &self.state.prefs.workspaces.active;
+            let clashes = self.state.prefs.workspaces.contains(trimmed)
+                && !(prompt.action == WorkspaceAction::Rename && trimmed == active);
+            let valid = !trimmed.is_empty() && !clashes;
+            if clashes {
+                ui.colored_label(
+                    egui::Color32::from_rgb(230, 70, 70),
+                    "A workspace already uses that name.",
+                );
+            }
+            ui.add_space(4.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.add_enabled(valid, egui::Button::new("OK")).clicked() {
+                    outcome = Some(true);
+                }
+                if ui.button("Cancel").clicked() {
+                    outcome = Some(false);
+                }
+            });
+        });
+        match outcome {
+            Some(true) => {
+                let name = prompt.name.trim().to_owned();
+                match prompt.action {
+                    WorkspaceAction::SaveNew => self.save_workspace_as(&name),
+                    WorkspaceAction::Rename => self.rename_active_workspace(&name),
+                }
+            }
+            Some(false) => {}
+            None => self.workspace_prompt = Some(prompt),
+        }
+    }
+
     /// Applies the live appearance preferences to the egui context each frame,
     /// so a change in Settings takes effect without a restart. Theme sets the
     /// visuals; interface scale sets the zoom. Timeline density is read where
@@ -207,7 +304,10 @@ impl VoxyApp {
         // Text fields keep their own editing shortcuts.
         // The shortcut editor reads keys itself while it is open, and the
         // Settings dialog is modal, so shortcuts behind it do not fire.
-        if self.state.shortcut_editor.is_some() || self.state.settings.is_some() {
+        if self.state.shortcut_editor.is_some()
+            || self.state.settings.is_some()
+            || self.workspace_prompt.is_some()
+        {
             return;
         }
         let typing = ctx.egui_wants_keyboard_input();
@@ -360,6 +460,29 @@ impl VoxyApp {
                         ui.close();
                     }
                 }
+                if ui.button("Save Workspace…").clicked() {
+                    self.workspace_prompt = Some(WorkspacePrompt {
+                        action: WorkspaceAction::SaveNew,
+                        name: String::new(),
+                    });
+                    ui.close();
+                }
+                if ui.button("Rename Workspace…").clicked() {
+                    self.workspace_prompt = Some(WorkspacePrompt {
+                        action: WorkspaceAction::Rename,
+                        name: active.clone(),
+                    });
+                    ui.close();
+                }
+                let can_delete = self.state.prefs.workspaces.list.len() > 1;
+                if ui
+                    .add_enabled(can_delete, egui::Button::new("Delete Workspace"))
+                    .on_disabled_hover_text("The last workspace cannot be deleted.")
+                    .clicked()
+                {
+                    self.delete_active_workspace();
+                    ui.close();
+                }
                 ui.separator();
                 for tab in Tab::ALL {
                     if ui.button(tab.title()).clicked() {
@@ -496,6 +619,7 @@ impl VoxyApp {
         crate::footage::show_prompt(ctx, &mut self.state);
         crate::shortcut_editor::show(ctx, &mut self.state);
         crate::settings::show(ctx, &mut self.state);
+        self.workspace_prompt(ctx);
         if let Some(action) = self.pending {
             let name = self.state.display_name();
             let mut choice = None;
