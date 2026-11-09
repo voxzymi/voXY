@@ -166,6 +166,67 @@ pub enum TimelineDensity {
     Large,
 }
 
+impl Theme {
+    /// Every theme, in display order (for the Settings dialog).
+    pub const ALL: [Theme; 3] = [Theme::Dark, Theme::Light, Theme::HighContrast];
+    /// The human-readable name.
+    pub fn label(self) -> &'static str {
+        match self {
+            Theme::Dark => "Dark",
+            Theme::Light => "Light",
+            Theme::HighContrast => "High contrast",
+        }
+    }
+}
+
+impl UiScale {
+    /// Every scale, in display order.
+    pub const ALL: [UiScale; 5] = [
+        UiScale::Auto,
+        UiScale::X1,
+        UiScale::X1_25,
+        UiScale::X1_5,
+        UiScale::X2,
+    ];
+    pub fn label(self) -> &'static str {
+        match self {
+            UiScale::Auto => "Auto (follow system)",
+            UiScale::X1 => "100%",
+            UiScale::X1_25 => "125%",
+            UiScale::X1_5 => "150%",
+            UiScale::X2 => "200%",
+        }
+    }
+}
+
+impl FontSize {
+    /// Every size, in display order.
+    pub const ALL: [FontSize; 3] = [FontSize::Small, FontSize::Normal, FontSize::Large];
+    pub fn label(self) -> &'static str {
+        match self {
+            FontSize::Small => "Small",
+            FontSize::Normal => "Normal",
+            FontSize::Large => "Large",
+        }
+    }
+}
+
+impl TimelineDensity {
+    /// Every density, in display order.
+    pub const ALL: [TimelineDensity; 3] = [
+        TimelineDensity::Compact,
+        TimelineDensity::Normal,
+        TimelineDensity::Large,
+    ];
+    pub fn label(self) -> &'static str {
+        match self {
+            TimelineDensity::Compact => "Compact",
+            TimelineDensity::Normal => "Normal",
+            TimelineDensity::Large => "Large",
+        }
+    }
+}
+
 /// Appearance settings (design §5). Each field parses leniently: a value this
 /// build does not recognise falls back to its default and the others are kept.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

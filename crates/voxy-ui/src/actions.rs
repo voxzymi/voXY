@@ -78,6 +78,7 @@ pub enum Action {
     EditUndo,
     EditRedo,
     EditKeyboardShortcuts,
+    EditPreferences,
     SelectionClear,
     LayerNewSolid,
     LayerNewAdjustment,
@@ -192,6 +193,7 @@ impl Action {
         Action::EditUndo,
         Action::EditRedo,
         Action::EditKeyboardShortcuts,
+        Action::EditPreferences,
         Action::SelectionClear,
         Action::LayerNewSolid,
         Action::LayerNewAdjustment,
@@ -363,6 +365,7 @@ impl Action {
                 Global,
                 &[],
             ),
+            Action::EditPreferences => def("edit.preferences", "Settings…", Nothing, Global, &[]),
             Action::SelectionClear => def(
                 "selection.clear",
                 "Deselect",

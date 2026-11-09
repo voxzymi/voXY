@@ -994,11 +994,23 @@ small PR for U-E when it is ready; not opened yet.
   back to disk, and reload identically. `fmt --check` and `clippy -p voxy-ui
   --all-targets -D warnings` clean; 298 `voxy-ui` tests pass.
 
+- **U-E step 4: Settings dialog shell.** New `settings` module and a modal
+  **Settings** dialog (Edit ▸ Settings…, `Action::EditPreferences`, no default
+  shortcut). A **Filter** box searches rows by label; the **Appearance** section
+  (theme, accent colour via the swatch picker, interface scale, font size,
+  timeline density) edits `prefs.appearance` and saves immediately through
+  `save_prefs` — preferences are UI state, never document state, so this never
+  touches the command/undo system. Enums gained `ALL` / `label` helpers for the
+  combo boxes. While the dialog is open, shortcuts behind the modal do not fire
+  (same gate as the shortcut editor). The dialog is drawn in both the app and
+  the headless audit harness. Appearance is still only stored here — applying it
+  to the live interface is the next step. Tests: the action opens the dialog and
+  it draws over several frames; a change persists without undo; the filter and
+  the hex⇄RGB helpers behave. `fmt --check` and `clippy -p voxy-ui
+  --all-targets -D warnings` clean; 301 `voxy-ui` tests pass.
+
 ### U-E remaining steps (planned)
 
-- **Settings dialog shell** — a searchable dialog with the appearance controls
-  wired through the command/undo-free preferences path (preferences are not
-  document state).
 - **Wire appearance** to the theme / UI scale / density actually applied.
 - **First behavior prefs** (default still seconds, new-layer placement/length,
   snapping, confirmations) surfaced in the dialog.

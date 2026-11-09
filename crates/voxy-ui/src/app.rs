@@ -150,8 +150,9 @@ impl VoxyApp {
     /// that cannot run says why in the status bar and does nothing.
     fn shortcuts(&mut self, ctx: &egui::Context) {
         // Text fields keep their own editing shortcuts.
-        // The shortcut editor reads keys itself while it is open.
-        if self.state.shortcut_editor.is_some() {
+        // The shortcut editor reads keys itself while it is open, and the
+        // Settings dialog is modal, so shortcuts behind it do not fire.
+        if self.state.shortcut_editor.is_some() || self.state.settings.is_some() {
             return;
         }
         let typing = ctx.egui_wants_keyboard_input();
@@ -227,6 +228,7 @@ impl VoxyApp {
                 self.item_labelled(ui, Action::EditRedo, &redo);
                 ui.separator();
                 self.item(ui, Action::EditKeyboardShortcuts);
+                self.item(ui, Action::EditPreferences);
             });
             ui.menu_button("Layer", |ui| {
                 self.item(ui, Action::LayerNewSolid);
@@ -416,6 +418,7 @@ impl VoxyApp {
         crate::comp_dialog::show(ctx, &mut self.state);
         crate::footage::show_prompt(ctx, &mut self.state);
         crate::shortcut_editor::show(ctx, &mut self.state);
+        crate::settings::show(ctx, &mut self.state);
         if let Some(action) = self.pending {
             let name = self.state.display_name();
             let mut choice = None;

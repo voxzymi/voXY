@@ -33,6 +33,7 @@ mod project_panel;
 mod project_view;
 mod recovery;
 mod reveal;
+mod settings;
 mod shortcut_editor;
 mod state;
 mod tabs_ui;
