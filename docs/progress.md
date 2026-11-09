@@ -949,11 +949,11 @@ is the summary that survived into `main`.)
   Per-job CI to follow; this is one small PR and is **not** to be merged without
   the owner's say-so.
 
-## U-E: preferences foundation (in progress)
+## U-E: preferences foundation (complete)
 
 Branch: `claude/ue-preferences`, started fresh from `origin/main` (which now
-carries U-A … U-D and the playback-test hardening, PR #7 and #8 merged). One
-small PR for U-E when it is ready; not opened yet.
+carries U-A … U-D and the playback-test hardening, PR #7 and #8 merged). Six
+small steps; one PR into `main` when green (CI reported per job).
 
 - **U-E step 1: schema version + migration scaffold.** `Preferences` gains a
   `[meta] version` table (`CURRENT_PREFS_VERSION = 1`) and a `migrate` hook run
@@ -1024,10 +1024,34 @@ small PR for U-E when it is ready; not opened yet.
   `fmt --check` and `clippy -p voxy-ui -p voxy-app --all-targets -D warnings`
   clean; 303 `voxy-ui` tests pass and `voxy-app` builds.
 
-### U-E remaining steps (planned)
+- **U-E step 6: first behavior preferences.** The Settings dialog gains a
+  **Behavior** section surfacing three preferences that already drive
+  behaviour, so they no longer need hand-editing `preferences.toml`: **Autosave
+  projects** (on/off plus the interval in minutes, backed by
+  `autosave_seconds`), **Show the Tip of the Day**, and **Double-click a precomp
+  layer** (current tab / own tab, `PrecompOpen`). Each saves immediately through
+  `save_prefs`; the rows are covered by the search filter like Appearance.
+  `PrecompOpen` gained `ALL` / `label`, and the stale "edit preferences.toml"
+  note on `autosave_seconds` was removed. Tests: the behavior rows are
+  searchable and an autosave change round-trips. `fmt --check` and `clippy
+  -p voxy-ui -p voxy-app --all-targets -D warnings` clean; 305 `voxy-ui` tests
+  pass and `voxy-app` builds.
 
-- **First behavior prefs** (default still seconds, new-layer placement/length,
-  snapping, confirmations) surfaced in the dialog.
+**U-E complete** (steps 1–6): a versioned, migrating, forward-compatible
+preferences store; an `[appearance]` section with per-key tolerant parsing; a
+searchable Settings dialog (Edit ▸ Settings…); theme, interface scale and
+timeline density applied live without a restart; and a Behavior section for the
+first behaviour preferences. CI to be reported per job, then a PR into `main`
+(not merged without the owner).
+
+### Deferred to later U-E-area work (design §5, not yet built)
+
+- Apply the **accent colour** live (today it is stored and editable but the
+  interface still uses the `const` violet; making it live is a cross-module
+  change) and apply **font size**.
+- The remaining `[behavior]` fields: default still-image duration, new-layer
+  placement / length, a snapping default (today Shift toggles snapping),
+  confirmations, and "new composition opens in a tab".
 
 ## Next, in order (UX overhaul)
 

@@ -25,6 +25,17 @@ pub enum PrecompOpen {
     OwnTab,
 }
 
+impl PrecompOpen {
+    /// Both options, in display order (for the Settings dialog).
+    pub const ALL: [PrecompOpen; 2] = [PrecompOpen::CurrentTab, PrecompOpen::OwnTab];
+    pub fn label(self) -> &'static str {
+        match self {
+            PrecompOpen::CurrentTab => "In the current tab",
+            PrecompOpen::OwnTab => "In its own tab",
+        }
+    }
+}
+
 /// A composition preset the user saved. Built-in presets live in code.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UserPreset {
@@ -328,8 +339,7 @@ pub struct Preferences {
     pub easing_presets: Vec<EasingPreset>,
     pub comp_dialog: DialogMemory,
     /// How long after the first unsaved edit the project is autosaved, in
-    /// seconds; `0` turns autosave off. There is no settings dialog yet:
-    /// edit `preferences.toml`.
+    /// seconds; `0` turns autosave off. Editable in Settings ▸ Behavior.
     pub autosave_seconds: u32,
     /// Show the Tip of the Day on the empty-state screen (Window > Show
     /// Tips).

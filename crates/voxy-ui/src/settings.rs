@@ -9,7 +9,7 @@
 
 use egui::{Align, Context, Id, Layout, Modal};
 
-use crate::prefs::{FontSize, Theme, TimelineDensity, UiScale};
+use crate::prefs::{FontSize, PrecompOpen, Theme, TimelineDensity, UiScale};
 use crate::state::EditorState;
 
 /// The dialog's own state.
@@ -57,7 +57,9 @@ pub fn show(ctx: &Context, state: &mut EditorState) {
         egui::ScrollArea::vertical()
             .max_height((ctx.content_rect().height() - 200.0).clamp(160.0, 460.0))
             .show(ui, |ui| {
-                if appearance_section(ui, state, &dialog.filter) {
+                let mut changed = appearance_section(ui, state, &dialog.filter);
+                changed |= behavior_section(ui, state, &dialog.filter);
+                if changed {
                     state.save_prefs();
                 }
             });
@@ -174,6 +176,86 @@ fn appearance_section(ui: &mut egui::Ui, state: &mut EditorState, filter: &str) 
     changed
 }
 
+/// Draws the Behavior rows that match `filter`. Returns `true` on a change.
+/// These surface preferences that already drive behaviour today: autosave,
+/// the Tip of the Day, and what double-clicking a precomp layer does.
+fn behavior_section(ui: &mut egui::Ui, state: &mut EditorState, filter: &str) -> bool {
+    const AUTOSAVE: &str = "Autosave";
+    const TIPS: &str = "Show Tip of the Day";
+    const PRECOMP: &str = "Double-click a precomp layer";
+
+    if ![AUTOSAVE, TIPS, PRECOMP]
+        .iter()
+        .any(|label| matches(filter, label))
+    {
+        return false;
+    }
+
+    ui.add_space(8.0);
+    ui.label(egui::RichText::new("Behavior").strong());
+    ui.add_space(2.0);
+
+    let mut changed = false;
+    let p = &mut state.prefs;
+
+    if matches(filter, AUTOSAVE) {
+        ui.horizontal(|ui| {
+            let mut on = p.autosave_seconds > 0;
+            if ui.checkbox(&mut on, "Autosave projects").changed() {
+                p.autosave_seconds = if on {
+                    crate::prefs::DEFAULT_AUTOSAVE_SECONDS
+                } else {
+                    0
+                };
+                changed = true;
+            }
+            if p.autosave_seconds > 0 {
+                ui.label("every");
+                let mut minutes = (f64::from(p.autosave_seconds) / 60.0).round().max(1.0) as u32;
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut minutes)
+                            .range(1..=60)
+                            .suffix(" min"),
+                    )
+                    .changed()
+                {
+                    p.autosave_seconds = minutes * 60;
+                    changed = true;
+                }
+            }
+        });
+    }
+
+    if matches(filter, TIPS)
+        && ui
+            .checkbox(
+                &mut p.show_tips,
+                "Show the Tip of the Day on the start screen",
+            )
+            .changed()
+    {
+        changed = true;
+    }
+
+    if matches(filter, PRECOMP) {
+        ui.horizontal(|ui| {
+            ui.label(PRECOMP);
+            egui::ComboBox::from_id_salt("settings-precomp")
+                .selected_text(p.precomp_double_click.label())
+                .show_ui(ui, |ui| {
+                    for mode in PrecompOpen::ALL {
+                        changed |= ui
+                            .selectable_value(&mut p.precomp_double_click, mode, mode.label())
+                            .changed();
+                    }
+                });
+        });
+    }
+
+    changed
+}
+
 #[cfg(test)]
 mod tests {
     use egui::{Context, RawInput, Rect};
@@ -209,6 +291,28 @@ mod tests {
         assert_eq!(hex_to_rgb("#112233"), [0x11, 0x22, 0x33]);
         assert_eq!(hex_to_rgb("nonsense"), [0x7C, 0x5C, 0xFF]);
         assert_eq!(hex_to_rgb("#12"), [0x7C, 0x5C, 0xFF]);
+    }
+
+    #[test]
+    fn behavior_rows_are_searchable() {
+        assert!(matches("autosave", "Autosave"));
+        assert!(matches("TIP", "Show Tip of the Day"));
+        assert!(!matches("theme", "Autosave"));
+    }
+
+    #[test]
+    fn a_behavior_change_persists() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("prefs.toml");
+        let mut state = EditorState::new(voxy_core::Document::empty("t"));
+        state.prefs_path = Some(path.clone());
+        state.prefs.autosave_seconds = 0;
+        state.save_prefs();
+        assert_eq!(
+            crate::prefs::Preferences::load_from(&path).autosave_seconds,
+            0,
+            "autosave off round-trips through Behavior"
+        );
     }
 
     #[test]
