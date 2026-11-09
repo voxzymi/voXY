@@ -1075,12 +1075,27 @@ U-E has merged by then, else stacked on U-E).
   dropped alone. `fmt --check` and `clippy -p voxy-ui --all-targets -D warnings`
   clean; 308 `voxy-ui` tests pass.
 
+- **U-F step 2: workspaces wired into the app (plan a, switching).** On
+  startup the app applies the **active** workspace's layout (`restore_workspace`,
+  falling back to the default when the active one is missing or unsound). The
+  Window menu gains a **Workspace** switcher (radio list of Edit / Effects /
+  Animate / Minimal) above the panel-focus list; switching applies that
+  workspace and makes it active. Dragging panels now auto-saves the live
+  arrangement into the **active** workspace (replacing the old single
+  `dock_layout`), and **Reset Layout** resets the active workspace to its
+  built-in arrangement. A **v1 → v2 migration** folds any legacy `dock_layout`
+  into the Edit workspace so upgrading users keep their arrangement.
+  (Per-project `ui_state` layout and Save-as / Rename / Delete come next.)
+  Tests: `restore_workspace` uses the active workspace and falls back when it is
+  missing; a legacy `dock_layout` migrates into the Edit workspace. `fmt
+  --check` and `clippy -p voxy-ui -p voxy-app --all-targets -D warnings` clean;
+  310 `voxy-ui` tests pass and `voxy-app` builds.
+
 ### U-F remaining steps (plan)
 
-a. **Named workspaces (wiring).** Apply the active workspace on startup; switch
-   from the Window menu; Save, Rename, Delete; Reset Layout (exists).
-   Workspaces are **global preferences**; **per-project layout stays in
-   `ui_state`** and wins on open when present.
+a. **Named workspaces (manage).** Save-as-new, Rename, Delete workspaces; and
+   **per-project layout in `ui_state`** winning over the active workspace on
+   open when present. (Switching / apply / Reset Layout done in step 2.)
 b. **Window menu: close and reopen every panel.** Today the menu only focuses
    an open panel; closed panels cannot be brought back. Let each panel be
    closed and reopened (egui_dock already supports close/float/tab).

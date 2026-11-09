@@ -16,6 +16,18 @@ use crate::viewport::ViewportRenderer;
 /// Product name, exactly as it must appear to users.
 pub const PRODUCT_NAME: &str = "voXY";
 
+/// The dock state for the active workspace, falling back to the default
+/// arrangement when the active one is missing or its saved layout is unsound.
+fn restore_workspace(prefs: &crate::prefs::Preferences) -> DockState<Tab> {
+    let layout = prefs
+        .workspaces
+        .list
+        .iter()
+        .find(|w| w.name == prefs.workspaces.active)
+        .map(|w| w.layout.as_str());
+    crate::layout::restore(layout)
+}
+
 /// Actions that discard the current document and therefore ask first if it
 /// has unsaved changes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -93,7 +105,7 @@ impl VoxyApp {
         } else {
             state.offer_orphaned_recovery();
         }
-        let dock = crate::layout::restore(state.prefs.dock_layout.as_deref());
+        let dock = restore_workspace(&state.prefs);
         VoxyApp {
             saved_layout: crate::layout::to_text(&dock),
             layout_dirty: false,
@@ -140,10 +152,40 @@ impl VoxyApp {
             return;
         };
         if self.saved_layout.as_deref() != Some(text.as_str()) {
-            self.state.prefs.dock_layout = Some(text.clone());
-            self.state.save_prefs();
+            // The live arrangement belongs to the active workspace.
+            let active = self.state.prefs.workspaces.active.clone();
+            if let Some(ws) = self
+                .state
+                .prefs
+                .workspaces
+                .list
+                .iter_mut()
+                .find(|w| w.name == active)
+            {
+                ws.layout.clone_from(&text);
+                self.state.save_prefs();
+            }
             self.saved_layout = Some(text);
         }
+    }
+
+    /// Switches to the workspace `name`: applies its layout and makes it
+    /// active.
+    fn apply_workspace(&mut self, name: &str) {
+        let Some(ws) = self
+            .state
+            .prefs
+            .workspaces
+            .list
+            .iter()
+            .find(|w| w.name == name)
+        else {
+            return;
+        };
+        self.dock = crate::layout::restore(Some(&ws.layout));
+        self.saved_layout = crate::layout::to_text(&self.dock);
+        name.clone_into(&mut self.state.prefs.workspaces.active);
+        self.state.save_prefs();
     }
 
     /// Applies the live appearance preferences to the egui context each frame,
@@ -302,6 +344,23 @@ impl VoxyApp {
                 }
             });
             ui.menu_button("Window", |ui| {
+                ui.label(RichText::new("Workspace").weak());
+                let active = self.state.prefs.workspaces.active.clone();
+                let names: Vec<String> = self
+                    .state
+                    .prefs
+                    .workspaces
+                    .list
+                    .iter()
+                    .map(|w| w.name.clone())
+                    .collect();
+                for name in names {
+                    if ui.radio(active == name, &name).clicked() && active != name {
+                        self.apply_workspace(&name);
+                        ui.close();
+                    }
+                }
+                ui.separator();
                 for tab in Tab::ALL {
                     if ui.button(tab.title()).clicked() {
                         if let Some(path) = self.dock.find_tab(&tab) {
@@ -332,7 +391,12 @@ impl VoxyApp {
                     self.state.save_prefs();
                 }
                 if ui.button("Reset Layout").clicked() {
-                    self.dock = default_layout();
+                    // Reset the active workspace to its built-in arrangement.
+                    let active = self.state.prefs.workspaces.active.clone();
+                    self.dock = crate::panels::builtin_workspaces()
+                        .into_iter()
+                        .find(|(name, _)| *name == active)
+                        .map_or_else(default_layout, |(_, dock)| dock);
                     self.layout_dirty = true;
                     ui.close();
                 }
@@ -613,4 +677,31 @@ fn clock_seed() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_nanos() as u64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::prefs::Preferences;
+
+    #[test]
+    fn restore_uses_the_active_workspace_and_falls_back_when_missing() {
+        let mut prefs = Preferences::default();
+        // The default active workspace is Edit (the default arrangement).
+        let edit = restore_workspace(&prefs);
+        assert!(crate::layout::sound(&edit));
+        assert_eq!(
+            crate::layout::to_text(&edit).unwrap(),
+            crate::layout::to_text(&default_layout()).unwrap(),
+        );
+        // Switching the active workspace restores its arrangement.
+        prefs.workspaces.active = "Minimal".to_owned();
+        assert_eq!(
+            crate::layout::to_text(&restore_workspace(&prefs)).unwrap(),
+            crate::layout::to_text(&crate::panels::minimal_layout()).unwrap(),
+        );
+        // An unknown active workspace falls back to a sound default.
+        prefs.workspaces.active = "Nope".to_owned();
+        assert!(crate::layout::sound(&restore_workspace(&prefs)));
+    }
 }

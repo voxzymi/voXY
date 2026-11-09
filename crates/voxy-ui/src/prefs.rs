@@ -109,7 +109,10 @@ pub const DEFAULT_AUTOSAVE_SECONDS: u32 = 60;
 /// The current preferences schema version. Bump it when the on-disk shape
 /// changes in a way older files need help with, and add a step to
 /// [`Preferences::migrate`] (design §5).
-pub const CURRENT_PREFS_VERSION: u32 = 1;
+///
+/// - v2 introduced `[workspaces]`; a legacy single `dock_layout` is folded
+///   into the Edit workspace.
+pub const CURRENT_PREFS_VERSION: u32 = 2;
 
 /// Schema bookkeeping. `version` gates migration of older files.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -523,22 +526,30 @@ impl Preferences {
     /// Brings a freshly parsed file up to the current schema. Runs after a
     /// successful parse; future schema changes add a step here (design §5).
     fn migrate(&mut self) {
-        match self.meta.version {
-            // Written before versioning existed: nothing has moved yet, so
-            // adopting the current version is all that is needed.
-            0 => self.meta.version = CURRENT_PREFS_VERSION,
-            // From a newer build: load the settings this build understands and
-            // leave the recorded version alone, so the newer build still
-            // recognises its own file. (Keys this build does not know are not
-            // yet preserved across a save — that is the next U-E step.)
-            v if v > CURRENT_PREFS_VERSION => {
-                tracing::warn!(
-                    "preferences.toml is version {v}, newer than this build (v{CURRENT_PREFS_VERSION}); \
-                     loading the settings this build understands"
-                );
+        // Written before versioning existed: treat as the v1 baseline before
+        // the stepwise migrations below run.
+        if self.meta.version == 0 {
+            self.meta.version = 1;
+        }
+        // v2 introduced `[workspaces]`. Fold a legacy single dock layout into
+        // the Edit workspace so an upgrading user keeps their arrangement.
+        if self.meta.version < 2 {
+            if let Some(layout) = self.dock_layout.take()
+                && let Some(edit) = self.workspaces.list.iter_mut().find(|w| w.name == "Edit")
+            {
+                edit.layout = layout;
             }
-            // The current version, or a known older one a future step migrates.
-            _ => {}
+            self.meta.version = 2;
+        }
+        // From a newer build: load the settings this build understands and
+        // leave the recorded version alone, so the newer build still
+        // recognises its own file. (Unknown keys are preserved separately.)
+        if self.meta.version > CURRENT_PREFS_VERSION {
+            tracing::warn!(
+                "preferences.toml is version {}, newer than this build (v{CURRENT_PREFS_VERSION}); \
+                 loading the settings this build understands",
+                self.meta.version
+            );
         }
     }
 
@@ -839,9 +850,34 @@ mod tests {
         assert_eq!(loaded, p);
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(
-            text.contains("[meta]") && text.contains("version = 1"),
+            text.contains("[meta]") && text.contains(&format!("version = {CURRENT_PREFS_VERSION}")),
             "the version is written to the file:\n{text}"
         );
+    }
+
+    #[test]
+    fn a_legacy_dock_layout_moves_into_the_edit_workspace() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("p.toml");
+        let legacy = crate::layout::to_text(&crate::panels::minimal_layout()).unwrap();
+        let mut old = Preferences::default();
+        old.meta.version = 1;
+        old.dock_layout = Some(legacy.clone());
+        old.save_to(&path).unwrap();
+
+        let loaded = Preferences::load_from(&path);
+        assert_eq!(loaded.meta.version, CURRENT_PREFS_VERSION);
+        assert!(
+            loaded.dock_layout.is_none(),
+            "the legacy layout was consumed"
+        );
+        let edit = loaded
+            .workspaces
+            .list
+            .iter()
+            .find(|w| w.name == "Edit")
+            .expect("the Edit workspace");
+        assert_eq!(edit.layout, legacy, "it became the Edit workspace layout");
     }
 
     #[test]
