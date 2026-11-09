@@ -326,6 +326,44 @@ where
     }
 }
 
+/// A named dock layout (design §6). Workspaces are **global** preferences;
+/// per-project layout stays in `ui_state`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Workspace {
+    pub name: String,
+    /// The dock arrangement as `layout.rs` text.
+    pub layout: String,
+}
+
+/// The saved workspaces and which one is active.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Workspaces {
+    /// The name of the workspace currently applied.
+    pub active: String,
+    /// All workspaces, in menu order. One unreadable entry is dropped alone.
+    #[serde(deserialize_with = "lenient_list")]
+    pub list: Vec<Workspace>,
+}
+
+impl Default for Workspaces {
+    fn default() -> Self {
+        let list = crate::panels::builtin_workspaces()
+            .into_iter()
+            .filter_map(|(name, dock)| {
+                crate::layout::to_text(&dock).map(|layout| Workspace {
+                    name: name.to_owned(),
+                    layout,
+                })
+            })
+            .collect();
+        Workspaces {
+            active: "Edit".to_owned(),
+            list,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Preferences {
@@ -333,6 +371,8 @@ pub struct Preferences {
     pub meta: Meta,
     /// Appearance: theme, accent, scale, font size, timeline density.
     pub appearance: Appearance,
+    /// Named dock layouts and the active one (design §6).
+    pub workspaces: Workspaces,
     pub user_presets: Vec<UserPreset>,
     /// Saved keyframe easings, shown in the graph editor's preset strip.
     #[serde(deserialize_with = "lenient_list")]
@@ -395,6 +435,7 @@ impl Default for Preferences {
                 version: CURRENT_PREFS_VERSION,
             },
             appearance: Appearance::default(),
+            workspaces: Workspaces::default(),
             user_presets: Vec::new(),
             easing_presets: Vec::new(),
             comp_dialog: DialogMemory::default(),
@@ -879,6 +920,41 @@ mod tests {
         p.appearance.timeline_density = TimelineDensity::Compact;
         p.save_to(&path).unwrap();
         assert_eq!(Preferences::load_from(&path), p);
+    }
+
+    #[test]
+    fn workspaces_default_to_the_four_built_ins_and_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("p.toml");
+        let p = Preferences::default();
+        let names: Vec<&str> = p.workspaces.list.iter().map(|w| w.name.as_str()).collect();
+        assert_eq!(names, ["Edit", "Effects", "Animate", "Minimal"]);
+        assert_eq!(p.workspaces.active, "Edit");
+        for w in &p.workspaces.list {
+            assert!(
+                crate::layout::from_text(&w.layout).is_some(),
+                "{} is a sound layout",
+                w.name
+            );
+        }
+        p.save_to(&path).unwrap();
+        assert_eq!(Preferences::load_from(&path), p);
+    }
+
+    #[test]
+    fn a_bad_workspace_entry_is_dropped_alone() {
+        // The second entry is missing its `layout`, so only it is dropped.
+        let text = "[workspaces]\n\
+             active = \"Mine\"\n\
+             [[workspaces.list]]\n\
+             name = \"Mine\"\n\
+             layout = \"{}\"\n\
+             [[workspaces.list]]\n\
+             name = \"Broken\"\n";
+        let p = Preferences::parse(text);
+        assert_eq!(p.workspaces.active, "Mine");
+        let names: Vec<&str> = p.workspaces.list.iter().map(|w| w.name.as_str()).collect();
+        assert_eq!(names, ["Mine"]);
     }
 
     #[test]

@@ -149,6 +149,16 @@ mod tests {
     }
 
     #[test]
+    fn every_built_in_workspace_is_sound_and_round_trips() {
+        for (name, dock) in crate::panels::builtin_workspaces() {
+            assert!(sound(&dock), "{name} is sound");
+            let text = to_text(&dock).unwrap();
+            let back = from_text(&text).unwrap_or_else(|| panic!("{name} reads back"));
+            assert_eq!(to_text(&back).unwrap(), text, "{name} round-trips");
+        }
+    }
+
+    #[test]
     fn the_saved_text_has_no_per_frame_rectangles() {
         let text = to_text(&default_layout()).unwrap();
         for volatile in VOLATILE {

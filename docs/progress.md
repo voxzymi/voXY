@@ -1053,16 +1053,34 @@ first behaviour preferences. CI to be reported per job, then a PR into `main`
   placement / length, a snapping default (today Shift toggles snapping),
   confirmations, and "new composition opens in a tab".
 
-## U-F: customizable layout (next, not started)
+## U-F: customizable layout (in progress)
 
-Planned for after the owner says "start U-F". Design §5–§6. Small steps, push
-after each, CI per job once at the end, one PR into `main` when green.
+Branch `claude/uf-layout`, started from the U-E branch tip (U-F builds on
+U-E's preferences code and U-E is not yet merged). Design §5–§6. Small steps,
+push after each, CI per job once at the end, one PR when green (into `main` if
+U-E has merged by then, else stacked on U-E).
 
-a. **Named workspaces.** Edit, Effects, Animate, Minimal (voXY's own names and
-   arrangements). Switch from the Window menu; Save, Rename, Delete; Reset
-   Layout (exists). Workspaces are **global preferences** (`preferences.toml`
-   `[workspaces]`, reusing `layout.rs` encode/decode + soundness check);
-   **per-project layout stays in `ui_state`** and wins on open when present.
+- **U-F step 1: workspace data model + built-in layouts (plan a, data only).**
+  `panels.rs` gains three new arrangements beside `default_layout` —
+  `effects_layout`, `animate_layout`, `minimal_layout` — each a distinct,
+  sound arrangement of **all** panels (the dock requires every panel exactly
+  once, so workspaces differ by arrangement, not by which panels are present).
+  `builtin_workspaces()` lists them in menu order: **Edit, Effects, Animate,
+  Minimal** (voXY's own names and layouts). `prefs.rs` gains `Workspace`
+  (`name` + `layout.rs` text) and `Workspaces` (`active` + a lenient `list`),
+  stored under `[workspaces]`; the default is the four built-ins with Edit
+  active. Not wired to the Window menu or startup yet — that is the next step.
+  Tests: every built-in layout is sound and round-trips; the workspace defaults
+  round-trip through the preferences file; one unreadable workspace entry is
+  dropped alone. `fmt --check` and `clippy -p voxy-ui --all-targets -D warnings`
+  clean; 308 `voxy-ui` tests pass.
+
+### U-F remaining steps (plan)
+
+a. **Named workspaces (wiring).** Apply the active workspace on startup; switch
+   from the Window menu; Save, Rename, Delete; Reset Layout (exists).
+   Workspaces are **global preferences**; **per-project layout stays in
+   `ui_state`** and wins on open when present.
 b. **Window menu: close and reopen every panel.** Today the menu only focuses
    an open panel; closed panels cannot be brought back. Let each panel be
    closed and reopened (egui_dock already supports close/float/tab).
