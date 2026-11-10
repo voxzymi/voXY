@@ -1117,10 +1117,20 @@ U-E has merged by then, else stacked on U-E).
   warnings` clean; 313 `voxy-ui` tests pass and `voxy-app` builds. **Plan a
   (workspaces) is complete.**
 
+- **U-F step 5: close and reopen every panel (plan b).** Panels now show a
+  close button and can be closed, except the last one (so the dock is never
+  empty — `Panels.closeable` is false when a single panel remains). A layout
+  is no longer required to contain every panel: `layout::sound` keeps the
+  no-duplicate and well-formed checks but accepts a missing panel as simply
+  closed, and the old auto-re-add (`ADDED_LATER` / `add_new_panels`) is gone.
+  The Window menu lists every panel with a tick for the open ones: clicking an
+  open panel focuses it, clicking a closed one reopens it (into the first
+  leaf). Tests: a closed panel is accepted and stays closed through a round
+  trip; the existing soundness / duplicate / broken-tree checks still hold.
+  `fmt --check` and `clippy -p voxy-ui -p voxy-app --all-targets -D warnings`
+  clean; 312 `voxy-ui` tests pass and `voxy-app` builds.
+
 ### U-F remaining steps (plan)
-b. **Window menu: close and reopen every panel.** Today the menu only focuses
-   an open panel; closed panels cannot be brought back. Let each panel be
-   closed and reopened (egui_dock already supports close/float/tab).
 c. **Interface level.** `[interface] level = simple | standard | advanced`
    (default standard), hiding professional-only options at lower levels.
 d. **Shortcut editor upgrades.** Search, conflict warnings, per-action reset,

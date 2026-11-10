@@ -45,29 +45,11 @@ pub fn from_text(text: &str) -> Option<DockState<Tab>> {
             return None;
         }
     };
-    let mut dock = dock;
-    add_new_panels(&mut dock);
     if sound(&dock) {
         Some(dock)
     } else {
         tracing::warn!("ignoring a dock layout that is not well formed");
         None
-    }
-}
-
-/// Panels newer than a saved layout join the Project panel's group, so a
-/// layout saved before they existed is kept. Without a Project panel the
-/// layout is not sound anyway and falls back to the default.
-fn add_new_panels(dock: &mut DockState<Tab>) {
-    for tab in Tab::ADDED_LATER {
-        if dock.find_tab(&tab).is_some() {
-            continue;
-        }
-        if let Some(path) = dock.find_tab(&Tab::Project)
-            && path.surface == egui_dock::SurfaceIndex::main()
-        {
-            dock.main_surface_mut()[path.node].append_tab(tab);
-        }
     }
 }
 
@@ -77,7 +59,8 @@ pub fn restore(saved: Option<&str>) -> DockState<Tab> {
 }
 
 /// Whether the layout is safe to show: one surface (no floating windows are
-/// offered), a well-formed tree, and each panel exactly once.
+/// offered), a well-formed tree, and no panel appearing twice. A panel may be
+/// absent — it is simply closed, and can be reopened from the Window menu.
 pub fn sound(dock: &DockState<Tab>) -> bool {
     if dock.iter_surfaces().count() != 1 {
         return false;
@@ -125,7 +108,7 @@ pub fn sound(dock: &DockState<Tab>) -> bool {
         }
         seen.push(*tab);
     }
-    Tab::ALL.iter().all(|t| seen.contains(t)) && seen.len() == Tab::ALL.len()
+    !seen.is_empty()
 }
 
 #[cfg(test)]
@@ -226,24 +209,21 @@ mod tests {
     }
 
     #[test]
-    fn a_layout_saved_before_a_new_panel_gets_it_next_to_the_project_panel() {
-        let mut old = default_layout();
-        let at = old.find_tab(&Tab::Effects).unwrap();
-        old.remove_tab(at);
-        let text = to_text(&old).unwrap();
-        let back = from_text(&text).expect("kept, not refused");
-        let effects = back.find_tab(&Tab::Effects).unwrap();
-        let project = back.find_tab(&Tab::Project).unwrap();
-        assert_eq!(effects.node, project.node, "same group");
-    }
-
-    #[test]
-    fn a_missing_panel_is_refused() {
+    fn a_closed_panel_is_accepted_and_stays_closed() {
+        // Closing a panel removes it from the layout; the layout stays sound
+        // and the panel is not silently re-added (it reopens from the Window
+        // menu).
         let mut dock = default_layout();
-        let at = dock.find_tab(&Tab::Project).unwrap();
-        dock.main_surface_mut().remove_tab((at.node, at.tab));
-        assert!(!sound(&dock));
-        assert!(from_text(&serde_json::to_string(&dock).unwrap()).is_none());
+        let at = dock.find_tab(&Tab::Effects).unwrap();
+        dock.remove_tab(at);
+        assert!(sound(&dock), "a missing panel is just closed");
+        let text = to_text(&dock).unwrap();
+        let back = from_text(&text).expect("accepted, not refused");
+        assert!(
+            back.find_tab(&Tab::Effects).is_none(),
+            "Effects stays closed"
+        );
+        assert!(back.find_tab(&Tab::Project).is_some());
     }
 
     /// The array of nodes inside the saved text of the default layout.

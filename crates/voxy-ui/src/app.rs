@@ -499,10 +499,16 @@ impl VoxyApp {
                     ui.close();
                 }
                 ui.separator();
+                // A ticked panel is open: clicking focuses it. An unticked one
+                // is closed: clicking reopens it.
                 for tab in Tab::ALL {
-                    if ui.button(tab.title()).clicked() {
+                    let open = self.dock.find_tab(&tab).is_some();
+                    if ui.selectable_label(open, tab.title()).clicked() {
                         if let Some(path) = self.dock.find_tab(&tab) {
                             let _ = self.dock.set_active_tab(path);
+                        } else {
+                            self.dock.push_to_first_leaf(tab);
+                            self.layout_dirty = true;
                         }
                         ui.close();
                     }
@@ -799,11 +805,13 @@ impl eframe::App for VoxyApp {
             let mut panels = Panels {
                 state: &mut self.state,
                 viewport: self.viewport.as_mut(),
+                // The last panel cannot be closed, so the dock is never empty.
+                closeable: self.dock.iter_all_tabs().count() > 1,
             };
             DockArea::new(&mut self.dock)
                 .style(egui_dock::Style::from_egui(ui.style().as_ref()))
                 .show_leaf_close_all_buttons(false)
-                .show_close_buttons(false)
+                .show_close_buttons(true)
                 .show_inside(ui, &mut panels);
         });
 

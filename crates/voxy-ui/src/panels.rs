@@ -42,10 +42,6 @@ impl Tab {
         Tab::Effects,
     ];
 
-    /// Panels added after layouts were first saved. A saved layout without
-    /// them gets them next to the Project panel instead of being refused.
-    pub const ADDED_LATER: [Tab; 1] = [Tab::Effects];
-
     pub(crate) fn title(self) -> &'static str {
         match self {
             Tab::Viewport => "Viewport",
@@ -145,6 +141,9 @@ pub fn builtin_workspaces() -> Vec<(&'static str, egui_dock::DockState<Tab>)> {
 pub struct Panels<'a> {
     pub state: &'a mut EditorState,
     pub viewport: Option<&'a mut ViewportRenderer>,
+    /// Whether panels show a close button. False when only one panel remains,
+    /// so the last panel cannot be closed.
+    pub closeable: bool,
 }
 
 impl TabViewer for Panels<'_> {
@@ -159,9 +158,9 @@ impl TabViewer for Panels<'_> {
     }
 
     fn is_closeable(&self, _tab: &Tab) -> bool {
-        // Panels cannot be reopened yet (Window menu arrives later), so keep
-        // them all docked somewhere.
-        false
+        // Any panel can be closed (and reopened from the Window menu), except
+        // the last one, so the dock is never left empty.
+        self.closeable
     }
 
     fn ui(&mut self, ui: &mut Ui, tab: &mut Tab) {
