@@ -1123,6 +1123,38 @@ impl EditorState {
         self.save_prefs();
     }
 
+    /// Writes the current keymap (only what differs from the defaults) to a
+    /// file the user picks. Returns `None` if they cancelled, else the result.
+    pub fn export_keymap(&mut self) -> Option<Result<std::path::PathBuf, String>> {
+        let path = self.dialogs.export_keymap()?;
+        let saved = self.keymap.to_saved();
+        let result = toml::to_string_pretty(&saved)
+            .map_err(|e| e.to_string())
+            .and_then(|text| std::fs::write(&path, text).map_err(|e| e.to_string()))
+            .map(|()| path);
+        Some(result)
+    }
+
+    /// Replaces the keymap with one read from a file the user picks, saving it
+    /// to the preferences. Returns `None` if they cancelled, else the number of
+    /// actions the file rebound (or an error).
+    pub fn import_keymap(&mut self) -> Option<Result<usize, String>> {
+        let path = self.dialogs.import_keymap()?;
+        let result = std::fs::read_to_string(&path)
+            .map_err(|e| e.to_string())
+            .and_then(|text| {
+                toml::from_str::<std::collections::BTreeMap<String, Vec<String>>>(&text)
+                    .map_err(|e| e.to_string())
+            })
+            .map(|saved| {
+                self.keymap.reset_all();
+                let applied = self.keymap.load_saved(&saved);
+                self.save_shortcuts();
+                applied
+            });
+        Some(result)
+    }
+
     /// Saves `effects` as the effect preset called `name`, replacing one of
     /// the same name, and writes the presets file.
     pub fn save_effect_preset(&mut self, name: &str, effects: Vec<voxy_core::EffectInstance>) {
@@ -3827,6 +3859,53 @@ mod tests {
             t.pending_layout.as_deref(),
             Some("{\"dock\":\"text\"}"),
             "the project's layout is offered for the app to apply"
+        );
+    }
+
+    #[test]
+    fn a_keymap_exports_and_imports_through_a_file() {
+        use crate::actions::{Action, shortcut_from_text};
+
+        #[derive(Debug)]
+        struct KeymapFile(std::path::PathBuf);
+        impl crate::dialogs::Dialogs for KeymapFile {
+            fn pick_media(&self) -> Vec<std::path::PathBuf> {
+                Vec::new()
+            }
+            fn pick_relink(&self) -> Option<std::path::PathBuf> {
+                None
+            }
+            fn open_project(&self) -> Option<std::path::PathBuf> {
+                None
+            }
+            fn save_project(&self, _: &str) -> Option<std::path::PathBuf> {
+                None
+            }
+            fn export_keymap(&self) -> Option<std::path::PathBuf> {
+                Some(self.0.clone())
+            }
+            fn import_keymap(&self) -> Option<std::path::PathBuf> {
+                Some(self.0.clone())
+            }
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("km.toml");
+        let custom = shortcut_from_text("Ctrl+Alt+Q").unwrap();
+
+        let mut s = EditorState::new(Document::empty("t"));
+        s.dialogs = Box::new(KeymapFile(path.clone()));
+        s.keymap.set(Action::FileSave, vec![custom]);
+        assert!(matches!(s.export_keymap(), Some(Ok(_))));
+        assert!(path.exists(), "the keymap file was written");
+
+        let mut t = EditorState::new(Document::empty("t"));
+        t.dialogs = Box::new(KeymapFile(path));
+        let applied = t.import_keymap().expect("not cancelled").expect("read ok");
+        assert!(applied >= 1);
+        assert!(
+            t.keymap.bindings(Action::FileSave).contains(&custom),
+            "the imported shortcut is in effect"
         );
     }
 

@@ -28,7 +28,18 @@ pub trait Dialogs: Debug + Send {
     }
     fn open_project(&self) -> Option<PathBuf>;
     fn save_project(&self, file_name: &str) -> Option<PathBuf>;
+    /// Where to write an exported keymap (Keyboard Shortcuts ▸ Export).
+    fn export_keymap(&self) -> Option<PathBuf> {
+        None
+    }
+    /// A keymap file to import (Keyboard Shortcuts ▸ Import).
+    fn import_keymap(&self) -> Option<PathBuf> {
+        None
+    }
 }
+
+/// File extension of an exported voXY keymap.
+pub const KEYMAP_EXTENSION: &str = "toml";
 
 /// The operating system's dialogs.
 #[derive(Debug, Default)]
@@ -79,6 +90,21 @@ impl Dialogs for NativeDialogs {
 
     fn save_project(&self, file_name: &str) -> Option<PathBuf> {
         project_dialog().set_file_name(file_name).save_file()
+    }
+
+    fn export_keymap(&self) -> Option<PathBuf> {
+        rfd::FileDialog::new()
+            .set_title("Export Keymap")
+            .add_filter("voXY keymap", &[KEYMAP_EXTENSION])
+            .set_file_name(format!("voxy-keymap.{KEYMAP_EXTENSION}"))
+            .save_file()
+    }
+
+    fn import_keymap(&self) -> Option<PathBuf> {
+        rfd::FileDialog::new()
+            .set_title("Import Keymap")
+            .add_filter("voXY keymap", &[KEYMAP_EXTENSION])
+            .pick_file()
     }
 }
 

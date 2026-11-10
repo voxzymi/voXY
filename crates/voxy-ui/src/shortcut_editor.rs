@@ -143,6 +143,33 @@ pub fn show(ctx: &Context, state: &mut EditorState) {
                 editor.notice = Some("Every shortcut is back to its default.".to_owned());
                 editor.capturing = None;
             }
+            if ui.button("Import…").clicked()
+                && let Some(result) = state.import_keymap()
+            {
+                editor.capturing = None;
+                editor.notice = Some(match result {
+                    Ok(n) => {
+                        let conflicts = state.keymap.conflicts();
+                        if conflicts.is_empty() {
+                            format!("Imported {n} shortcuts.")
+                        } else {
+                            format!(
+                                "Imported {n} shortcuts; {} now conflict — see the highlighted rows.",
+                                conflicts.len()
+                            )
+                        }
+                    }
+                    Err(e) => format!("Could not import the keymap: {e}"),
+                });
+            }
+            if ui.button("Export…").clicked()
+                && let Some(result) = state.export_keymap()
+            {
+                editor.notice = Some(match result {
+                    Ok(path) => format!("Exported the keymap to {}.", path.display()),
+                    Err(e) => format!("Could not export the keymap: {e}"),
+                });
+            }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if ui.button("Done").clicked() {
                     close = true;

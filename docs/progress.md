@@ -1154,9 +1154,20 @@ U-E has merged by then, else stacked on U-E).
   conflicts. `fmt --check` and `clippy -p voxy-ui -p voxy-app --all-targets -D
   warnings` clean; 315 `voxy-ui` tests pass and `voxy-app` builds.
 
+- **U-F step 8: shortcut keymap import / export (plan d, part 2 — plan d
+  complete).** The `Dialogs` trait gains `export_keymap` / `import_keymap`
+  file pickers (native TOML; `None` by default so headless tests are
+  unaffected). `EditorState::export_keymap` writes the current overrides (only
+  what differs from the defaults) as TOML; `import_keymap` resets to defaults,
+  loads the file's bindings, saves to preferences, and the dialog reports how
+  many were applied — warning, via `Keymap::conflicts`, when the imported map
+  introduces clashes. **Import…** and **Export…** buttons sit in the Keyboard
+  Shortcuts dialog. Test: a rebound keymap exports to a file and imports into a
+  fresh state with the binding intact. `fmt --check` and `clippy -p voxy-ui
+  -p voxy-app --all-targets -D warnings` clean; 316 `voxy-ui` tests pass and
+  `voxy-app` builds. **Plan d (shortcut-editor upgrades) is complete.**
+
 ### U-F remaining steps (plan)
-d. **Shortcut editor: keymap import / export** (part 2; presets and the
-   existing search / conflict notices / per-action reset are done).
 e. **Live accent colour** — only if it needs no large refactor; today `ACCENT`
    is a `const` used across many modules, so this is contingent, not committed.
 
