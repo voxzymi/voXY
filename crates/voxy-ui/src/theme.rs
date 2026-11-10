@@ -5,33 +5,51 @@ use egui::{Color32, Context, Visuals};
 
 use crate::prefs::Theme;
 
-/// voXY violet.
+/// voXY violet: the default accent and the colour bespoke-painted accents use.
 pub const ACCENT: Color32 = Color32::from_rgb(124, 92, 255);
 
-/// Applies the accent to a base `Visuals` (selection, links, hover).
-fn accented(mut visuals: Visuals) -> Visuals {
-    visuals.selection.bg_fill = ACCENT.linear_multiply(0.6);
-    visuals.selection.stroke.color = ACCENT;
-    visuals.hyperlink_color = ACCENT;
-    visuals.widgets.hovered.bg_stroke.color = ACCENT.linear_multiply(0.8);
+/// Parses a `#RRGGBB` accent preference into a colour, falling back to the
+/// voXY violet [`ACCENT`] on anything unexpected.
+pub fn accent_color(hex: &str) -> Color32 {
+    if hex.len() == 7
+        && hex.starts_with('#')
+        && let (Ok(r), Ok(g), Ok(b)) = (
+            u8::from_str_radix(&hex[1..3], 16),
+            u8::from_str_radix(&hex[3..5], 16),
+            u8::from_str_radix(&hex[5..7], 16),
+        )
+    {
+        return Color32::from_rgb(r, g, b);
+    }
+    ACCENT
+}
+
+/// Applies `accent` to a base `Visuals` (selection, links, hover).
+fn accented(mut visuals: Visuals, accent: Color32) -> Visuals {
+    visuals.selection.bg_fill = accent.linear_multiply(0.6);
+    visuals.selection.stroke.color = accent;
+    visuals.hyperlink_color = accent;
+    visuals.widgets.hovered.bg_stroke.color = accent.linear_multiply(0.8);
     visuals
 }
 
-/// Sets the interface visuals for `theme`. Called every frame from the
-/// appearance preference, so switching theme takes effect without a restart.
-pub fn apply(ctx: &Context, theme: Theme) {
+/// Sets the interface visuals for `theme`, tinting selection, links and hover
+/// with `accent`. Called every frame from the appearance preferences, so a
+/// theme or accent change takes effect without a restart. (Bespoke-painted
+/// accents still use the brand [`ACCENT`]; unifying those is a larger change.)
+pub fn apply(ctx: &Context, theme: Theme, accent: Color32) {
     let visuals = match theme {
-        Theme::Dark => accented(Visuals::dark()),
-        Theme::Light => accented(Visuals::light()),
-        Theme::HighContrast => high_contrast(),
+        Theme::Dark => accented(Visuals::dark(), accent),
+        Theme::Light => accented(Visuals::light(), accent),
+        Theme::HighContrast => high_contrast(accent),
     };
     ctx.set_visuals(visuals);
 }
 
 /// A dark base pushed to stronger contrast: near-black panels, white text and
 /// brighter, heavier strokes so edges read clearly.
-fn high_contrast() -> Visuals {
-    let mut visuals = accented(Visuals::dark());
+fn high_contrast(accent: Color32) -> Visuals {
+    let mut visuals = accented(Visuals::dark(), accent);
     visuals.override_text_color = Some(Color32::WHITE);
     visuals.panel_fill = Color32::from_gray(8);
     visuals.window_fill = Color32::from_gray(8);
@@ -59,7 +77,14 @@ mod tests {
     fn every_theme_applies_without_panic() {
         let ctx = Context::default();
         for theme in Theme::ALL {
-            apply(&ctx, theme);
+            apply(&ctx, theme, ACCENT);
         }
+    }
+
+    #[test]
+    fn accent_parses_or_falls_back() {
+        assert_eq!(accent_color("#112233"), Color32::from_rgb(0x11, 0x22, 0x33));
+        assert_eq!(accent_color("not a colour"), ACCENT);
+        assert_eq!(accent_color("#12"), ACCENT);
     }
 }

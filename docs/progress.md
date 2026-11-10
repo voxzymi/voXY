@@ -1053,7 +1053,7 @@ first behaviour preferences. CI to be reported per job, then a PR into `main`
   placement / length, a snapping default (today Shift toggles snapping),
   confirmations, and "new composition opens in a tab".
 
-## U-F: customizable layout (in progress)
+## U-F: customizable layout (complete)
 
 Branch `claude/uf-layout`, started from the U-E branch tip (U-F builds on
 U-E's preferences code and U-E is not yet merged). Design §5–§6. Small steps,
@@ -1167,9 +1167,29 @@ U-E has merged by then, else stacked on U-E).
   -p voxy-app --all-targets -D warnings` clean; 316 `voxy-ui` tests pass and
   `voxy-app` builds. **Plan d (shortcut-editor upgrades) is complete.**
 
-### U-F remaining steps (plan)
-e. **Live accent colour** — only if it needs no large refactor; today `ACCENT`
-   is a `const` used across many modules, so this is contingent, not committed.
+- **U-F step 9: live accent colour (plan e).** `theme::apply` now takes the
+  accent colour and tints the egui selection, link and hover visuals with it;
+  the app passes `theme::accent_color(&prefs.appearance.accent)` each frame, so
+  the accent chosen in Settings takes effect live. A full live accent would be
+  a large refactor (`ACCENT` is a `const` painted by hand in ~8 modules), which
+  the owner gated out — so bespoke-painted accents keep the brand violet and
+  this applies the accent only at the one global point, with no refactor.
+  Tests: `accent_color` parses `#RRGGBB` or falls back; every theme still
+  applies. `fmt --check` and `clippy -p voxy-ui -p voxy-app --all-targets -D
+  warnings` clean; 317 `voxy-ui` tests pass and `voxy-app` builds.
+
+**U-F complete** (steps 1–9): named global workspaces (built-ins, switching,
+Save / Rename / Delete, Reset Layout, v1→v2 migration) with per-project layout
+in `ui_state`; close & reopen every panel from the Window menu; an interface
+level that hides pro-only options; shortcut-editor upgrades (presets, keymap
+import / export, on top of the existing search / conflict notices / per-action
+reset); and a live accent at the global visuals. CI per job to follow, then one
+PR (not merged).
+
+### Deferred (noted, not in U-F)
+
+- Unifying the bespoke-painted accents (the `const ACCENT` call sites) so the
+  accent preference recolours the whole interface, not just the egui visuals.
 
 ## Next, in order (UX overhaul)
 

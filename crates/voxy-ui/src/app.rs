@@ -76,7 +76,11 @@ impl std::fmt::Debug for VoxyApp {
 
 impl VoxyApp {
     pub fn new(cc: &eframe::CreationContext<'_>, open: Option<PathBuf>) -> Self {
-        crate::theme::apply(&cc.egui_ctx, crate::prefs::Theme::default());
+        crate::theme::apply(
+            &cc.egui_ctx,
+            crate::prefs::Theme::default(),
+            crate::theme::ACCENT,
+        );
         let viewport = cc
             .wgpu_render_state
             .clone()
@@ -306,7 +310,11 @@ impl VoxyApp {
     /// the timeline draws its rows.
     fn apply_appearance(&self, ctx: &egui::Context) {
         let appearance = &self.state.prefs.appearance;
-        crate::theme::apply(ctx, appearance.theme);
+        crate::theme::apply(
+            ctx,
+            appearance.theme,
+            crate::theme::accent_color(&appearance.accent),
+        );
         let zoom = appearance.ui_scale.factor().unwrap_or(1.0);
         if (ctx.zoom_factor() - zoom).abs() > f32::EPSILON {
             ctx.set_zoom_factor(zoom);
