@@ -110,6 +110,20 @@ pub fn show(ctx: &Context, state: &mut EditorState) {
         ui.horizontal(|ui| {
             ui.label("Filter:");
             ui.text_edit_singleline(&mut editor.filter);
+            ui.separator();
+            ui.label("Preset:");
+            egui::ComboBox::from_id_salt("shortcut-preset")
+                .selected_text("Apply…")
+                .show_ui(ui, |ui| {
+                    for preset in crate::actions::KeymapPreset::ALL {
+                        if ui.button(preset.label()).clicked() {
+                            preset.apply(&mut state.keymap);
+                            state.save_shortcuts();
+                            editor.notice = Some(format!("Applied the {} keymap.", preset.label()));
+                            editor.capturing = None;
+                        }
+                    }
+                });
         });
         ui.add_space(4.0);
         egui::ScrollArea::vertical()

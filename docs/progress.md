@@ -1142,10 +1142,21 @@ U-E has merged by then, else stacked on U-E).
   -p voxy-app --all-targets -D warnings` clean; 314 `voxy-ui` tests pass and
   `voxy-app` builds.
 
+- **U-F step 7: shortcut keymap presets (plan d, part 1).** New
+  `KeymapPreset` (voXY default / After Effects style). voXY resets to the
+  built-in defaults; After Effects style layers a handful of AE shortcuts
+  (new solid `Ctrl+Y`, new adjustment `Ctrl+Alt+Y`, composition settings
+  `Ctrl+K`, remove all effects `Ctrl+Shift+E`, select all `Ctrl+A`) over the
+  defaults, each **assigned** so the result is conflict-free. A **Preset** combo
+  in the Keyboard Shortcuts dialog applies one. (Search, conflict notices and
+  per-action Reset already existed in that dialog.) Tests: applying voXY
+  restores defaults, After Effects sets its shortcut, and a preset leaves no
+  conflicts. `fmt --check` and `clippy -p voxy-ui -p voxy-app --all-targets -D
+  warnings` clean; 315 `voxy-ui` tests pass and `voxy-app` builds.
+
 ### U-F remaining steps (plan)
-d. **Shortcut editor upgrades.** Search, conflict warnings, per-action reset,
-   keymap import / export, and presets — a voXY default and an After-Effects-
-   style map. (Builds on the existing `shortcut_editor` and action table.)
+d. **Shortcut editor: keymap import / export** (part 2; presets and the
+   existing search / conflict notices / per-action reset are done).
 e. **Live accent colour** — only if it needs no large refactor; today `ACCENT`
    is a `const` used across many modules, so this is contingent, not committed.
 
