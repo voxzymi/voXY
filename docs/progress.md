@@ -1130,9 +1130,19 @@ U-E has merged by then, else stacked on U-E).
   `fmt --check` and `clippy -p voxy-ui -p voxy-app --all-targets -D warnings`
   clean; 312 `voxy-ui` tests pass and `voxy-app` builds.
 
+- **U-F step 6: interface level (plan c).** New `[interface] level` preference
+  (`InterfaceLevel`: simple / standard / advanced, default standard, lenient
+  parse) with a `shows_advanced()` helper (false only at Simple). The Settings
+  dialog gains an **Interface** section to choose the level. First pro-option
+  gated: the Composition Settings **Advanced** tab (pixel aspect, drop-frame,
+  resolution…) is hidden at the Simple level, which forces the Basic tab. More
+  options can be gated the same way incrementally. Tests: the level defaults to
+  Standard and a bad value falls back; `shows_advanced` is false only at Simple;
+  the comp dialog forces Basic at Simple. `fmt --check` and `clippy -p voxy-ui
+  -p voxy-app --all-targets -D warnings` clean; 314 `voxy-ui` tests pass and
+  `voxy-app` builds.
+
 ### U-F remaining steps (plan)
-c. **Interface level.** `[interface] level = simple | standard | advanced`
-   (default standard), hiding professional-only options at lower levels.
 d. **Shortcut editor upgrades.** Search, conflict warnings, per-action reset,
    keymap import / export, and presets — a voXY default and an After-Effects-
    style map. (Builds on the existing `shortcut_editor` and action table.)

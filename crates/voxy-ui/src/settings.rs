@@ -9,7 +9,7 @@
 
 use egui::{Align, Context, Id, Layout, Modal};
 
-use crate::prefs::{FontSize, PrecompOpen, Theme, TimelineDensity, UiScale};
+use crate::prefs::{FontSize, InterfaceLevel, PrecompOpen, Theme, TimelineDensity, UiScale};
 use crate::state::EditorState;
 
 /// The dialog's own state.
@@ -59,6 +59,7 @@ pub fn show(ctx: &Context, state: &mut EditorState) {
             .show(ui, |ui| {
                 let mut changed = appearance_section(ui, state, &dialog.filter);
                 changed |= behavior_section(ui, state, &dialog.filter);
+                changed |= interface_section(ui, state, &dialog.filter);
                 if changed {
                     state.save_prefs();
                 }
@@ -253,6 +254,32 @@ fn behavior_section(ui: &mut egui::Ui, state: &mut EditorState, filter: &str) ->
         });
     }
 
+    changed
+}
+
+/// Draws the Interface rows that match `filter`. Returns `true` on a change.
+fn interface_section(ui: &mut egui::Ui, state: &mut EditorState, filter: &str) -> bool {
+    const LEVEL: &str = "Interface level";
+    if !matches(filter, LEVEL) {
+        return false;
+    }
+    ui.add_space(8.0);
+    ui.label(egui::RichText::new("Interface").strong());
+    ui.add_space(2.0);
+
+    let mut changed = false;
+    let level = &mut state.prefs.interface.level;
+    ui.horizontal(|ui| {
+        ui.label(LEVEL);
+        egui::ComboBox::from_id_salt("settings-interface-level")
+            .selected_text(level.label())
+            .show_ui(ui, |ui| {
+                for option in InterfaceLevel::ALL {
+                    changed |= ui.selectable_value(level, option, option.label()).changed();
+                }
+            });
+    });
+    ui.weak("Simple hides professional-only options.");
     changed
 }
 

@@ -329,6 +329,46 @@ where
     }
 }
 
+/// How much of the interface to show (design §5). Lower levels hide
+/// professional-only options.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InterfaceLevel {
+    Simple,
+    #[default]
+    Standard,
+    Advanced,
+}
+
+impl InterfaceLevel {
+    /// Every level, in display order (for the Settings dialog).
+    pub const ALL: [InterfaceLevel; 3] = [
+        InterfaceLevel::Simple,
+        InterfaceLevel::Standard,
+        InterfaceLevel::Advanced,
+    ];
+    pub fn label(self) -> &'static str {
+        match self {
+            InterfaceLevel::Simple => "Simple",
+            InterfaceLevel::Standard => "Standard",
+            InterfaceLevel::Advanced => "Advanced",
+        }
+    }
+    /// Whether professional (advanced) options are shown. Hidden only at the
+    /// Simple level.
+    pub fn shows_advanced(self) -> bool {
+        !matches!(self, InterfaceLevel::Simple)
+    }
+}
+
+/// Interface settings (design §5).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Interface {
+    #[serde(deserialize_with = "lenient_value")]
+    pub level: InterfaceLevel,
+}
+
 /// A named dock layout (design §6). Workspaces are **global** preferences;
 /// per-project layout stays in `ui_state`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -413,6 +453,8 @@ pub struct Preferences {
     pub appearance: Appearance,
     /// Named dock layouts and the active one (design §6).
     pub workspaces: Workspaces,
+    /// Interface level (design §5).
+    pub interface: Interface,
     pub user_presets: Vec<UserPreset>,
     /// Saved keyframe easings, shown in the graph editor's preset strip.
     #[serde(deserialize_with = "lenient_list")]
@@ -476,6 +518,7 @@ impl Default for Preferences {
             },
             appearance: Appearance::default(),
             workspaces: Workspaces::default(),
+            interface: Interface::default(),
             user_presets: Vec::new(),
             easing_presets: Vec::new(),
             comp_dialog: DialogMemory::default(),
@@ -1054,6 +1097,27 @@ mod tests {
         assert_eq!(p.workspaces.active, "Mine");
         let names: Vec<&str> = p.workspaces.list.iter().map(|w| w.name.as_str()).collect();
         assert_eq!(names, ["Mine"]);
+    }
+
+    #[test]
+    fn interface_level_defaults_to_standard_and_falls_back() {
+        assert_eq!(
+            Preferences::default().interface.level,
+            InterfaceLevel::Standard
+        );
+        assert!(!InterfaceLevel::Simple.shows_advanced());
+        assert!(
+            InterfaceLevel::Standard.shows_advanced() && InterfaceLevel::Advanced.shows_advanced()
+        );
+        // Round trip and lenient fallback.
+        let p = Preferences::parse("[interface]\nlevel = \"simple\"\n");
+        assert_eq!(p.interface.level, InterfaceLevel::Simple);
+        let bad = Preferences::parse("[interface]\nlevel = \"wizard\"\n");
+        assert_eq!(
+            bad.interface.level,
+            InterfaceLevel::Standard,
+            "unknown falls back"
+        );
     }
 
     #[test]
