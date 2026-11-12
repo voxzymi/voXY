@@ -1053,26 +1053,143 @@ first behaviour preferences. CI to be reported per job, then a PR into `main`
   placement / length, a snapping default (today Shift toggles snapping),
   confirmations, and "new composition opens in a tab".
 
-## U-F: customizable layout (next, not started)
+## U-F: customizable layout (complete)
 
-Planned for after the owner says "start U-F". Design §5–§6. Small steps, push
-after each, CI per job once at the end, one PR into `main` when green.
+Branch `claude/uf-layout`, started from the U-E branch tip (U-F builds on
+U-E's preferences code and U-E is not yet merged). Design §5–§6. Small steps,
+push after each, CI per job once at the end, one PR when green (into `main` if
+U-E has merged by then, else stacked on U-E).
 
-a. **Named workspaces.** Edit, Effects, Animate, Minimal (voXY's own names and
-   arrangements). Switch from the Window menu; Save, Rename, Delete; Reset
-   Layout (exists). Workspaces are **global preferences** (`preferences.toml`
-   `[workspaces]`, reusing `layout.rs` encode/decode + soundness check);
-   **per-project layout stays in `ui_state`** and wins on open when present.
-b. **Window menu: close and reopen every panel.** Today the menu only focuses
-   an open panel; closed panels cannot be brought back. Let each panel be
-   closed and reopened (egui_dock already supports close/float/tab).
-c. **Interface level.** `[interface] level = simple | standard | advanced`
-   (default standard), hiding professional-only options at lower levels.
-d. **Shortcut editor upgrades.** Search, conflict warnings, per-action reset,
-   keymap import / export, and presets — a voXY default and an After-Effects-
-   style map. (Builds on the existing `shortcut_editor` and action table.)
-e. **Live accent colour** — only if it needs no large refactor; today `ACCENT`
-   is a `const` used across many modules, so this is contingent, not committed.
+- **U-F step 1: workspace data model + built-in layouts (plan a, data only).**
+  `panels.rs` gains three new arrangements beside `default_layout` —
+  `effects_layout`, `animate_layout`, `minimal_layout` — each a distinct,
+  sound arrangement of **all** panels (the dock requires every panel exactly
+  once, so workspaces differ by arrangement, not by which panels are present).
+  `builtin_workspaces()` lists them in menu order: **Edit, Effects, Animate,
+  Minimal** (voXY's own names and layouts). `prefs.rs` gains `Workspace`
+  (`name` + `layout.rs` text) and `Workspaces` (`active` + a lenient `list`),
+  stored under `[workspaces]`; the default is the four built-ins with Edit
+  active. Not wired to the Window menu or startup yet — that is the next step.
+  Tests: every built-in layout is sound and round-trips; the workspace defaults
+  round-trip through the preferences file; one unreadable workspace entry is
+  dropped alone. `fmt --check` and `clippy -p voxy-ui --all-targets -D warnings`
+  clean; 308 `voxy-ui` tests pass.
+
+- **U-F step 2: workspaces wired into the app (plan a, switching).** On
+  startup the app applies the **active** workspace's layout (`restore_workspace`,
+  falling back to the default when the active one is missing or unsound). The
+  Window menu gains a **Workspace** switcher (radio list of Edit / Effects /
+  Animate / Minimal) above the panel-focus list; switching applies that
+  workspace and makes it active. Dragging panels now auto-saves the live
+  arrangement into the **active** workspace (replacing the old single
+  `dock_layout`), and **Reset Layout** resets the active workspace to its
+  built-in arrangement. A **v1 → v2 migration** folds any legacy `dock_layout`
+  into the Edit workspace so upgrading users keep their arrangement.
+  (Per-project `ui_state` layout and Save-as / Rename / Delete come next.)
+  Tests: `restore_workspace` uses the active workspace and falls back when it is
+  missing; a legacy `dock_layout` migrates into the Edit workspace. `fmt
+  --check` and `clippy -p voxy-ui -p voxy-app --all-targets -D warnings` clean;
+  310 `voxy-ui` tests pass and `voxy-app` builds.
+
+- **U-F step 3: workspace management (plan a, manage).** The Window menu gains
+  **Save Workspace…**, **Rename Workspace…** and **Delete Workspace**. Save and
+  Rename open a small modal name prompt that rejects an empty or already-used
+  name (Rename may keep the active workspace's own name); Delete is disabled for
+  the last workspace and otherwise switches to the first remaining one. The list
+  edits are pure, tested methods on `Workspaces` (`contains`, `add`,
+  `rename_active`, `delete_active`); the app wires them plus the dock, and the
+  prompt gates shortcuts while open. Tests: add / rename / delete on
+  `Workspaces`, including keeping the last one. `fmt --check` and `clippy
+  -p voxy-ui -p voxy-app --all-targets -D warnings` clean; 311 `voxy-ui` tests
+  pass and `voxy-app` builds.
+
+- **U-F step 4: per-project layout in `ui_state` (plan a, complete).** A
+  project now remembers its own dock arrangement: `compat::to_ui_state` writes
+  an optional `layout` key and `layout_from_ui_state` reads it (UI-only, no
+  project-format change). `EditorState` keeps the live layout in
+  `current_layout` (saved into the project's `ui_state`) and exposes a
+  `pending_layout` set on open; the app keeps `current_layout` in sync and, the
+  frame after an open, applies a project's saved layout **over** the active
+  workspace (design §6). Global workspaces still track the latest arrangement;
+  a project with its own layout wins on open. Tests: the layout round-trips
+  through `ui_state` and is optional; a saved project offers its layout on
+  open. `fmt --check` and `clippy -p voxy-ui -p voxy-app --all-targets -D
+  warnings` clean; 313 `voxy-ui` tests pass and `voxy-app` builds. **Plan a
+  (workspaces) is complete.**
+
+- **U-F step 5: close and reopen every panel (plan b).** Panels now show a
+  close button and can be closed, except the last one (so the dock is never
+  empty — `Panels.closeable` is false when a single panel remains). A layout
+  is no longer required to contain every panel: `layout::sound` keeps the
+  no-duplicate and well-formed checks but accepts a missing panel as simply
+  closed, and the old auto-re-add (`ADDED_LATER` / `add_new_panels`) is gone.
+  The Window menu lists every panel with a tick for the open ones: clicking an
+  open panel focuses it, clicking a closed one reopens it (into the first
+  leaf). Tests: a closed panel is accepted and stays closed through a round
+  trip; the existing soundness / duplicate / broken-tree checks still hold.
+  `fmt --check` and `clippy -p voxy-ui -p voxy-app --all-targets -D warnings`
+  clean; 312 `voxy-ui` tests pass and `voxy-app` builds.
+
+- **U-F step 6: interface level (plan c).** New `[interface] level` preference
+  (`InterfaceLevel`: simple / standard / advanced, default standard, lenient
+  parse) with a `shows_advanced()` helper (false only at Simple). The Settings
+  dialog gains an **Interface** section to choose the level. First pro-option
+  gated: the Composition Settings **Advanced** tab (pixel aspect, drop-frame,
+  resolution…) is hidden at the Simple level, which forces the Basic tab. More
+  options can be gated the same way incrementally. Tests: the level defaults to
+  Standard and a bad value falls back; `shows_advanced` is false only at Simple;
+  the comp dialog forces Basic at Simple. `fmt --check` and `clippy -p voxy-ui
+  -p voxy-app --all-targets -D warnings` clean; 314 `voxy-ui` tests pass and
+  `voxy-app` builds.
+
+- **U-F step 7: shortcut keymap presets (plan d, part 1).** New
+  `KeymapPreset` (voXY default / After Effects style). voXY resets to the
+  built-in defaults; After Effects style layers a handful of AE shortcuts
+  (new solid `Ctrl+Y`, new adjustment `Ctrl+Alt+Y`, composition settings
+  `Ctrl+K`, remove all effects `Ctrl+Shift+E`, select all `Ctrl+A`) over the
+  defaults, each **assigned** so the result is conflict-free. A **Preset** combo
+  in the Keyboard Shortcuts dialog applies one. (Search, conflict notices and
+  per-action Reset already existed in that dialog.) Tests: applying voXY
+  restores defaults, After Effects sets its shortcut, and a preset leaves no
+  conflicts. `fmt --check` and `clippy -p voxy-ui -p voxy-app --all-targets -D
+  warnings` clean; 315 `voxy-ui` tests pass and `voxy-app` builds.
+
+- **U-F step 8: shortcut keymap import / export (plan d, part 2 — plan d
+  complete).** The `Dialogs` trait gains `export_keymap` / `import_keymap`
+  file pickers (native TOML; `None` by default so headless tests are
+  unaffected). `EditorState::export_keymap` writes the current overrides (only
+  what differs from the defaults) as TOML; `import_keymap` resets to defaults,
+  loads the file's bindings, saves to preferences, and the dialog reports how
+  many were applied — warning, via `Keymap::conflicts`, when the imported map
+  introduces clashes. **Import…** and **Export…** buttons sit in the Keyboard
+  Shortcuts dialog. Test: a rebound keymap exports to a file and imports into a
+  fresh state with the binding intact. `fmt --check` and `clippy -p voxy-ui
+  -p voxy-app --all-targets -D warnings` clean; 316 `voxy-ui` tests pass and
+  `voxy-app` builds. **Plan d (shortcut-editor upgrades) is complete.**
+
+- **U-F step 9: live accent colour (plan e).** `theme::apply` now takes the
+  accent colour and tints the egui selection, link and hover visuals with it;
+  the app passes `theme::accent_color(&prefs.appearance.accent)` each frame, so
+  the accent chosen in Settings takes effect live. A full live accent would be
+  a large refactor (`ACCENT` is a `const` painted by hand in ~8 modules), which
+  the owner gated out — so bespoke-painted accents keep the brand violet and
+  this applies the accent only at the one global point, with no refactor.
+  Tests: `accent_color` parses `#RRGGBB` or falls back; every theme still
+  applies. `fmt --check` and `clippy -p voxy-ui -p voxy-app --all-targets -D
+  warnings` clean; 317 `voxy-ui` tests pass and `voxy-app` builds.
+
+**U-F complete** (steps 1–9): named global workspaces (built-ins, switching,
+Save / Rename / Delete, Reset Layout, v1→v2 migration) with per-project layout
+in `ui_state`; close & reopen every panel from the Window menu; an interface
+level that hides pro-only options; shortcut-editor upgrades (presets, keymap
+import / export, on top of the existing search / conflict notices / per-action
+reset); and a live accent at the global visuals. CI per job to follow, then one
+PR (not merged).
+
+### Deferred (noted, not in U-F)
+
+- Unifying the bespoke-painted accents (the `const ACCENT` call sites) so the
+  accent preference recolours the whole interface, not just the egui visuals.
 
 ## Next, in order (UX overhaul)
 

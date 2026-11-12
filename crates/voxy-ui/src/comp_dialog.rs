@@ -107,11 +107,17 @@ fn editing(ui: &mut Ui, state: &mut EditorState, d: &mut Draft, outcome: &mut Ou
         outline(ui, &out.response, d.error_for(Field::Name).is_some());
     });
     ui.add_space(4.0);
-    ui.horizontal(|ui| {
-        ui.selectable_value(&mut d.tab, Tab::Basic, "Basic");
-        ui.selectable_value(&mut d.tab, Tab::Advanced, "Advanced");
-    });
-    ui.separator();
+    // The Advanced tab (pixel aspect, drop-frame, resolution…) is a
+    // professional option, hidden at the Simple interface level.
+    if state.prefs.interface.level.shows_advanced() {
+        ui.horizontal(|ui| {
+            ui.selectable_value(&mut d.tab, Tab::Basic, "Basic");
+            ui.selectable_value(&mut d.tab, Tab::Advanced, "Advanced");
+        });
+        ui.separator();
+    } else {
+        d.tab = Tab::Basic;
+    }
     match d.tab {
         Tab::Basic => basic(ui, state, d),
         Tab::Advanced => advanced(ui, d),
@@ -673,6 +679,20 @@ mod tests {
         assert_eq!(scrub_speed(false, false), 1.0);
         assert_eq!(scrub_speed(true, false), 10.0);
         assert_eq!(scrub_speed(false, true), 0.1);
+    }
+
+    #[test]
+    fn simple_interface_level_hides_the_advanced_tab() {
+        let mut s = EditorState::new(EditorState::untitled());
+        s.prefs.interface.level = crate::prefs::InterfaceLevel::Simple;
+        s.open_new_comp_dialog();
+        s.comp_dialog.as_mut().unwrap().tab = Tab::Advanced;
+        run(900.0, 700.0, &mut s);
+        assert_eq!(
+            s.comp_dialog.as_ref().unwrap().tab,
+            Tab::Basic,
+            "the Advanced tab is forced back to Basic at the Simple level"
+        );
     }
 
     fn run(width: f32, height: f32, state: &mut EditorState) {

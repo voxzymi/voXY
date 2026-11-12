@@ -120,6 +120,7 @@ fn draw(state: &mut EditorState, frames: usize) {
             let mut panels = Panels {
                 state,
                 viewport: None,
+                closeable: true,
             };
             for mut tab in TABS {
                 ui.scope(|ui| panels.ui(ui, &mut tab));

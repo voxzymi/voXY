@@ -57,9 +57,13 @@ pub fn to_ui_state(
     dialog_tab: DialogTab,
     tabs: &[SavedTab],
     active: Option<usize>,
+    layout: Option<&str>,
 ) -> Value {
     let mut map = Map::new();
     map.insert("version".into(), UI_STATE_VERSION.into());
+    if let Some(layout) = layout {
+        map.insert("layout".into(), layout.into());
+    }
     map.insert(
         "project_panel".into(),
         serde_json::to_value(view).unwrap_or(Value::Null),
@@ -147,6 +151,12 @@ pub fn dialog_tab_from(state: &Value) -> DialogTab {
         .unwrap_or_default()
 }
 
+/// The saved per-project dock layout from a `ui_state`, if it has one. The
+/// layout text is `layout.rs`'s own; its soundness is checked when applied.
+pub fn layout_from_ui_state(state: &Value) -> Option<String> {
+    state.get("layout")?.as_str().map(str::to_owned)
+}
+
 /// Reads the panel's settings out of a saved `ui_state` (any version).
 ///
 /// Errors are swallowed per field: an unknown value, a wrong type or a
@@ -223,7 +233,7 @@ mod tests {
         let mut view = ViewSettings::default();
         view.expanded.insert(FolderId::from(3));
         view.sort = SortKey::Type;
-        let state = to_ui_state(&view, DialogTab::Advanced, &[], None);
+        let state = to_ui_state(&view, DialogTab::Advanced, &[], None, None);
         assert_eq!(dialog_tab_from(&state), DialogTab::Advanced);
         assert_eq!(state["version"], 2);
         assert!(state.get("media_panel").is_none());
@@ -243,7 +253,7 @@ mod tests {
         assert_eq!(view.filter, TypeFilter::All, "new fields take defaults");
         assert_eq!(view.columns, ViewSettings::default().columns);
         // Saving it again writes only the new name.
-        let again = to_ui_state(&view, DialogTab::Basic, &[], None);
+        let again = to_ui_state(&view, DialogTab::Basic, &[], None, None);
         assert!(again.get("media_panel").is_none() && again.get("project_panel").is_some());
     }
 
@@ -271,7 +281,13 @@ mod tests {
                 time: Time::ZERO,
             },
         ];
-        let state = to_ui_state(&ViewSettings::default(), DialogTab::Basic, &saved, Some(1));
+        let state = to_ui_state(
+            &ViewSettings::default(),
+            DialogTab::Basic,
+            &saved,
+            Some(1),
+            None,
+        );
         assert_eq!(tabs_from_ui_state(&state), Some((saved.clone(), Some(1))));
         // No `tabs` key: an older file, so no opinion (the caller shows the
         // main composition). An empty list is an answer: every tab was closed.
@@ -281,6 +297,7 @@ mod tests {
                 &ViewSettings::default(),
                 DialogTab::Basic,
                 &[],
+                None,
                 None
             )),
             Some((Vec::new(), None))
@@ -302,6 +319,25 @@ mod tests {
         assert_eq!(tabs[1].time, Time::from_secs(1));
         assert_eq!(active, Some(1), "the fourth entry is now the second");
         assert_eq!(tabs_from_ui_state(&json!({"tabs": 5})), None);
+    }
+
+    #[test]
+    fn a_dock_layout_round_trips_through_ui_state_and_is_optional() {
+        let layout = "{\"dock\":\"text\"}";
+        let with = to_ui_state(
+            &ViewSettings::default(),
+            DialogTab::Basic,
+            &[],
+            None,
+            Some(layout),
+        );
+        assert_eq!(layout_from_ui_state(&with).as_deref(), Some(layout));
+        let without = to_ui_state(&ViewSettings::default(), DialogTab::Basic, &[], None, None);
+        assert_eq!(
+            layout_from_ui_state(&without),
+            None,
+            "absent when not written"
+        );
     }
 
     #[test]

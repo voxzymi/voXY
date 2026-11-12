@@ -125,6 +125,12 @@ pub struct EditorState {
     /// The Keyboard Shortcuts dialog, while it is open.
     pub shortcut_editor: Option<crate::shortcut_editor::Editor>,
     pub settings: Option<crate::settings::Settings>,
+    /// The live dock layout text, kept up to date by the app so it is saved
+    /// into the project's `ui_state` (per-project layout, design §6).
+    pub current_layout: Option<String>,
+    /// A per-project layout just loaded from a project's `ui_state`, for the
+    /// app to apply over the active workspace. Taken once.
+    pub pending_layout: Option<String>,
     pub prefs: Preferences,
     /// Every effect this session can apply: the built-ins (and, from O-A,
     /// installed OpenFX plugins). Projects resolve against it on load.
@@ -207,6 +213,8 @@ impl EditorState {
             tip: None,
             shortcut_editor: None,
             settings: None,
+            current_layout: None,
+            pending_layout: None,
             prefs: Preferences::default(),
             effects: std::sync::Arc::new(voxy_core::registry::builtins().clone()),
             ofx: None,
@@ -751,7 +759,13 @@ impl EditorState {
     /// The view state saved with the project (and with an autosave).
     fn ui_state(&self) -> serde_json::Value {
         let (tabs, active) = self.workspace.to_saved(self.time);
-        crate::compat::to_ui_state(&self.project.view, self.dialog_tab, &tabs, active)
+        crate::compat::to_ui_state(
+            &self.project.view,
+            self.dialog_tab,
+            &tabs,
+            active,
+            self.current_layout.as_deref(),
+        )
     }
 
     /// Restores the view state saved with a project: the Project panel, the
@@ -760,6 +774,9 @@ impl EditorState {
     fn restore_ui_state(&mut self, state: &serde_json::Value) {
         self.project.view = crate::compat::from_ui_state(state);
         self.dialog_tab = crate::compat::dialog_tab_from(state);
+        // A per-project layout, if the file has one, is handed to the app to
+        // apply over the active workspace (design §6).
+        self.pending_layout = crate::compat::layout_from_ui_state(state);
         if let Some((tabs, active)) = crate::compat::tabs_from_ui_state(state) {
             let doc = self.history.current().clone();
             self.workspace = crate::workspace::Workspace::from_saved(tabs, active, &doc);
@@ -1104,6 +1121,38 @@ impl EditorState {
     pub fn save_shortcuts(&mut self) {
         self.prefs.shortcuts = self.keymap.to_saved();
         self.save_prefs();
+    }
+
+    /// Writes the current keymap (only what differs from the defaults) to a
+    /// file the user picks. Returns `None` if they cancelled, else the result.
+    pub fn export_keymap(&mut self) -> Option<Result<std::path::PathBuf, String>> {
+        let path = self.dialogs.export_keymap()?;
+        let saved = self.keymap.to_saved();
+        let result = toml::to_string_pretty(&saved)
+            .map_err(|e| e.to_string())
+            .and_then(|text| std::fs::write(&path, text).map_err(|e| e.to_string()))
+            .map(|()| path);
+        Some(result)
+    }
+
+    /// Replaces the keymap with one read from a file the user picks, saving it
+    /// to the preferences. Returns `None` if they cancelled, else the number of
+    /// actions the file rebound (or an error).
+    pub fn import_keymap(&mut self) -> Option<Result<usize, String>> {
+        let path = self.dialogs.import_keymap()?;
+        let result = std::fs::read_to_string(&path)
+            .map_err(|e| e.to_string())
+            .and_then(|text| {
+                toml::from_str::<std::collections::BTreeMap<String, Vec<String>>>(&text)
+                    .map_err(|e| e.to_string())
+            })
+            .map(|saved| {
+                self.keymap.reset_all();
+                let applied = self.keymap.load_saved(&saved);
+                self.save_shortcuts();
+                applied
+            });
+        Some(result)
     }
 
     /// Saves `effects` as the effect preset called `name`, replacing one of
@@ -2166,8 +2215,13 @@ impl EditorState {
         };
         // Field by field: `rec` borrows `self.recovery`.
         let (tabs, active) = self.workspace.to_saved(self.time);
-        let ui_state =
-            crate::compat::to_ui_state(&self.project.view, self.dialog_tab, &tabs, active);
+        let ui_state = crate::compat::to_ui_state(
+            &self.project.view,
+            self.dialog_tab,
+            &tabs,
+            active,
+            self.current_layout.as_deref(),
+        );
         let written = target.map_err(|e| e.to_string()).and_then(|path| {
             persist::save_with_ui(self.history.current(), Some(&ui_state), &path)
                 .map(|()| path)
@@ -3788,6 +3842,71 @@ mod tests {
         assert_eq!(t.workspace.tabs[1].path.len(), 2, "the breadcrumb");
         t.switch_tab(0);
         assert_eq!((t.comp_id(), t.time), (Some(c[2]), Time::from_secs(4)));
+    }
+
+    #[test]
+    fn a_project_remembers_its_layout_and_offers_it_on_open() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("layout.voxy");
+        let mut s = EditorState::new(Document::empty("x"));
+        s.current_layout = Some("{\"dock\":\"text\"}".to_owned());
+        assert!(s.save_to(&path));
+
+        let mut t = EditorState::new(Document::empty("y"));
+        assert!(t.pending_layout.is_none());
+        t.open_path(&path);
+        assert_eq!(
+            t.pending_layout.as_deref(),
+            Some("{\"dock\":\"text\"}"),
+            "the project's layout is offered for the app to apply"
+        );
+    }
+
+    #[test]
+    fn a_keymap_exports_and_imports_through_a_file() {
+        use crate::actions::{Action, shortcut_from_text};
+
+        #[derive(Debug)]
+        struct KeymapFile(std::path::PathBuf);
+        impl crate::dialogs::Dialogs for KeymapFile {
+            fn pick_media(&self) -> Vec<std::path::PathBuf> {
+                Vec::new()
+            }
+            fn pick_relink(&self) -> Option<std::path::PathBuf> {
+                None
+            }
+            fn open_project(&self) -> Option<std::path::PathBuf> {
+                None
+            }
+            fn save_project(&self, _: &str) -> Option<std::path::PathBuf> {
+                None
+            }
+            fn export_keymap(&self) -> Option<std::path::PathBuf> {
+                Some(self.0.clone())
+            }
+            fn import_keymap(&self) -> Option<std::path::PathBuf> {
+                Some(self.0.clone())
+            }
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("km.toml");
+        let custom = shortcut_from_text("Ctrl+Alt+Q").unwrap();
+
+        let mut s = EditorState::new(Document::empty("t"));
+        s.dialogs = Box::new(KeymapFile(path.clone()));
+        s.keymap.set(Action::FileSave, vec![custom]);
+        assert!(matches!(s.export_keymap(), Some(Ok(_))));
+        assert!(path.exists(), "the keymap file was written");
+
+        let mut t = EditorState::new(Document::empty("t"));
+        t.dialogs = Box::new(KeymapFile(path));
+        let applied = t.import_keymap().expect("not cancelled").expect("read ok");
+        assert!(applied >= 1);
+        assert!(
+            t.keymap.bindings(Action::FileSave).contains(&custom),
+            "the imported shortcut is in effect"
+        );
     }
 
     #[test]

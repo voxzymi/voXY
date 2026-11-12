@@ -16,6 +16,18 @@ use crate::viewport::ViewportRenderer;
 /// Product name, exactly as it must appear to users.
 pub const PRODUCT_NAME: &str = "voXY";
 
+/// The dock state for the active workspace, falling back to the default
+/// arrangement when the active one is missing or its saved layout is unsound.
+fn restore_workspace(prefs: &crate::prefs::Preferences) -> DockState<Tab> {
+    let layout = prefs
+        .workspaces
+        .list
+        .iter()
+        .find(|w| w.name == prefs.workspaces.active)
+        .map(|w| w.layout.as_str());
+    crate::layout::restore(layout)
+}
+
 /// Actions that discard the current document and therefore ask first if it
 /// has unsaved changes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,6 +48,22 @@ pub struct VoxyApp {
     pending: Option<Discarding>,
     allow_close: bool,
     show_about: bool,
+    /// An open Save / Rename Workspace name prompt.
+    workspace_prompt: Option<WorkspacePrompt>,
+}
+
+/// Which name-prompt the Window menu opened.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WorkspaceAction {
+    SaveNew,
+    Rename,
+}
+
+/// The Save / Rename Workspace dialog's state.
+#[derive(Debug, Clone)]
+struct WorkspacePrompt {
+    action: WorkspaceAction,
+    name: String,
 }
 
 impl std::fmt::Debug for VoxyApp {
@@ -48,7 +76,11 @@ impl std::fmt::Debug for VoxyApp {
 
 impl VoxyApp {
     pub fn new(cc: &eframe::CreationContext<'_>, open: Option<PathBuf>) -> Self {
-        crate::theme::apply(&cc.egui_ctx, crate::prefs::Theme::default());
+        crate::theme::apply(
+            &cc.egui_ctx,
+            crate::prefs::Theme::default(),
+            crate::theme::ACCENT,
+        );
         let viewport = cc
             .wgpu_render_state
             .clone()
@@ -93,7 +125,12 @@ impl VoxyApp {
         } else {
             state.offer_orphaned_recovery();
         }
-        let dock = crate::layout::restore(state.prefs.dock_layout.as_deref());
+        let dock = restore_workspace(&state.prefs);
+        // A project opened at startup may carry its own layout; otherwise the
+        // active workspace's layout is the live one.
+        if state.pending_layout.is_none() {
+            state.current_layout = crate::layout::to_text(&dock);
+        }
         VoxyApp {
             saved_layout: crate::layout::to_text(&dock),
             layout_dirty: false,
@@ -103,6 +140,7 @@ impl VoxyApp {
             pending: None,
             allow_close: false,
             show_about: false,
+            workspace_prompt: None,
         }
     }
 
@@ -140,9 +178,129 @@ impl VoxyApp {
             return;
         };
         if self.saved_layout.as_deref() != Some(text.as_str()) {
-            self.state.prefs.dock_layout = Some(text.clone());
-            self.state.save_prefs();
+            // The live arrangement belongs to the active workspace.
+            let active = self.state.prefs.workspaces.active.clone();
+            if let Some(ws) = self
+                .state
+                .prefs
+                .workspaces
+                .list
+                .iter_mut()
+                .find(|w| w.name == active)
+            {
+                ws.layout.clone_from(&text);
+                self.state.save_prefs();
+            }
+            self.state.current_layout = Some(text.clone());
             self.saved_layout = Some(text);
+        }
+    }
+
+    /// Records `self.dock`'s text as both the last-saved layout and the live
+    /// per-project layout (saved into the project's `ui_state`).
+    fn remember_layout(&mut self) {
+        let text = crate::layout::to_text(&self.dock);
+        self.saved_layout.clone_from(&text);
+        self.state.current_layout = text;
+    }
+
+    /// Switches to the workspace `name`: applies its layout and makes it
+    /// active.
+    fn apply_workspace(&mut self, name: &str) {
+        let Some(layout) = self
+            .state
+            .prefs
+            .workspaces
+            .list
+            .iter()
+            .find(|w| w.name == name)
+            .map(|w| w.layout.clone())
+        else {
+            return;
+        };
+        self.dock = crate::layout::restore(Some(&layout));
+        name.clone_into(&mut self.state.prefs.workspaces.active);
+        self.remember_layout();
+        self.state.save_prefs();
+    }
+
+    /// Saves the current arrangement as a new workspace named `name` and makes
+    /// it active. The caller ensures `name` is free.
+    fn save_workspace_as(&mut self, name: &str) {
+        let Some(layout) = crate::layout::to_text(&self.dock) else {
+            return;
+        };
+        self.state.prefs.workspaces.add(name.to_owned(), layout);
+        self.remember_layout();
+        self.state.save_prefs();
+    }
+
+    /// Renames the active workspace.
+    fn rename_active_workspace(&mut self, name: &str) {
+        self.state.prefs.workspaces.rename_active(name.to_owned());
+        self.state.save_prefs();
+    }
+
+    /// Deletes the active workspace and switches to the first remaining one.
+    fn delete_active_workspace(&mut self) {
+        if let Some(layout) = self.state.prefs.workspaces.delete_active() {
+            self.dock = crate::layout::restore(Some(&layout));
+            self.remember_layout();
+        }
+        self.state.save_prefs();
+    }
+
+    /// Draws the Save / Rename Workspace name prompt if it is open.
+    fn workspace_prompt(&mut self, ctx: &egui::Context) {
+        let Some(mut prompt) = self.workspace_prompt.take() else {
+            return;
+        };
+        let mut outcome: Option<bool> = None;
+        let title = match prompt.action {
+            WorkspaceAction::SaveNew => "Save Workspace",
+            WorkspaceAction::Rename => "Rename Workspace",
+        };
+        egui::Modal::new(egui::Id::new("voxy-workspace-prompt")).show(ctx, |ui| {
+            ui.set_width(320.0);
+            ui.heading(title);
+            ui.horizontal(|ui| {
+                ui.label("Name:");
+                let edit = ui.text_edit_singleline(&mut prompt.name);
+                edit.request_focus();
+            });
+            let trimmed = prompt.name.trim();
+            // A name is valid when non-empty and free — except that Rename may
+            // keep the active workspace's own name.
+            let active = &self.state.prefs.workspaces.active;
+            let clashes = self.state.prefs.workspaces.contains(trimmed)
+                && !(prompt.action == WorkspaceAction::Rename && trimmed == active);
+            let valid = !trimmed.is_empty() && !clashes;
+            if clashes {
+                ui.colored_label(
+                    egui::Color32::from_rgb(230, 70, 70),
+                    "A workspace already uses that name.",
+                );
+            }
+            ui.add_space(4.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.add_enabled(valid, egui::Button::new("OK")).clicked() {
+                    outcome = Some(true);
+                }
+                if ui.button("Cancel").clicked() {
+                    outcome = Some(false);
+                }
+            });
+        });
+        match outcome {
+            Some(true) => {
+                let name = prompt.name.trim().to_owned();
+                match prompt.action {
+                    WorkspaceAction::SaveNew => self.save_workspace_as(&name),
+                    WorkspaceAction::Rename => self.rename_active_workspace(&name),
+                }
+            }
+            Some(false) => {}
+            None => self.workspace_prompt = Some(prompt),
         }
     }
 
@@ -152,7 +310,11 @@ impl VoxyApp {
     /// the timeline draws its rows.
     fn apply_appearance(&self, ctx: &egui::Context) {
         let appearance = &self.state.prefs.appearance;
-        crate::theme::apply(ctx, appearance.theme);
+        crate::theme::apply(
+            ctx,
+            appearance.theme,
+            crate::theme::accent_color(&appearance.accent),
+        );
         let zoom = appearance.ui_scale.factor().unwrap_or(1.0);
         if (ctx.zoom_factor() - zoom).abs() > f32::EPSILON {
             ctx.set_zoom_factor(zoom);
@@ -165,7 +327,10 @@ impl VoxyApp {
         // Text fields keep their own editing shortcuts.
         // The shortcut editor reads keys itself while it is open, and the
         // Settings dialog is modal, so shortcuts behind it do not fire.
-        if self.state.shortcut_editor.is_some() || self.state.settings.is_some() {
+        if self.state.shortcut_editor.is_some()
+            || self.state.settings.is_some()
+            || self.workspace_prompt.is_some()
+        {
             return;
         }
         let typing = ctx.egui_wants_keyboard_input();
@@ -302,10 +467,56 @@ impl VoxyApp {
                 }
             });
             ui.menu_button("Window", |ui| {
+                ui.label(RichText::new("Workspace").weak());
+                let active = self.state.prefs.workspaces.active.clone();
+                let names: Vec<String> = self
+                    .state
+                    .prefs
+                    .workspaces
+                    .list
+                    .iter()
+                    .map(|w| w.name.clone())
+                    .collect();
+                for name in names {
+                    if ui.radio(active == name, &name).clicked() && active != name {
+                        self.apply_workspace(&name);
+                        ui.close();
+                    }
+                }
+                if ui.button("Save Workspace…").clicked() {
+                    self.workspace_prompt = Some(WorkspacePrompt {
+                        action: WorkspaceAction::SaveNew,
+                        name: String::new(),
+                    });
+                    ui.close();
+                }
+                if ui.button("Rename Workspace…").clicked() {
+                    self.workspace_prompt = Some(WorkspacePrompt {
+                        action: WorkspaceAction::Rename,
+                        name: active.clone(),
+                    });
+                    ui.close();
+                }
+                let can_delete = self.state.prefs.workspaces.list.len() > 1;
+                if ui
+                    .add_enabled(can_delete, egui::Button::new("Delete Workspace"))
+                    .on_disabled_hover_text("The last workspace cannot be deleted.")
+                    .clicked()
+                {
+                    self.delete_active_workspace();
+                    ui.close();
+                }
+                ui.separator();
+                // A ticked panel is open: clicking focuses it. An unticked one
+                // is closed: clicking reopens it.
                 for tab in Tab::ALL {
-                    if ui.button(tab.title()).clicked() {
+                    let open = self.dock.find_tab(&tab).is_some();
+                    if ui.selectable_label(open, tab.title()).clicked() {
                         if let Some(path) = self.dock.find_tab(&tab) {
                             let _ = self.dock.set_active_tab(path);
+                        } else {
+                            self.dock.push_to_first_leaf(tab);
+                            self.layout_dirty = true;
                         }
                         ui.close();
                     }
@@ -332,7 +543,12 @@ impl VoxyApp {
                     self.state.save_prefs();
                 }
                 if ui.button("Reset Layout").clicked() {
-                    self.dock = default_layout();
+                    // Reset the active workspace to its built-in arrangement.
+                    let active = self.state.prefs.workspaces.active.clone();
+                    self.dock = crate::panels::builtin_workspaces()
+                        .into_iter()
+                        .find(|(name, _)| *name == active)
+                        .map_or_else(default_layout, |(_, dock)| dock);
                     self.layout_dirty = true;
                     ui.close();
                 }
@@ -432,6 +648,7 @@ impl VoxyApp {
         crate::footage::show_prompt(ctx, &mut self.state);
         crate::shortcut_editor::show(ctx, &mut self.state);
         crate::settings::show(ctx, &mut self.state);
+        self.workspace_prompt(ctx);
         if let Some(action) = self.pending {
             let name = self.state.display_name();
             let mut choice = None;
@@ -533,6 +750,13 @@ impl eframe::App for VoxyApp {
         let ctx = ui.ctx().clone();
         self.apply_appearance(&ctx);
 
+        // A project just opened may carry its own layout; it wins over the
+        // active workspace (design §6). Applied once, the frame after the open.
+        if let Some(layout) = self.state.pending_layout.take() {
+            self.dock = crate::layout::restore(Some(&layout));
+            self.remember_layout();
+        }
+
         if ctx.input(|i| i.viewport().close_requested())
             && !self.allow_close
             && self.state.history.is_dirty()
@@ -589,11 +813,13 @@ impl eframe::App for VoxyApp {
             let mut panels = Panels {
                 state: &mut self.state,
                 viewport: self.viewport.as_mut(),
+                // The last panel cannot be closed, so the dock is never empty.
+                closeable: self.dock.iter_all_tabs().count() > 1,
             };
             DockArea::new(&mut self.dock)
                 .style(egui_dock::Style::from_egui(ui.style().as_ref()))
                 .show_leaf_close_all_buttons(false)
-                .show_close_buttons(false)
+                .show_close_buttons(true)
                 .show_inside(ui, &mut panels);
         });
 
@@ -613,4 +839,31 @@ fn clock_seed() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_nanos() as u64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::prefs::Preferences;
+
+    #[test]
+    fn restore_uses_the_active_workspace_and_falls_back_when_missing() {
+        let mut prefs = Preferences::default();
+        // The default active workspace is Edit (the default arrangement).
+        let edit = restore_workspace(&prefs);
+        assert!(crate::layout::sound(&edit));
+        assert_eq!(
+            crate::layout::to_text(&edit).unwrap(),
+            crate::layout::to_text(&default_layout()).unwrap(),
+        );
+        // Switching the active workspace restores its arrangement.
+        prefs.workspaces.active = "Minimal".to_owned();
+        assert_eq!(
+            crate::layout::to_text(&restore_workspace(&prefs)).unwrap(),
+            crate::layout::to_text(&crate::panels::minimal_layout()).unwrap(),
+        );
+        // An unknown active workspace falls back to a sound default.
+        prefs.workspaces.active = "Nope".to_owned();
+        assert!(crate::layout::sound(&restore_workspace(&prefs)));
+    }
 }

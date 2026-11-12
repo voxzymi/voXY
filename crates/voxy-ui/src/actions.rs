@@ -847,6 +847,54 @@ fn specificity(m: Modifiers) -> u8 {
     u8::from(m.alt) + u8::from(m.shift) + u8::from(m.command || m.ctrl || m.mac_cmd)
 }
 
+/// A named starting keymap the user can apply (design §P-D, U-F plan d).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeymapPreset {
+    /// voXY's own defaults.
+    Voxy,
+    /// An After-Effects-style keymap: voXY's defaults plus a handful of the
+    /// shortcuts After Effects users reach for. The key combinations are
+    /// factual; none of After Effects' wording or artwork is used.
+    AfterEffects,
+}
+
+impl KeymapPreset {
+    pub const ALL: [KeymapPreset; 2] = [KeymapPreset::Voxy, KeymapPreset::AfterEffects];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            KeymapPreset::Voxy => "voXY default",
+            KeymapPreset::AfterEffects => "After Effects style",
+        }
+    }
+
+    /// Overrides this preset layers over the voXY defaults, as (action,
+    /// shortcut text). Empty for [`KeymapPreset::Voxy`].
+    fn overrides(self) -> &'static [(Action, &'static str)] {
+        match self {
+            KeymapPreset::Voxy => &[],
+            KeymapPreset::AfterEffects => &[
+                (Action::LayerNewSolid, "Ctrl+Y"),
+                (Action::LayerNewAdjustment, "Ctrl+Alt+Y"),
+                (Action::CompositionSettings, "Ctrl+K"),
+                (Action::EffectRemoveAll, "Ctrl+Shift+E"),
+                (Action::ProjectSelectAll, "Ctrl+A"),
+            ],
+        }
+    }
+
+    /// Applies the preset: voXY defaults, then this preset's overrides. Each
+    /// override is assigned so the result is free of conflicts.
+    pub fn apply(self, keymap: &mut Keymap) {
+        keymap.reset_all();
+        for (action, text) in self.overrides() {
+            if let Some(shortcut) = shortcut_from_text(text) {
+                keymap.assign(*action, shortcut);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -905,6 +953,26 @@ mod tests {
     fn default_shortcuts_do_not_collide() {
         let conflicts = Keymap::default().conflicts();
         assert!(conflicts.is_empty(), "{conflicts:?}");
+    }
+
+    #[test]
+    fn keymap_presets_apply_without_conflicts() {
+        let mut km = Keymap::default();
+        km.set(
+            Action::FileSave,
+            vec![shortcut_from_text("Ctrl+Alt+Q").unwrap()],
+        );
+        // The voXY preset restores every default.
+        KeymapPreset::Voxy.apply(&mut km);
+        assert!(km.is_default(Action::FileSave));
+        // The After-Effects preset layers its overrides over the defaults.
+        KeymapPreset::AfterEffects.apply(&mut km);
+        assert!(
+            km.bindings(Action::LayerNewSolid)
+                .contains(&shortcut_from_text("Ctrl+Y").unwrap()),
+            "After-Effects new-solid shortcut is set"
+        );
+        assert!(km.conflicts().is_empty(), "a preset leaves no conflicts");
     }
 
     #[test]

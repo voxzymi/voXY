@@ -109,7 +109,10 @@ pub const DEFAULT_AUTOSAVE_SECONDS: u32 = 60;
 /// The current preferences schema version. Bump it when the on-disk shape
 /// changes in a way older files need help with, and add a step to
 /// [`Preferences::migrate`] (design §5).
-pub const CURRENT_PREFS_VERSION: u32 = 1;
+///
+/// - v2 introduced `[workspaces]`; a legacy single `dock_layout` is folded
+///   into the Edit workspace.
+pub const CURRENT_PREFS_VERSION: u32 = 2;
 
 /// Schema bookkeeping. `version` gates migration of older files.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -326,6 +329,121 @@ where
     }
 }
 
+/// How much of the interface to show (design §5). Lower levels hide
+/// professional-only options.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InterfaceLevel {
+    Simple,
+    #[default]
+    Standard,
+    Advanced,
+}
+
+impl InterfaceLevel {
+    /// Every level, in display order (for the Settings dialog).
+    pub const ALL: [InterfaceLevel; 3] = [
+        InterfaceLevel::Simple,
+        InterfaceLevel::Standard,
+        InterfaceLevel::Advanced,
+    ];
+    pub fn label(self) -> &'static str {
+        match self {
+            InterfaceLevel::Simple => "Simple",
+            InterfaceLevel::Standard => "Standard",
+            InterfaceLevel::Advanced => "Advanced",
+        }
+    }
+    /// Whether professional (advanced) options are shown. Hidden only at the
+    /// Simple level.
+    pub fn shows_advanced(self) -> bool {
+        !matches!(self, InterfaceLevel::Simple)
+    }
+}
+
+/// Interface settings (design §5).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Interface {
+    #[serde(deserialize_with = "lenient_value")]
+    pub level: InterfaceLevel,
+}
+
+/// A named dock layout (design §6). Workspaces are **global** preferences;
+/// per-project layout stays in `ui_state`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Workspace {
+    pub name: String,
+    /// The dock arrangement as `layout.rs` text.
+    pub layout: String,
+}
+
+/// The saved workspaces and which one is active.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Workspaces {
+    /// The name of the workspace currently applied.
+    pub active: String,
+    /// All workspaces, in menu order. One unreadable entry is dropped alone.
+    #[serde(deserialize_with = "lenient_list")]
+    pub list: Vec<Workspace>,
+}
+
+impl Workspaces {
+    /// Whether a workspace named `name` already exists.
+    pub fn contains(&self, name: &str) -> bool {
+        self.list.iter().any(|w| w.name == name)
+    }
+
+    /// Adds a workspace with `layout` and makes it active. The caller ensures
+    /// the name is non-empty and not already taken.
+    pub fn add(&mut self, name: String, layout: String) {
+        self.active.clone_from(&name);
+        self.list.push(Workspace { name, layout });
+    }
+
+    /// Renames the active workspace to `new` (and the active marker with it).
+    pub fn rename_active(&mut self, new: String) {
+        let active = self.active.clone();
+        if let Some(ws) = self.list.iter_mut().find(|w| w.name == active) {
+            ws.name.clone_from(&new);
+        }
+        self.active = new;
+    }
+
+    /// Removes the active workspace and makes the first remaining one active,
+    /// returning its layout. Keeps (and returns `None` for) the last workspace,
+    /// so there is always at least one.
+    pub fn delete_active(&mut self) -> Option<String> {
+        if self.list.len() <= 1 {
+            return None;
+        }
+        let active = self.active.clone();
+        self.list.retain(|w| w.name != active);
+        let first = self.list.first()?;
+        self.active.clone_from(&first.name);
+        Some(first.layout.clone())
+    }
+}
+
+impl Default for Workspaces {
+    fn default() -> Self {
+        let list = crate::panels::builtin_workspaces()
+            .into_iter()
+            .filter_map(|(name, dock)| {
+                crate::layout::to_text(&dock).map(|layout| Workspace {
+                    name: name.to_owned(),
+                    layout,
+                })
+            })
+            .collect();
+        Workspaces {
+            active: "Edit".to_owned(),
+            list,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Preferences {
@@ -333,6 +451,10 @@ pub struct Preferences {
     pub meta: Meta,
     /// Appearance: theme, accent, scale, font size, timeline density.
     pub appearance: Appearance,
+    /// Named dock layouts and the active one (design §6).
+    pub workspaces: Workspaces,
+    /// Interface level (design §5).
+    pub interface: Interface,
     pub user_presets: Vec<UserPreset>,
     /// Saved keyframe easings, shown in the graph editor's preset strip.
     #[serde(deserialize_with = "lenient_list")]
@@ -395,6 +517,8 @@ impl Default for Preferences {
                 version: CURRENT_PREFS_VERSION,
             },
             appearance: Appearance::default(),
+            workspaces: Workspaces::default(),
+            interface: Interface::default(),
             user_presets: Vec::new(),
             easing_presets: Vec::new(),
             comp_dialog: DialogMemory::default(),
@@ -482,22 +606,30 @@ impl Preferences {
     /// Brings a freshly parsed file up to the current schema. Runs after a
     /// successful parse; future schema changes add a step here (design §5).
     fn migrate(&mut self) {
-        match self.meta.version {
-            // Written before versioning existed: nothing has moved yet, so
-            // adopting the current version is all that is needed.
-            0 => self.meta.version = CURRENT_PREFS_VERSION,
-            // From a newer build: load the settings this build understands and
-            // leave the recorded version alone, so the newer build still
-            // recognises its own file. (Keys this build does not know are not
-            // yet preserved across a save — that is the next U-E step.)
-            v if v > CURRENT_PREFS_VERSION => {
-                tracing::warn!(
-                    "preferences.toml is version {v}, newer than this build (v{CURRENT_PREFS_VERSION}); \
-                     loading the settings this build understands"
-                );
+        // Written before versioning existed: treat as the v1 baseline before
+        // the stepwise migrations below run.
+        if self.meta.version == 0 {
+            self.meta.version = 1;
+        }
+        // v2 introduced `[workspaces]`. Fold a legacy single dock layout into
+        // the Edit workspace so an upgrading user keeps their arrangement.
+        if self.meta.version < 2 {
+            if let Some(layout) = self.dock_layout.take()
+                && let Some(edit) = self.workspaces.list.iter_mut().find(|w| w.name == "Edit")
+            {
+                edit.layout = layout;
             }
-            // The current version, or a known older one a future step migrates.
-            _ => {}
+            self.meta.version = 2;
+        }
+        // From a newer build: load the settings this build understands and
+        // leave the recorded version alone, so the newer build still
+        // recognises its own file. (Unknown keys are preserved separately.)
+        if self.meta.version > CURRENT_PREFS_VERSION {
+            tracing::warn!(
+                "preferences.toml is version {}, newer than this build (v{CURRENT_PREFS_VERSION}); \
+                 loading the settings this build understands",
+                self.meta.version
+            );
         }
     }
 
@@ -798,9 +930,34 @@ mod tests {
         assert_eq!(loaded, p);
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(
-            text.contains("[meta]") && text.contains("version = 1"),
+            text.contains("[meta]") && text.contains(&format!("version = {CURRENT_PREFS_VERSION}")),
             "the version is written to the file:\n{text}"
         );
+    }
+
+    #[test]
+    fn a_legacy_dock_layout_moves_into_the_edit_workspace() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("p.toml");
+        let legacy = crate::layout::to_text(&crate::panels::minimal_layout()).unwrap();
+        let mut old = Preferences::default();
+        old.meta.version = 1;
+        old.dock_layout = Some(legacy.clone());
+        old.save_to(&path).unwrap();
+
+        let loaded = Preferences::load_from(&path);
+        assert_eq!(loaded.meta.version, CURRENT_PREFS_VERSION);
+        assert!(
+            loaded.dock_layout.is_none(),
+            "the legacy layout was consumed"
+        );
+        let edit = loaded
+            .workspaces
+            .list
+            .iter()
+            .find(|w| w.name == "Edit")
+            .expect("the Edit workspace");
+        assert_eq!(edit.layout, legacy, "it became the Edit workspace layout");
     }
 
     #[test]
@@ -879,6 +1036,88 @@ mod tests {
         p.appearance.timeline_density = TimelineDensity::Compact;
         p.save_to(&path).unwrap();
         assert_eq!(Preferences::load_from(&path), p);
+    }
+
+    #[test]
+    fn workspaces_default_to_the_four_built_ins_and_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("p.toml");
+        let p = Preferences::default();
+        let names: Vec<&str> = p.workspaces.list.iter().map(|w| w.name.as_str()).collect();
+        assert_eq!(names, ["Edit", "Effects", "Animate", "Minimal"]);
+        assert_eq!(p.workspaces.active, "Edit");
+        for w in &p.workspaces.list {
+            assert!(
+                crate::layout::from_text(&w.layout).is_some(),
+                "{} is a sound layout",
+                w.name
+            );
+        }
+        p.save_to(&path).unwrap();
+        assert_eq!(Preferences::load_from(&path), p);
+    }
+
+    #[test]
+    fn workspaces_add_rename_and_delete() {
+        let mut ws = Workspaces::default();
+        assert!(ws.contains("Edit") && !ws.contains("Mine"));
+
+        ws.add("Mine".to_owned(), "layout-text".to_owned());
+        assert_eq!(ws.active, "Mine");
+        assert!(ws.contains("Mine"));
+        assert_eq!(ws.list.last().unwrap().layout, "layout-text");
+
+        ws.rename_active("Yours".to_owned());
+        assert_eq!(ws.active, "Yours");
+        assert!(ws.contains("Yours") && !ws.contains("Mine"));
+
+        let next = ws.delete_active().expect("other workspaces remain");
+        assert!(!ws.contains("Yours"));
+        assert_eq!(ws.active, "Edit", "the first remaining becomes active");
+        assert_eq!(next, ws.list[0].layout);
+
+        // Deleting down to the last one returns None and keeps it.
+        ws.list.truncate(1);
+        ws.active.clone_from(&ws.list[0].name);
+        assert!(ws.delete_active().is_none());
+        assert_eq!(ws.list.len(), 1, "the last workspace is kept");
+    }
+
+    #[test]
+    fn a_bad_workspace_entry_is_dropped_alone() {
+        // The second entry is missing its `layout`, so only it is dropped.
+        let text = "[workspaces]\n\
+             active = \"Mine\"\n\
+             [[workspaces.list]]\n\
+             name = \"Mine\"\n\
+             layout = \"{}\"\n\
+             [[workspaces.list]]\n\
+             name = \"Broken\"\n";
+        let p = Preferences::parse(text);
+        assert_eq!(p.workspaces.active, "Mine");
+        let names: Vec<&str> = p.workspaces.list.iter().map(|w| w.name.as_str()).collect();
+        assert_eq!(names, ["Mine"]);
+    }
+
+    #[test]
+    fn interface_level_defaults_to_standard_and_falls_back() {
+        assert_eq!(
+            Preferences::default().interface.level,
+            InterfaceLevel::Standard
+        );
+        assert!(!InterfaceLevel::Simple.shows_advanced());
+        assert!(
+            InterfaceLevel::Standard.shows_advanced() && InterfaceLevel::Advanced.shows_advanced()
+        );
+        // Round trip and lenient fallback.
+        let p = Preferences::parse("[interface]\nlevel = \"simple\"\n");
+        assert_eq!(p.interface.level, InterfaceLevel::Simple);
+        let bad = Preferences::parse("[interface]\nlevel = \"wizard\"\n");
+        assert_eq!(
+            bad.interface.level,
+            InterfaceLevel::Standard,
+            "unknown falls back"
+        );
     }
 
     #[test]

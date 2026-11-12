@@ -42,10 +42,6 @@ impl Tab {
         Tab::Effects,
     ];
 
-    /// Panels added after layouts were first saved. A saved layout without
-    /// them gets them next to the Project panel instead of being refused.
-    pub const ADDED_LATER: [Tab; 1] = [Tab::Effects];
-
     pub(crate) fn title(self) -> &'static str {
         match self {
             Tab::Viewport => "Viewport",
@@ -92,9 +88,62 @@ pub fn default_layout() -> egui_dock::DockState<Tab> {
     dock
 }
 
+/// **Effects** workspace: the Effects & Presets and Properties panels share a
+/// wide right column, Project on the left, timeline along the bottom.
+pub fn effects_layout() -> egui_dock::DockState<Tab> {
+    use egui_dock::NodeIndex;
+    let mut dock = egui_dock::DockState::new(vec![Tab::Viewport]);
+    let tree = dock.main_surface_mut();
+    let [left, _right] =
+        tree.split_right(NodeIndex::root(), 0.62, vec![Tab::Effects, Tab::Properties]);
+    let [top, _timeline] = tree.split_below(left, 0.66, vec![Tab::Timeline, Tab::Graph]);
+    let [_project, _viewport] = tree.split_left(top, 0.22, vec![Tab::Project]);
+    dock
+}
+
+/// **Animate** workspace: a tall Timeline + Graph Editor for keyframing, with
+/// Properties, Project and Effects tabbed on the left.
+pub fn animate_layout() -> egui_dock::DockState<Tab> {
+    use egui_dock::NodeIndex;
+    let mut dock = egui_dock::DockState::new(vec![Tab::Viewport]);
+    let tree = dock.main_surface_mut();
+    let [top, _timeline] =
+        tree.split_below(NodeIndex::root(), 0.5, vec![Tab::Timeline, Tab::Graph]);
+    let [_left, _viewport] =
+        tree.split_left(top, 0.28, vec![Tab::Properties, Tab::Project, Tab::Effects]);
+    dock
+}
+
+/// **Minimal** workspace: the Viewport dominates, with Timeline + Graph below
+/// and everything else tabbed into one narrow left column.
+pub fn minimal_layout() -> egui_dock::DockState<Tab> {
+    use egui_dock::NodeIndex;
+    let mut dock = egui_dock::DockState::new(vec![Tab::Viewport]);
+    let tree = dock.main_surface_mut();
+    let [top, _timeline] =
+        tree.split_below(NodeIndex::root(), 0.75, vec![Tab::Timeline, Tab::Graph]);
+    let [_left, _viewport] =
+        tree.split_left(top, 0.2, vec![Tab::Project, Tab::Properties, Tab::Effects]);
+    dock
+}
+
+/// The built-in workspaces, in menu order. Each is a distinct arrangement of
+/// all panels; the names and layouts are voXY's own (design §6).
+pub fn builtin_workspaces() -> Vec<(&'static str, egui_dock::DockState<Tab>)> {
+    vec![
+        ("Edit", default_layout()),
+        ("Effects", effects_layout()),
+        ("Animate", animate_layout()),
+        ("Minimal", minimal_layout()),
+    ]
+}
+
 pub struct Panels<'a> {
     pub state: &'a mut EditorState,
     pub viewport: Option<&'a mut ViewportRenderer>,
+    /// Whether panels show a close button. False when only one panel remains,
+    /// so the last panel cannot be closed.
+    pub closeable: bool,
 }
 
 impl TabViewer for Panels<'_> {
@@ -109,9 +158,9 @@ impl TabViewer for Panels<'_> {
     }
 
     fn is_closeable(&self, _tab: &Tab) -> bool {
-        // Panels cannot be reopened yet (Window menu arrives later), so keep
-        // them all docked somewhere.
-        false
+        // Any panel can be closed (and reopened from the Window menu), except
+        // the last one, so the dock is never left empty.
+        self.closeable
     }
 
     fn ui(&mut self, ui: &mut Ui, tab: &mut Tab) {
