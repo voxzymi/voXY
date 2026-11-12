@@ -110,6 +110,8 @@ fn toolbar(ui: &mut Ui, state: &mut EditorState) {
             })
             .response
             .on_hover_text("Show only one kind of item");
+        ui.toggle_value(&mut view.favorites_only, "★")
+            .on_hover_text("Show only favorites");
         ui.menu_button(format!("Sort: {}", view.sort.label()), |ui| {
             for k in SortKey::ALL {
                 ui.radio_value(&mut view.sort, k, k.label());
@@ -487,6 +489,13 @@ fn draw_row(ui: &mut Ui, state: &mut EditorState, cx: &ListCx<'_>, i: usize) {
         );
     }
 
+    if state.project.view.favorites.contains(&row.item) && !renaming {
+        paint_star(
+            &painter,
+            pos2(rect.left() + cx.name_w - 12.0, rect.center().y),
+        );
+    }
+
     let mut cx_left = rect.left() + cx.name_w;
     for c in &cx.cols {
         let value = match c {
@@ -542,6 +551,9 @@ fn draw_tile(ui: &mut Ui, state: &mut EditorState, cx: &ListCx<'_>, i: usize, ti
         painter.rect_filled(rect, 4.0, ui.visuals().widgets.hovered.weak_bg_fill);
     }
     row_drops(state, cx, row, &resp, &painter, rect);
+    if state.project.view.favorites.contains(&row.item) {
+        paint_star(&painter, rect.right_top() + vec2(-9.0, 9.0));
+    }
 
     let icon = Rect::from_center_size(
         pos2(rect.center().x, rect.top() + (tile - 22.0) / 2.0),
@@ -805,6 +817,25 @@ fn item_menu(ui: &mut Ui, state: &mut EditorState, row: &Row) {
         action_item(ui, state, a);
     }
     ui.separator();
+    let targets = if state.project.selection.items.contains(&row.item) {
+        state.project.selection.items.iter().copied().collect()
+    } else {
+        vec![row.item]
+    };
+    let starred = targets
+        .iter()
+        .all(|i| state.project.view.favorites.contains(i));
+    if ui
+        .button(if starred {
+            "Remove from Favorites"
+        } else {
+            "Add to Favorites"
+        })
+        .clicked()
+    {
+        state.project.view.toggle_favorites(&targets);
+        ui.close();
+    }
     reveal_in_composition_menu(ui, state);
     action_item(ui, state, Action::RevealInFileManager);
     if let PoolItem::Asset(a) = row.item
@@ -1002,6 +1033,17 @@ fn drag_label(ctx: &egui::Context, panel: Rect) {
 }
 
 // ------------------------------------------------------------- icons
+
+/// The favorite marker.
+fn paint_star(p: &Painter, at: Pos2) {
+    p.text(
+        at,
+        Align2::CENTER_CENTER,
+        "★",
+        FontId::proportional(FONT),
+        Color32::from_rgb(240, 190, 60),
+    );
+}
 
 fn paint_arrow(p: &Painter, center: Pos2, open: bool, color: Color32) {
     let s = 3.5;

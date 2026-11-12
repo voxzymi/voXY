@@ -239,6 +239,52 @@ pub struct ViewSettings {
     pub search: String,
     pub columns: BTreeSet<Column>,
     pub expanded: BTreeSet<FolderId>,
+    /// Starred items (per project, saved in `ui_state`).
+    #[serde(with = "favorites_serde")]
+    pub favorites: BTreeSet<PoolItem>,
+    /// Show only starred items.
+    pub favorites_only: bool,
+}
+
+/// Reads one saved favorite key (see [`favorites_serde`]).
+pub fn parse_favorite(text: &str) -> Option<PoolItem> {
+    favorites_serde::parse(text)
+}
+
+/// `PoolItem` has no serde of its own; favorites are saved as `"a:3"`,
+/// `"c:1"`, `"f:2"` (asset / composition / folder). Unreadable entries are
+/// dropped.
+mod favorites_serde {
+    use super::{BTreeSet, Deserialize, PoolItem};
+    use serde::{Deserializer, Serializer};
+
+    pub fn key(item: PoolItem) -> String {
+        match item {
+            PoolItem::Asset(a) => format!("a:{}", a.raw()),
+            PoolItem::Comp(c) => format!("c:{}", c.raw()),
+            PoolItem::Folder(f) => format!("f:{}", f.raw()),
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<PoolItem> {
+        let (kind, id) = text.split_once(':')?;
+        let id: u64 = id.parse().ok()?;
+        match kind {
+            "a" => Some(PoolItem::Asset(id.into())),
+            "c" => Some(PoolItem::Comp(id.into())),
+            "f" => Some(PoolItem::Folder(id.into())),
+            _ => None,
+        }
+    }
+
+    pub fn serialize<S: Serializer>(set: &BTreeSet<PoolItem>, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_seq(set.iter().map(|&i| key(i)))
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<BTreeSet<PoolItem>, D::Error> {
+        let list = Vec::<String>::deserialize(d)?;
+        Ok(list.iter().filter_map(|t| parse(t)).collect())
+    }
 }
 
 impl Default for ViewSettings {
@@ -260,6 +306,8 @@ impl Default for ViewSettings {
             ]
             .into(),
             expanded: BTreeSet::new(),
+            favorites: BTreeSet::new(),
+            favorites_only: false,
         }
     }
 }
@@ -275,9 +323,21 @@ impl ViewSettings {
         self.current.filter(|f| doc.folder(*f).is_some())
     }
 
+    /// Stars or un-stars every item in `items`: if all are starred they are
+    /// all cleared, otherwise all become starred.
+    pub fn toggle_favorites(&mut self, items: &[PoolItem]) {
+        if items.iter().all(|i| self.favorites.contains(i)) {
+            for i in items {
+                self.favorites.remove(i);
+            }
+        } else {
+            self.favorites.extend(items.iter().copied());
+        }
+    }
+
     /// Whether the tree is flattened into a list of matches.
     pub fn is_flat(&self) -> bool {
-        !self.search.trim().is_empty() || self.filter != TypeFilter::All
+        !self.search.trim().is_empty() || self.filter != TypeFilter::All || self.favorites_only
     }
 }
 
@@ -457,6 +517,7 @@ pub fn build_rows(
         let mut rows: Vec<Row> = all_items(doc)
             .filter_map(|i| make_row(doc, i, 0, usage, missing))
             .filter(|r| view.filter.accepts(r.kind, r.missing) && matches_search(doc, r, &needle))
+            .filter(|r| !view.favorites_only || view.favorites.contains(&r.item))
             .collect();
         rows.sort_by(|a, b| compare(a, b, view.sort, view.descending));
         return rows;
@@ -963,6 +1024,36 @@ mod tests {
             movie: ids[1],
             nested: ids[2],
         }
+    }
+
+    #[test]
+    fn favorites_filter_toggle_and_save() {
+        let f = fixture();
+        let mut view = ViewSettings::default();
+        let both = [PoolItem::Asset(f.photo), PoolItem::Comp(f.main)];
+        view.toggle_favorites(&both[..1]);
+        view.toggle_favorites(&both);
+        assert_eq!(view.favorites.len(), 2, "a mixed selection stars them all");
+        view.toggle_favorites(&both);
+        assert!(view.favorites.is_empty(), "all starred: clears them");
+        view.toggle_favorites(&both);
+        view.favorites_only = true;
+        let shown: Vec<_> = rows(&f, &view).iter().map(|r| r.item).collect();
+        assert_eq!(shown.len(), 2);
+        assert!(shown.iter().all(|i| both.contains(i)));
+        // Saved as text and read back; junk entries are dropped.
+        let json = serde_json::to_value(&view).unwrap();
+        assert!(
+            json["favorites"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(serde_json::Value::is_string)
+        );
+        let back: ViewSettings = serde_json::from_value(json).unwrap();
+        assert_eq!(back.favorites, view.favorites);
+        assert_eq!(favorites_serde::parse("x:1"), None);
+        assert_eq!(favorites_serde::parse("a:nope"), None);
     }
 
     #[test]

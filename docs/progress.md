@@ -1225,6 +1225,13 @@ rides in the existing per-project `ui_state`).
   the view as before. This replaces step 2's interim expanded-children tiles.
   Test: one-level rows, trail, fallback, List unaffected, round trip.
   `clippy -D warnings` clean; 320 tests pass.
+- **U-G step 5: favorites.** Star items from the context menu (Add to /
+  Remove from Favorites, on the selection); a gold ★ marks them in list rows
+  and grid tiles; a ★ toggle in the toolbar shows only favorites (flat view,
+  like a filter). Stored per project in `ui_state` as `"a:3"` / `"c:1"` /
+  `"f:2"` keys (not in the global prefs: pool ids belong to one project), so no
+  project-format change; unreadable keys are dropped. Test: toggle semantics,
+  filter, save / load. `clippy -D warnings` clean; 321 tests pass.
 
 ## Next, in order (UX overhaul)
 
