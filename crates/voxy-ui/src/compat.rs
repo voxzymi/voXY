@@ -10,7 +10,7 @@ use serde_json::{Map, Value};
 use crate::comp_draft::Tab as DialogTab;
 use voxy_core::{CompId, LayerId, Time};
 
-use crate::project_view::{Column, SortKey, TypeFilter, ViewSettings};
+use crate::project_view::{Column, SortKey, TypeFilter, ViewMode, ViewSettings};
 use crate::workspace::{NavStep, SavedTab};
 
 /// Version of the `ui_state` section this build writes. Version 1 stored
@@ -172,6 +172,9 @@ pub fn from_ui_state(state: &Value) -> ViewSettings {
     let mut view = ViewSettings::default();
     let Some(p) = panel else { return view };
     let field = |name: &str| p.get(name).cloned();
+    if let Some(v) = field("mode").and_then(|v| serde_json::from_value::<ViewMode>(v).ok()) {
+        view.mode = v;
+    }
     if let Some(v) = field("sort").and_then(|v| serde_json::from_value::<SortKey>(v).ok()) {
         view.sort = v;
     }
@@ -204,6 +207,20 @@ mod tests {
     use super::*;
     use serde_json::json;
     use voxy_core::FolderId;
+
+    #[test]
+    fn view_mode_round_trips_and_defaults() {
+        let mut v = ViewSettings::default();
+        assert_eq!(v.mode, ViewMode::List);
+        v.mode = ViewMode::Grid;
+        let saved = to_ui_state(&v, DialogTab::Basic, &[], None, None);
+        assert_eq!(from_ui_state(&saved).mode, ViewMode::Grid);
+        // Older projects have no mode; a bad one is ignored.
+        let old = json!({ "project_panel": { "sort": "Name" } });
+        assert_eq!(from_ui_state(&old).mode, ViewMode::List);
+        let bad = json!({ "project_panel": { "mode": "Carousel" } });
+        assert_eq!(from_ui_state(&bad).mode, ViewMode::List);
+    }
 
     #[test]
     fn old_panel_names_load_as_the_project_panel() {

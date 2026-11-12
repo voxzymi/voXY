@@ -196,9 +196,35 @@ pub fn fitting_columns(wanted: &BTreeSet<Column>, width: f32) -> Vec<Column> {
     out
 }
 
+/// How the Project panel lays its items out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum ViewMode {
+    /// The table with sortable columns (the original view).
+    #[default]
+    List,
+    /// Large tiles with a thumbnail and the name below.
+    Grid,
+    /// One dense name-only line per item.
+    Compact,
+}
+
+impl ViewMode {
+    /// The modes the selector offers (Grid joins when its renderer lands).
+    pub const ALL: [ViewMode; 2] = [ViewMode::List, ViewMode::Compact];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ViewMode::List => "List",
+            ViewMode::Grid => "Grid",
+            ViewMode::Compact => "Compact",
+        }
+    }
+}
+
 /// View settings: what `ui_state` stores for the panel.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ViewSettings {
+    pub mode: ViewMode,
     pub sort: SortKey,
     pub descending: bool,
     pub filter: TypeFilter,
@@ -210,6 +236,7 @@ pub struct ViewSettings {
 impl Default for ViewSettings {
     fn default() -> Self {
         ViewSettings {
+            mode: ViewMode::List,
             sort: SortKey::Name,
             descending: false,
             filter: TypeFilter::All,

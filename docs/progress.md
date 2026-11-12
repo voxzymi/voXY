@@ -1191,12 +1191,27 @@ PR (not merged).
 - Unifying the bespoke-painted accents (the `const ACCENT` call sites) so the
   accent preference recolours the whole interface, not just the egui visuals.
 
+## U-G — project-panel views and navigation
+
+Plan (small steps, each pushed): (1) view-mode setting + Compact view;
+(2) Grid view with painted-icon tiles; (3) thumbnail size; (4) breadcrumbs /
+folder navigation; (5) favorites; (6) smart bins; (7) hover preview and
+extended details strip. View state only — no project-format change (the mode
+rides in the existing per-project `ui_state`).
+
+- **U-G step 1: view mode + Compact.** `ViewMode { List, Grid, Compact }` in
+  `ViewSettings` (saved in `ui_state`; missing or unknown values load as
+  List). A "mode" selector in the Project toolbar; Compact drops the header
+  and columns for a name-only list. Grid exists in the enum but is not offered
+  until step 2. Test: mode round-trips, old / bad `ui_state` default to List.
+  `fmt`, `clippy -D warnings` clean; 318 `voxy-ui` tests pass.
+
 ## Next, in order (UX overhaul)
 
 1. **U-E — preferences foundation** — **complete** (see the U-E section above;
    pending the per-job CI report and a PR into `main`).
-2. **U-F — customizable layout** — next, not started (plan above). Then
-   **U-G … U-I** browsing (project-panel views and navigation, command palette),
+2. **U-F — customizable layout** — complete (merged, #10). **U-G … U-I**
+   browsing (U-G in progress) (project-panel views and navigation, command palette),
    in that order.
 3. **Shape layer milestone** — its own milestone *after* U-D. Needs a short
    design note (new `LayerKind`, rendering, project-format bump written only

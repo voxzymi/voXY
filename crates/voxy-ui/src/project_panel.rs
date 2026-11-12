@@ -17,8 +17,8 @@ use voxy_core::{AssetId, Document, FolderId, PoolItem};
 use crate::actions::Action;
 use crate::menu::{action_item, action_item_labelled};
 use crate::project_view::{
-    Column, ItemKind, Row, SortKey, TypeFilter, duration_text, fitting_columns, folder_len,
-    item_raw, rate_text, settings_summary, size_text,
+    Column, ItemKind, Row, SortKey, TypeFilter, ViewMode, duration_text, fitting_columns,
+    folder_len, item_raw, rate_text, settings_summary, size_text,
 };
 use crate::state::EditorState;
 use crate::theme::ACCENT;
@@ -117,7 +117,18 @@ fn toolbar(ui: &mut Ui, state: &mut EditorState) {
         })
         .response
         .on_hover_text("Sort by Type to group compositions together");
-        ui.menu_button("Columns", |ui| columns_menu(ui, view));
+        if view.mode == ViewMode::List {
+            ui.menu_button("Columns", |ui| columns_menu(ui, view));
+        }
+        egui::ComboBox::from_id_salt("project-mode")
+            .selected_text(view.mode.label())
+            .show_ui(ui, |ui| {
+                for m in ViewMode::ALL {
+                    ui.selectable_value(&mut view.mode, m, m.label());
+                }
+            })
+            .response
+            .on_hover_text("How items are laid out");
     });
 }
 
@@ -249,7 +260,12 @@ fn list(
     bg.context_menu(|ui| empty_menu(ui, state));
 
     let width = rect.width();
-    let cols = fitting_columns(&state.project.view.columns, width);
+    let compact = state.project.view.mode != ViewMode::List;
+    let cols = if compact {
+        Vec::new()
+    } else {
+        fitting_columns(&state.project.view.columns, width)
+    };
     let name_w = width - cols.iter().map(|c| c.width()).sum::<f32>();
     let cx = ListCx {
         doc,
@@ -259,7 +275,9 @@ fn list(
         problems,
         mods: ui.input(|i| i.modifiers),
     };
-    header_row(ui, state, &cx);
+    if !compact {
+        header_row(ui, state, &cx);
+    }
 
     if doc.assets.iter().next().is_none() && doc.comps.is_empty() && doc.folders.is_empty() {
         empty_hint(ui, state);
