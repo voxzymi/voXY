@@ -129,6 +129,7 @@ fn draw(state: &mut EditorState, frames: usize) {
         crate::comp_dialog::show(&ctx, state);
         crate::footage::show_prompt(&ctx, state);
         crate::shortcut_editor::show(&ctx, state);
+        crate::settings::show(&ctx, state);
     }
 }
 

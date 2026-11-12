@@ -949,16 +949,138 @@ is the summary that survived into `main`.)
   Per-job CI to follow; this is one small PR and is **not** to be merged without
   the owner's say-so.
 
+## U-E: preferences foundation (complete)
+
+Branch: `claude/ue-preferences`, started fresh from `origin/main` (which now
+carries U-A … U-D and the playback-test hardening, PR #7 and #8 merged). Six
+small steps; one PR into `main` when green (CI reported per job).
+
+- **U-E step 1: schema version + migration scaffold.** `Preferences` gains a
+  `[meta] version` table (`CURRENT_PREFS_VERSION = 1`) and a `migrate` hook run
+  after every successful parse (design §5). A file written before versioning
+  has no `[meta]` (version `0`) and is migrated to the current version with its
+  settings intact; a file from a newer build keeps its higher version and still
+  loads the settings this build understands (a warning is logged; preserving
+  keys this build does not know is the next step). A freshly created
+  `Preferences` is stamped with the current version. The tolerant loader is
+  unchanged otherwise: a missing / corrupt file still gives defaults, a bad
+  value still costs only its own key. Tests: the version defaults to current and
+  round-trips to disk; an unversioned file migrates while keeping its values; a
+  newer-version file still loads known settings. `fmt --check` and
+  `clippy -p voxy-ui --all-targets -D warnings` clean; 295 `voxy-ui` tests pass.
+
+- **U-E step 2: appearance section.** `Preferences` gains an `[appearance]`
+  table (design §5): `theme` (dark / light / high_contrast), `accent`
+  (`#RRGGBB`, default voXY violet `#7C5CFF`), `ui_scale` (auto / 1.0 / 1.25 /
+  1.5 / 2.0), `font_size` (small / normal / large) and `timeline_density`
+  (compact / normal / large). Each field parses **leniently**: a value this
+  build does not recognise (an unknown enum variant, or a non-`#RRGGBB` accent)
+  falls back to its own default while the neighbouring values are kept, so one
+  bad setting never discards the section. Appearance is data only — it is not
+  applied to the interface yet (that is a later step). Tests: defaults and a
+  round trip through disk; a bad theme / scale / accent each falls back while
+  valid neighbours survive. `fmt --check` and `clippy -p voxy-ui --all-targets
+  -D warnings` clean; 295 `voxy-ui` tests pass.
+
+- **U-E step 3: unknown-key preservation.** `Preferences` gains a skipped
+  `unknown: toml::Table`. After a successful parse, top-level keys the schema
+  does not know (a key or a whole `[section]` written by a newer build) are
+  captured by diffing the raw document against the keys this build emits for
+  itself; `save_to` merges them back verbatim, never overwriting a key this
+  build owns. This completes the §5 defensive loader: a newer build's settings
+  now survive a round trip through an older build instead of being dropped.
+  (Unknown keys *nested* inside a known section are still ignored, as before.)
+  Test: a stray top-level key and a whole unknown section are captured, written
+  back to disk, and reload identically. `fmt --check` and `clippy -p voxy-ui
+  --all-targets -D warnings` clean; 298 `voxy-ui` tests pass.
+
+- **U-E step 4: Settings dialog shell.** New `settings` module and a modal
+  **Settings** dialog (Edit ▸ Settings…, `Action::EditPreferences`, no default
+  shortcut). A **Filter** box searches rows by label; the **Appearance** section
+  (theme, accent colour via the swatch picker, interface scale, font size,
+  timeline density) edits `prefs.appearance` and saves immediately through
+  `save_prefs` — preferences are UI state, never document state, so this never
+  touches the command/undo system. Enums gained `ALL` / `label` helpers for the
+  combo boxes. While the dialog is open, shortcuts behind the modal do not fire
+  (same gate as the shortcut editor). The dialog is drawn in both the app and
+  the headless audit harness. Appearance is still only stored here — applying it
+  to the live interface is the next step. Tests: the action opens the dialog and
+  it draws over several frames; a change persists without undo; the filter and
+  the hex⇄RGB helpers behave. `fmt --check` and `clippy -p voxy-ui
+  --all-targets -D warnings` clean; 301 `voxy-ui` tests pass.
+
+- **U-E step 5: apply theme, interface scale and timeline density live.**
+  `theme::apply` now takes the `Theme` and builds the visuals for dark, light
+  or high-contrast (a near-black, white-text, heavy-stroke dark variant); the
+  app calls it every frame from `prefs.appearance`, so switching theme in
+  Settings takes effect with no restart. Interface scale is applied the same
+  way via `ctx.set_zoom_factor` (`UiScale::factor`; Auto → follow the system).
+  Timeline density now drives the row height: `TimelineDensity::row_height`
+  (compact 20 / normal 24 / large 30 pt) rides on the timeline's `Cx`, replacing
+  the former `const ROW_H`. Accent and font size remain stored-only for now
+  (the accent is a `const` used across many modules; applying it live is a
+  separate change the owner has not asked for). Tests: every theme applies
+  without panicking; the scale factors and density heights map as expected.
+  `fmt --check` and `clippy -p voxy-ui -p voxy-app --all-targets -D warnings`
+  clean; 303 `voxy-ui` tests pass and `voxy-app` builds.
+
+- **U-E step 6: first behavior preferences.** The Settings dialog gains a
+  **Behavior** section surfacing three preferences that already drive
+  behaviour, so they no longer need hand-editing `preferences.toml`: **Autosave
+  projects** (on/off plus the interval in minutes, backed by
+  `autosave_seconds`), **Show the Tip of the Day**, and **Double-click a precomp
+  layer** (current tab / own tab, `PrecompOpen`). Each saves immediately through
+  `save_prefs`; the rows are covered by the search filter like Appearance.
+  `PrecompOpen` gained `ALL` / `label`, and the stale "edit preferences.toml"
+  note on `autosave_seconds` was removed. Tests: the behavior rows are
+  searchable and an autosave change round-trips. `fmt --check` and `clippy
+  -p voxy-ui -p voxy-app --all-targets -D warnings` clean; 305 `voxy-ui` tests
+  pass and `voxy-app` builds.
+
+**U-E complete** (steps 1–6): a versioned, migrating, forward-compatible
+preferences store; an `[appearance]` section with per-key tolerant parsing; a
+searchable Settings dialog (Edit ▸ Settings…); theme, interface scale and
+timeline density applied live without a restart; and a Behavior section for the
+first behaviour preferences. CI to be reported per job, then a PR into `main`
+(not merged without the owner).
+
+### Deferred to later U-E-area work (design §5, not yet built)
+
+- Apply the **accent colour** live (today it is stored and editable but the
+  interface still uses the `const` violet; making it live is a cross-module
+  change) and apply **font size**.
+- The remaining `[behavior]` fields: default still-image duration, new-layer
+  placement / length, a snapping default (today Shift toggles snapping),
+  confirmations, and "new composition opens in a tab".
+
+## U-F: customizable layout (next, not started)
+
+Planned for after the owner says "start U-F". Design §5–§6. Small steps, push
+after each, CI per job once at the end, one PR into `main` when green.
+
+a. **Named workspaces.** Edit, Effects, Animate, Minimal (voXY's own names and
+   arrangements). Switch from the Window menu; Save, Rename, Delete; Reset
+   Layout (exists). Workspaces are **global preferences** (`preferences.toml`
+   `[workspaces]`, reusing `layout.rs` encode/decode + soundness check);
+   **per-project layout stays in `ui_state`** and wins on open when present.
+b. **Window menu: close and reopen every panel.** Today the menu only focuses
+   an open panel; closed panels cannot be brought back. Let each panel be
+   closed and reopened (egui_dock already supports close/float/tab).
+c. **Interface level.** `[interface] level = simple | standard | advanced`
+   (default standard), hiding professional-only options at lower levels.
+d. **Shortcut editor upgrades.** Search, conflict warnings, per-action reset,
+   keymap import / export, and presets — a voXY default and an After-Effects-
+   style map. (Builds on the existing `shortcut_editor` and action table.)
+e. **Live accent colour** — only if it needs no large refactor; today `ACCENT`
+   is a `const` used across many modules, so this is contingent, not committed.
+
 ## Next, in order (UX overhaul)
 
-1. **U-E — preferences foundation** (held for the owner's go-ahead; beyond the
-   U-A … U-D block that was authorized to run unattended). Versioned settings
-   store + defensive loader with migration, a Settings dialog shell, appearance
-   (theme dark / light / high-contrast, accent, UI scale, density) and the first
-   behavior prefs. See `design-ux.md` §5.
-2. **U-F … U-I** — browsing and customization (project-panel views and
-   navigation, workspaces, command palette, the interface-level work), in that
-   order.
+1. **U-E — preferences foundation** — **complete** (see the U-E section above;
+   pending the per-job CI report and a PR into `main`).
+2. **U-F — customizable layout** — next, not started (plan above). Then
+   **U-G … U-I** browsing (project-panel views and navigation, command palette),
+   in that order.
 3. **Shape layer milestone** — its own milestone *after* U-D. Needs a short
    design note (new `LayerKind`, rendering, project-format bump written only
    when a project contains shapes, older builds refusing it as

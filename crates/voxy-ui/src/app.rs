@@ -48,7 +48,7 @@ impl std::fmt::Debug for VoxyApp {
 
 impl VoxyApp {
     pub fn new(cc: &eframe::CreationContext<'_>, open: Option<PathBuf>) -> Self {
-        crate::theme::apply(&cc.egui_ctx);
+        crate::theme::apply(&cc.egui_ctx, crate::prefs::Theme::default());
         let viewport = cc
             .wgpu_render_state
             .clone()
@@ -146,12 +146,26 @@ impl VoxyApp {
         }
     }
 
+    /// Applies the live appearance preferences to the egui context each frame,
+    /// so a change in Settings takes effect without a restart. Theme sets the
+    /// visuals; interface scale sets the zoom. Timeline density is read where
+    /// the timeline draws its rows.
+    fn apply_appearance(&self, ctx: &egui::Context) {
+        let appearance = &self.state.prefs.appearance;
+        crate::theme::apply(ctx, appearance.theme);
+        let zoom = appearance.ui_scale.factor().unwrap_or(1.0);
+        if (ctx.zoom_factor() - zoom).abs() > f32::EPSILON {
+            ctx.set_zoom_factor(zoom);
+        }
+    }
+
     /// Runs the actions whose shortcuts were pressed this frame. An action
     /// that cannot run says why in the status bar and does nothing.
     fn shortcuts(&mut self, ctx: &egui::Context) {
         // Text fields keep their own editing shortcuts.
-        // The shortcut editor reads keys itself while it is open.
-        if self.state.shortcut_editor.is_some() {
+        // The shortcut editor reads keys itself while it is open, and the
+        // Settings dialog is modal, so shortcuts behind it do not fire.
+        if self.state.shortcut_editor.is_some() || self.state.settings.is_some() {
             return;
         }
         let typing = ctx.egui_wants_keyboard_input();
@@ -227,6 +241,7 @@ impl VoxyApp {
                 self.item_labelled(ui, Action::EditRedo, &redo);
                 ui.separator();
                 self.item(ui, Action::EditKeyboardShortcuts);
+                self.item(ui, Action::EditPreferences);
             });
             ui.menu_button("Layer", |ui| {
                 self.item(ui, Action::LayerNewSolid);
@@ -416,6 +431,7 @@ impl VoxyApp {
         crate::comp_dialog::show(ctx, &mut self.state);
         crate::footage::show_prompt(ctx, &mut self.state);
         crate::shortcut_editor::show(ctx, &mut self.state);
+        crate::settings::show(ctx, &mut self.state);
         if let Some(action) = self.pending {
             let name = self.state.display_name();
             let mut choice = None;
@@ -515,6 +531,7 @@ impl eframe::App for VoxyApp {
 
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        self.apply_appearance(&ctx);
 
         if ctx.input(|i| i.viewport().close_requested())
             && !self.allow_close

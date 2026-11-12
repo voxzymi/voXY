@@ -124,6 +124,7 @@ pub struct EditorState {
     pub tip: Option<usize>,
     /// The Keyboard Shortcuts dialog, while it is open.
     pub shortcut_editor: Option<crate::shortcut_editor::Editor>,
+    pub settings: Option<crate::settings::Settings>,
     pub prefs: Preferences,
     /// Every effect this session can apply: the built-ins (and, from O-A,
     /// installed OpenFX plugins). Projects resolve against it on load.
@@ -205,6 +206,7 @@ impl EditorState {
             footage_prompt: None,
             tip: None,
             shortcut_editor: None,
+            settings: None,
             prefs: Preferences::default(),
             effects: std::sync::Arc::new(voxy_core::registry::builtins().clone()),
             ofx: None,
@@ -1923,6 +1925,9 @@ impl EditorState {
             }
             Action::EditKeyboardShortcuts => {
                 self.shortcut_editor = Some(crate::shortcut_editor::Editor::default());
+            }
+            Action::EditPreferences => {
+                self.settings = Some(crate::settings::Settings::default());
             }
             Action::SelectionClear => {
                 if self.project.focused {

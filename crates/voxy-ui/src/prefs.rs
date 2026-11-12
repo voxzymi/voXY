@@ -25,6 +25,17 @@ pub enum PrecompOpen {
     OwnTab,
 }
 
+impl PrecompOpen {
+    /// Both options, in display order (for the Settings dialog).
+    pub const ALL: [PrecompOpen; 2] = [PrecompOpen::CurrentTab, PrecompOpen::OwnTab];
+    pub fn label(self) -> &'static str {
+        match self {
+            PrecompOpen::CurrentTab => "In the current tab",
+            PrecompOpen::OwnTab => "In its own tab",
+        }
+    }
+}
+
 /// A composition preset the user saved. Built-in presets live in code.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UserPreset {
@@ -95,17 +106,240 @@ impl Default for DialogMemory {
 /// Seconds of unsaved editing after which the project is autosaved.
 pub const DEFAULT_AUTOSAVE_SECONDS: u32 = 60;
 
+/// The current preferences schema version. Bump it when the on-disk shape
+/// changes in a way older files need help with, and add a step to
+/// [`Preferences::migrate`] (design §5).
+pub const CURRENT_PREFS_VERSION: u32 = 1;
+
+/// Schema bookkeeping. `version` gates migration of older files.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Meta {
+    pub version: u32,
+}
+
+impl Default for Meta {
+    /// `0` marks a file written before versioning existed; a freshly created
+    /// [`Preferences`] overrides this with the current version, and
+    /// [`Preferences::migrate`] turns a loaded `0` into the current one.
+    fn default() -> Self {
+        Meta { version: 0 }
+    }
+}
+
+/// The default accent colour: voXY violet.
+pub const DEFAULT_ACCENT: &str = "#7C5CFF";
+
+/// Overall look of the interface.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Theme {
+    #[default]
+    Dark,
+    Light,
+    HighContrast,
+}
+
+/// Interface scale. `Auto` follows the operating system; the rest are fixed
+/// multipliers.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum UiScale {
+    #[default]
+    #[serde(rename = "auto")]
+    Auto,
+    #[serde(rename = "1.0")]
+    X1,
+    #[serde(rename = "1.25")]
+    X1_25,
+    #[serde(rename = "1.5")]
+    X1_5,
+    #[serde(rename = "2.0")]
+    X2,
+}
+
+/// Base font size for the interface.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FontSize {
+    Small,
+    #[default]
+    Normal,
+    Large,
+}
+
+/// How tightly timeline rows are packed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TimelineDensity {
+    Compact,
+    #[default]
+    Normal,
+    Large,
+}
+
+impl Theme {
+    /// Every theme, in display order (for the Settings dialog).
+    pub const ALL: [Theme; 3] = [Theme::Dark, Theme::Light, Theme::HighContrast];
+    /// The human-readable name.
+    pub fn label(self) -> &'static str {
+        match self {
+            Theme::Dark => "Dark",
+            Theme::Light => "Light",
+            Theme::HighContrast => "High contrast",
+        }
+    }
+}
+
+impl UiScale {
+    /// Every scale, in display order.
+    pub const ALL: [UiScale; 5] = [
+        UiScale::Auto,
+        UiScale::X1,
+        UiScale::X1_25,
+        UiScale::X1_5,
+        UiScale::X2,
+    ];
+    pub fn label(self) -> &'static str {
+        match self {
+            UiScale::Auto => "Auto (follow system)",
+            UiScale::X1 => "100%",
+            UiScale::X1_25 => "125%",
+            UiScale::X1_5 => "150%",
+            UiScale::X2 => "200%",
+        }
+    }
+
+    /// The fixed zoom multiplier, or `None` for [`UiScale::Auto`] (follow the
+    /// operating system — no extra zoom).
+    pub fn factor(self) -> Option<f32> {
+        match self {
+            UiScale::Auto => None,
+            UiScale::X1 => Some(1.0),
+            UiScale::X1_25 => Some(1.25),
+            UiScale::X1_5 => Some(1.5),
+            UiScale::X2 => Some(2.0),
+        }
+    }
+}
+
+impl FontSize {
+    /// Every size, in display order.
+    pub const ALL: [FontSize; 3] = [FontSize::Small, FontSize::Normal, FontSize::Large];
+    pub fn label(self) -> &'static str {
+        match self {
+            FontSize::Small => "Small",
+            FontSize::Normal => "Normal",
+            FontSize::Large => "Large",
+        }
+    }
+}
+
+impl TimelineDensity {
+    /// Every density, in display order.
+    pub const ALL: [TimelineDensity; 3] = [
+        TimelineDensity::Compact,
+        TimelineDensity::Normal,
+        TimelineDensity::Large,
+    ];
+    pub fn label(self) -> &'static str {
+        match self {
+            TimelineDensity::Compact => "Compact",
+            TimelineDensity::Normal => "Normal",
+            TimelineDensity::Large => "Large",
+        }
+    }
+
+    /// Height of one timeline row, in points.
+    pub fn row_height(self) -> f32 {
+        match self {
+            TimelineDensity::Compact => 20.0,
+            TimelineDensity::Normal => 24.0,
+            TimelineDensity::Large => 30.0,
+        }
+    }
+}
+
+/// Appearance settings (design §5). Each field parses leniently: a value this
+/// build does not recognise falls back to its default and the others are kept.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Appearance {
+    #[serde(deserialize_with = "lenient_value")]
+    pub theme: Theme,
+    /// Accent colour as `#RRGGBB`; an unparseable value falls back to
+    /// [`DEFAULT_ACCENT`].
+    #[serde(deserialize_with = "lenient_accent")]
+    pub accent: String,
+    #[serde(deserialize_with = "lenient_value")]
+    pub ui_scale: UiScale,
+    #[serde(deserialize_with = "lenient_value")]
+    pub font_size: FontSize,
+    #[serde(deserialize_with = "lenient_value")]
+    pub timeline_density: TimelineDensity,
+}
+
+impl Default for Appearance {
+    fn default() -> Self {
+        Appearance {
+            theme: Theme::default(),
+            accent: DEFAULT_ACCENT.to_string(),
+            ui_scale: UiScale::default(),
+            font_size: FontSize::default(),
+            timeline_density: TimelineDensity::default(),
+        }
+    }
+}
+
+/// Deserializes one value, falling back to the type's default (with a warning)
+/// when it does not match — so one bad setting never discards the rest.
+fn lenient_value<'de, D, T>(d: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de> + Default,
+{
+    let value = toml::Value::deserialize(d)?;
+    Ok(T::deserialize(value.clone()).unwrap_or_else(|e| {
+        tracing::warn!("ignoring invalid preference value {value}: {e}");
+        T::default()
+    }))
+}
+
+/// `true` for a `#RRGGBB` hex colour.
+fn is_hex_color(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    bytes.len() == 7 && bytes[0] == b'#' && bytes[1..].iter().all(u8::is_ascii_hexdigit)
+}
+
+/// Reads an accent colour, falling back to [`DEFAULT_ACCENT`] when it is not a
+/// `#RRGGBB` string.
+fn lenient_accent<'de, D>(d: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = toml::Value::deserialize(d)?;
+    match value.as_str() {
+        Some(s) if is_hex_color(s) => Ok(s.to_string()),
+        _ => {
+            tracing::warn!("ignoring invalid accent colour {value}");
+            Ok(DEFAULT_ACCENT.to_string())
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Preferences {
+    /// Schema version, for migrating older files (design §5).
+    pub meta: Meta,
+    /// Appearance: theme, accent, scale, font size, timeline density.
+    pub appearance: Appearance,
     pub user_presets: Vec<UserPreset>,
     /// Saved keyframe easings, shown in the graph editor's preset strip.
     #[serde(deserialize_with = "lenient_list")]
     pub easing_presets: Vec<EasingPreset>,
     pub comp_dialog: DialogMemory,
     /// How long after the first unsaved edit the project is autosaved, in
-    /// seconds; `0` turns autosave off. There is no settings dialog yet:
-    /// edit `preferences.toml`.
+    /// seconds; `0` turns autosave off. Editable in Settings ▸ Behavior.
     pub autosave_seconds: u32,
     /// Show the Tip of the Day on the empty-state screen (Window > Show
     /// Tips).
@@ -128,6 +362,12 @@ pub struct Preferences {
     /// OpenFX plugins that failed three times, with the reason; they stay
     /// blocked until Retry (design §6.7).
     pub ofx_blocked: Vec<(String, String)>,
+    /// Top-level keys this build does not recognise, kept verbatim so a file
+    /// written by a newer build survives a round trip (design §5). Not part
+    /// of the schema and never goes through serde — captured after parsing
+    /// and merged back when saving.
+    #[serde(skip)]
+    pub unknown: toml::Table,
 }
 
 /// Reads the shortcut table entry by entry (like [`lenient_list`]).
@@ -151,6 +391,10 @@ where
 impl Default for Preferences {
     fn default() -> Self {
         Preferences {
+            meta: Meta {
+                version: CURRENT_PREFS_VERSION,
+            },
+            appearance: Appearance::default(),
             user_presets: Vec::new(),
             easing_presets: Vec::new(),
             comp_dialog: DialogMemory::default(),
@@ -162,6 +406,7 @@ impl Default for Preferences {
             precomp_double_click: PrecompOpen::CurrentTab,
             ofx_plugin_paths: Vec::new(),
             ofx_blocked: Vec::new(),
+            unknown: toml::Table::new(),
         }
     }
 }
@@ -204,15 +449,71 @@ impl Preferences {
     }
 
     pub fn parse(text: &str) -> Preferences {
-        toml::from_str(text).unwrap_or_else(|e| {
-            tracing::warn!("ignoring corrupt preferences: {e}");
-            Preferences::default()
-        })
+        match toml::from_str::<Preferences>(text) {
+            Ok(mut prefs) => {
+                prefs.migrate();
+                prefs.capture_unknown(text);
+                prefs
+            }
+            Err(e) => {
+                tracing::warn!("ignoring corrupt preferences: {e}");
+                Preferences::default()
+            }
+        }
     }
 
-    /// Writes the file atomically, creating the directory.
+    /// Records top-level keys the schema does not know (from a newer build),
+    /// so [`save_to`](Self::save_to) can write them back unchanged (design §5).
+    fn capture_unknown(&mut self, text: &str) {
+        let Ok(raw) = toml::from_str::<toml::Table>(text) else {
+            return;
+        };
+        // The keys this build emits for itself; everything else in the file
+        // belongs to another build and is preserved verbatim.
+        let Ok(toml::Value::Table(known)) = toml::Value::try_from(&*self) else {
+            return;
+        };
+        self.unknown = raw
+            .into_iter()
+            .filter(|(key, _)| !known.contains_key(key))
+            .collect();
+    }
+
+    /// Brings a freshly parsed file up to the current schema. Runs after a
+    /// successful parse; future schema changes add a step here (design §5).
+    fn migrate(&mut self) {
+        match self.meta.version {
+            // Written before versioning existed: nothing has moved yet, so
+            // adopting the current version is all that is needed.
+            0 => self.meta.version = CURRENT_PREFS_VERSION,
+            // From a newer build: load the settings this build understands and
+            // leave the recorded version alone, so the newer build still
+            // recognises its own file. (Keys this build does not know are not
+            // yet preserved across a save — that is the next U-E step.)
+            v if v > CURRENT_PREFS_VERSION => {
+                tracing::warn!(
+                    "preferences.toml is version {v}, newer than this build (v{CURRENT_PREFS_VERSION}); \
+                     loading the settings this build understands"
+                );
+            }
+            // The current version, or a known older one a future step migrates.
+            _ => {}
+        }
+    }
+
+    /// Writes the file atomically, creating the directory. Unknown keys from a
+    /// newer build (see [`unknown`](Self::unknown)) are merged back in, never
+    /// overwriting a key this build owns.
     pub fn save_to(&self, path: &Path) -> Result<(), String> {
-        let text = toml::to_string_pretty(self).map_err(|e| e.to_string())?;
+        let toml::Value::Table(mut table) =
+            toml::Value::try_from(self).map_err(|e| e.to_string())?
+        else {
+            return Err("preferences did not serialize to a table".into());
+        };
+        for (key, value) in &self.unknown {
+            table.entry(key.clone()).or_insert(value.clone());
+        }
+        let text = toml::to_string_pretty(&table).map_err(|e| e.to_string())?;
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
@@ -483,6 +784,138 @@ mod tests {
         assert_eq!(q.user_presets.len(), 1);
         assert_eq!(q.user_presets[0].width, 720);
         assert!(q.remove_preset("Mine") && !q.remove_preset("Mine"));
+    }
+
+    #[test]
+    fn schema_version_defaults_to_current_and_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("p.toml");
+        let p = Preferences::default();
+        assert_eq!(p.meta.version, CURRENT_PREFS_VERSION);
+        p.save_to(&path).unwrap();
+        let loaded = Preferences::load_from(&path);
+        assert_eq!(loaded.meta.version, CURRENT_PREFS_VERSION);
+        assert_eq!(loaded, p);
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            text.contains("[meta]") && text.contains("version = 1"),
+            "the version is written to the file:\n{text}"
+        );
+    }
+
+    #[test]
+    fn an_unversioned_file_migrates_to_current_keeping_its_values() {
+        // A file written before versioning existed has no [meta] table.
+        let p = Preferences::parse("autosave_seconds = 30\nshow_tips = false\n");
+        assert_eq!(
+            p.meta.version, CURRENT_PREFS_VERSION,
+            "it adopts the current schema version"
+        );
+        assert_eq!(p.autosave_seconds, 30);
+        assert!(!p.show_tips, "its settings survive the migration");
+    }
+
+    #[test]
+    fn a_newer_version_file_still_loads_what_this_build_understands() {
+        let text = format!(
+            "[meta]\nversion = {}\n\n[comp_dialog]\nlock_aspect = true\n",
+            CURRENT_PREFS_VERSION + 1
+        );
+        let p = Preferences::parse(&text);
+        assert_eq!(
+            p.meta.version,
+            CURRENT_PREFS_VERSION + 1,
+            "the newer version is kept, not silently downgraded"
+        );
+        assert!(p.comp_dialog.lock_aspect, "known settings still load");
+    }
+
+    #[test]
+    fn unknown_top_level_keys_survive_a_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("p.toml");
+        // A stray key and a whole section this build does not know, as a newer
+        // build might write.
+        let text = "show_tips = false\n\
+                    future_scalar = 7\n\
+                    \n[future_section]\n\
+                    enabled = true\n\
+                    name = \"x\"\n";
+        let p = Preferences::parse(text);
+        assert!(!p.show_tips, "known settings still load");
+        assert!(
+            p.unknown.contains_key("future_scalar") && p.unknown.contains_key("future_section"),
+            "unknown keys were captured: {:?}",
+            p.unknown
+        );
+        p.save_to(&path).unwrap();
+        let reloaded = Preferences::load_from(&path);
+        assert_eq!(
+            reloaded, p,
+            "the file round-trips with its unknown keys intact"
+        );
+        let on_disk = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            on_disk.contains("future_scalar") && on_disk.contains("[future_section]"),
+            "unknown keys are written back to disk:\n{on_disk}"
+        );
+    }
+
+    #[test]
+    fn appearance_defaults_and_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("p.toml");
+        let a = Preferences::default().appearance;
+        assert_eq!(a.theme, Theme::Dark);
+        assert_eq!(a.accent, DEFAULT_ACCENT);
+        assert_eq!(a.ui_scale, UiScale::Auto);
+        assert_eq!(a.font_size, FontSize::Normal);
+        assert_eq!(a.timeline_density, TimelineDensity::Normal);
+
+        let mut p = Preferences::default();
+        p.appearance.theme = Theme::HighContrast;
+        p.appearance.accent = "#112233".into();
+        p.appearance.ui_scale = UiScale::X1_25;
+        p.appearance.timeline_density = TimelineDensity::Compact;
+        p.save_to(&path).unwrap();
+        assert_eq!(Preferences::load_from(&path), p);
+    }
+
+    #[test]
+    fn scale_factors_and_densities_map_as_expected() {
+        assert_eq!(UiScale::Auto.factor(), None);
+        assert_eq!(UiScale::X1.factor(), Some(1.0));
+        assert_eq!(UiScale::X2.factor(), Some(2.0));
+        assert!(
+            TimelineDensity::Compact.row_height() < TimelineDensity::Normal.row_height()
+                && TimelineDensity::Normal.row_height() < TimelineDensity::Large.row_height()
+        );
+    }
+
+    #[test]
+    fn a_bad_appearance_value_falls_back_but_keeps_the_others() {
+        let p = Preferences::parse(
+            "[appearance]\n\
+             theme = \"banana\"\n\
+             accent = \"#AABBCC\"\n\
+             ui_scale = \"3.0\"\n\
+             timeline_density = \"compact\"\n",
+        );
+        assert_eq!(p.appearance.theme, Theme::Dark, "unknown theme falls back");
+        assert_eq!(
+            p.appearance.ui_scale,
+            UiScale::Auto,
+            "unknown scale falls back"
+        );
+        assert_eq!(p.appearance.accent, "#AABBCC", "a valid neighbour is kept");
+        assert_eq!(
+            p.appearance.timeline_density,
+            TimelineDensity::Compact,
+            "a valid neighbour is kept"
+        );
+        // A non-hex accent falls back to the default.
+        let q = Preferences::parse("[appearance]\naccent = \"purple\"\n");
+        assert_eq!(q.appearance.accent, DEFAULT_ACCENT);
     }
 
     #[test]
