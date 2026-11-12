@@ -196,20 +196,115 @@ pub fn fitting_columns(wanted: &BTreeSet<Column>, width: f32) -> Vec<Column> {
     out
 }
 
+/// Smallest and largest grid tile edge.
+pub const TILE_SIZES: std::ops::RangeInclusive<f32> = 64.0..=160.0;
+pub const DEFAULT_TILE: f32 = 96.0;
+
+/// How the Project panel lays its items out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum ViewMode {
+    /// The table with sortable columns (the original view).
+    #[default]
+    List,
+    /// Large tiles with a thumbnail and the name below.
+    Grid,
+    /// One dense name-only line per item.
+    Compact,
+}
+
+impl ViewMode {
+    pub const ALL: [ViewMode; 3] = [ViewMode::List, ViewMode::Grid, ViewMode::Compact];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ViewMode::List => "List",
+            ViewMode::Grid => "Grid",
+            ViewMode::Compact => "Compact",
+        }
+    }
+}
+
 /// View settings: what `ui_state` stores for the panel.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ViewSettings {
+    pub mode: ViewMode,
+    /// Grid tile edge in points, kept within `TILE_SIZES`.
+    pub tile_size: f32,
+    /// Grid / Compact show one folder at a time: the one being browsed
+    /// (`None` is the project root). Ignored by List, which is a tree.
+    pub current: Option<FolderId>,
     pub sort: SortKey,
     pub descending: bool,
     pub filter: TypeFilter,
     pub search: String,
     pub columns: BTreeSet<Column>,
     pub expanded: BTreeSet<FolderId>,
+    /// Starred items (per project, saved in `ui_state`).
+    #[serde(with = "favorites_serde")]
+    pub favorites: BTreeSet<PoolItem>,
+    /// Show only starred items.
+    pub favorites_only: bool,
+    /// Saved searches, shown in the Bins menu.
+    pub smart_bins: Vec<SmartBin>,
+}
+
+/// A saved search: the filters it restores when applied. Per project (saved
+/// in `ui_state`), so no global preference or format change is involved.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SmartBin {
+    pub name: String,
+    pub search: String,
+    pub filter: TypeFilter,
+    pub favorites_only: bool,
+}
+
+/// Reads one saved favorite key (see [`favorites_serde`]).
+pub fn parse_favorite(text: &str) -> Option<PoolItem> {
+    favorites_serde::parse(text)
+}
+
+/// `PoolItem` has no serde of its own; favorites are saved as `"a:3"`,
+/// `"c:1"`, `"f:2"` (asset / composition / folder). Unreadable entries are
+/// dropped.
+mod favorites_serde {
+    use super::{BTreeSet, Deserialize, PoolItem};
+    use serde::{Deserializer, Serializer};
+
+    pub fn key(item: PoolItem) -> String {
+        match item {
+            PoolItem::Asset(a) => format!("a:{}", a.raw()),
+            PoolItem::Comp(c) => format!("c:{}", c.raw()),
+            PoolItem::Folder(f) => format!("f:{}", f.raw()),
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<PoolItem> {
+        let (kind, id) = text.split_once(':')?;
+        let id: u64 = id.parse().ok()?;
+        match kind {
+            "a" => Some(PoolItem::Asset(id.into())),
+            "c" => Some(PoolItem::Comp(id.into())),
+            "f" => Some(PoolItem::Folder(id.into())),
+            _ => None,
+        }
+    }
+
+    pub fn serialize<S: Serializer>(set: &BTreeSet<PoolItem>, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_seq(set.iter().map(|&i| key(i)))
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<BTreeSet<PoolItem>, D::Error> {
+        let list = Vec::<String>::deserialize(d)?;
+        Ok(list.iter().filter_map(|t| parse(t)).collect())
+    }
 }
 
 impl Default for ViewSettings {
     fn default() -> Self {
         ViewSettings {
+            mode: ViewMode::List,
+            tile_size: DEFAULT_TILE,
+            current: None,
             sort: SortKey::Name,
             descending: false,
             filter: TypeFilter::All,
@@ -223,14 +318,69 @@ impl Default for ViewSettings {
             ]
             .into(),
             expanded: BTreeSet::new(),
+            favorites: BTreeSet::new(),
+            favorites_only: false,
+            smart_bins: Vec::new(),
         }
     }
 }
 
 impl ViewSettings {
+    /// Whether the panel browses one folder at a time rather than a tree.
+    pub fn browses_folders(&self) -> bool {
+        self.mode != ViewMode::List
+    }
+
+    /// The folder being browsed, or the root if it no longer exists.
+    pub fn current_in(&self, doc: &Document) -> Option<FolderId> {
+        self.current.filter(|f| doc.folder(*f).is_some())
+    }
+
+    /// Saves the current search, filter and favorites toggle as a bin called
+    /// `name` (replacing a bin of the same name). Returns `false` for a blank
+    /// name, or when there is nothing to save (no search, filter or toggle).
+    pub fn save_smart_bin(&mut self, name: &str) -> bool {
+        let name = name.trim();
+        if name.is_empty() || !self.is_flat() {
+            return false;
+        }
+        let bin = SmartBin {
+            name: name.to_owned(),
+            search: self.search.clone(),
+            filter: self.filter,
+            favorites_only: self.favorites_only,
+        };
+        match self.smart_bins.iter_mut().find(|b| b.name == name) {
+            Some(existing) => *existing = bin,
+            None => self.smart_bins.push(bin),
+        }
+        true
+    }
+
+    /// Restores bin `index`'s filters.
+    pub fn apply_smart_bin(&mut self, index: usize) {
+        if let Some(b) = self.smart_bins.get(index).cloned() {
+            self.search = b.search;
+            self.filter = b.filter;
+            self.favorites_only = b.favorites_only;
+        }
+    }
+
+    /// Stars or un-stars every item in `items`: if all are starred they are
+    /// all cleared, otherwise all become starred.
+    pub fn toggle_favorites(&mut self, items: &[PoolItem]) {
+        if items.iter().all(|i| self.favorites.contains(i)) {
+            for i in items {
+                self.favorites.remove(i);
+            }
+        } else {
+            self.favorites.extend(items.iter().copied());
+        }
+    }
+
     /// Whether the tree is flattened into a list of matches.
     pub fn is_flat(&self) -> bool {
-        !self.search.trim().is_empty() || self.filter != TypeFilter::All
+        !self.search.trim().is_empty() || self.filter != TypeFilter::All || self.favorites_only
     }
 }
 
@@ -410,13 +560,50 @@ pub fn build_rows(
         let mut rows: Vec<Row> = all_items(doc)
             .filter_map(|i| make_row(doc, i, 0, usage, missing))
             .filter(|r| view.filter.accepts(r.kind, r.missing) && matches_search(doc, r, &needle))
+            .filter(|r| !view.favorites_only || view.favorites.contains(&r.item))
             .collect();
         rows.sort_by(|a, b| compare(a, b, view.sort, view.descending));
         return rows;
     }
     let mut out = Vec::new();
-    push_children(doc, view, usage, missing, None, 0, &mut out);
+    if view.browses_folders() {
+        // One level only: nothing expands, so folders are entered, not opened.
+        let flat_view = ViewSettings {
+            expanded: BTreeSet::new(),
+            ..view.clone()
+        };
+        push_children(
+            doc,
+            &flat_view,
+            usage,
+            missing,
+            view.current_in(doc),
+            0,
+            &mut out,
+        );
+        for r in &mut out {
+            r.expandable = false;
+            r.expanded = false;
+        }
+    } else {
+        push_children(doc, view, usage, missing, None, 0, &mut out);
+    }
     out
+}
+
+/// The path shown above a browsed folder: the root, then each folder down to
+/// `current`, as `(target, label)`.
+pub fn breadcrumbs(doc: &Document, current: Option<FolderId>) -> Vec<(Option<FolderId>, String)> {
+    let mut trail = Vec::new();
+    let mut cur = current.filter(|f| doc.folder(*f).is_some());
+    while let Some(f) = cur {
+        let folder = doc.folder(f).expect("checked above");
+        trail.push((Some(f), folder.name.clone()));
+        cur = folder.parent;
+    }
+    trail.push((None, "Project".to_owned()));
+    trail.reverse();
+    trail
 }
 
 fn push_children(
@@ -635,6 +822,29 @@ pub fn settings_summary(row: &Row) -> String {
     }
 }
 
+/// Where an item lives, as `Project / Clips / Inner`.
+pub fn location_text(doc: &Document, item: PoolItem) -> String {
+    let mut names: Vec<String> = ancestors(doc, item)
+        .iter()
+        .filter_map(|f| doc.folder(*f).map(|f| f.name.clone()))
+        .collect();
+    names.push("Project".to_owned());
+    names.reverse();
+    names.join(" / ")
+}
+
+/// Audio facts as `Stereo, 48 kHz`, or `None` without audio.
+pub fn audio_text(audio: Option<voxy_core::AudioInfo>) -> Option<String> {
+    let a = audio?;
+    let layout = match a.channels {
+        1 => "Mono".to_owned(),
+        2 => "Stereo".to_owned(),
+        n => format!("{n} channels"),
+    };
+    let khz = f64::from(a.sample_rate) / 1000.0;
+    Some(format!("{layout}, {khz} kHz"))
+}
+
 /// The id of a composition row, if it is one.
 pub fn comp_of(item: PoolItem) -> Option<CompId> {
     match item {
@@ -675,6 +885,8 @@ pub struct ProjectState {
     pub rename: Option<Rename>,
     pub missing: MissingCache,
     pub pending_remove: Option<PendingRemove>,
+    /// The name being typed in the Bins menu.
+    pub new_bin_name: String,
     /// The panel has keyboard focus (decides what Delete and Ctrl+A mean).
     pub focused: bool,
     usage: Option<(u64, HashMap<SourceRef, usize>)>,
@@ -726,6 +938,9 @@ impl ProjectState {
         }
         for &i in &items {
             self.view.expanded.extend(ancestors(doc, i));
+        }
+        if self.view.browses_folders() {
+            self.view.current = doc.item_folder(items[0]);
         }
         let mut rows = self.rows(doc, revision);
         let mut message = None;
@@ -877,6 +1092,136 @@ mod tests {
             movie: ids[1],
             nested: ids[2],
         }
+    }
+
+    #[test]
+    fn location_and_audio_text() {
+        let f = fixture();
+        let doc = f.h.current();
+        assert_eq!(location_text(doc, PoolItem::Asset(f.photo)), "Project");
+        assert_eq!(
+            location_text(doc, PoolItem::Asset(f.nested)),
+            "Project / Clips / Inner"
+        );
+        assert_eq!(
+            location_text(doc, PoolItem::Folder(f.inner)),
+            "Project / Clips"
+        );
+        assert_eq!(audio_text(None), None);
+        let a = |channels, sample_rate| voxy_core::AudioInfo {
+            channels,
+            sample_rate,
+        };
+        assert_eq!(
+            audio_text(Some(a(2, 48_000))).as_deref(),
+            Some("Stereo, 48 kHz")
+        );
+        assert_eq!(
+            audio_text(Some(a(1, 44_100))).as_deref(),
+            Some("Mono, 44.1 kHz")
+        );
+        assert_eq!(
+            audio_text(Some(a(6, 48_000))).as_deref(),
+            Some("6 channels, 48 kHz")
+        );
+    }
+
+    #[test]
+    fn smart_bins_save_apply_and_reload() {
+        let f = fixture();
+        let mut view = ViewSettings::default();
+        assert!(
+            !view.save_smart_bin("Nothing"),
+            "no filter, nothing to save"
+        );
+        view.search = "movie".into();
+        assert!(!view.save_smart_bin("  "), "blank names are refused");
+        assert!(view.save_smart_bin("Movies"));
+        view.filter = TypeFilter::Missing;
+        assert!(view.save_smart_bin("Movies"), "same name replaces");
+        assert_eq!(view.smart_bins.len(), 1);
+        view.search.clear();
+        view.filter = TypeFilter::All;
+        assert!(rows(&f, &view).len() > 3);
+        view.apply_smart_bin(0);
+        assert_eq!(view.search, "movie");
+        assert_eq!(view.filter, TypeFilter::Missing);
+        view.apply_smart_bin(9); // out of range: ignored
+        let back: ViewSettings =
+            serde_json::from_value(serde_json::to_value(&view).unwrap()).unwrap();
+        assert_eq!(back.smart_bins, view.smart_bins);
+    }
+
+    #[test]
+    fn favorites_filter_toggle_and_save() {
+        let f = fixture();
+        let mut view = ViewSettings::default();
+        let both = [PoolItem::Asset(f.photo), PoolItem::Comp(f.main)];
+        view.toggle_favorites(&both[..1]);
+        view.toggle_favorites(&both);
+        assert_eq!(view.favorites.len(), 2, "a mixed selection stars them all");
+        view.toggle_favorites(&both);
+        assert!(view.favorites.is_empty(), "all starred: clears them");
+        view.toggle_favorites(&both);
+        view.favorites_only = true;
+        let shown: Vec<_> = rows(&f, &view).iter().map(|r| r.item).collect();
+        assert_eq!(shown.len(), 2);
+        assert!(shown.iter().all(|i| both.contains(i)));
+        // Saved as text and read back; junk entries are dropped.
+        let json = serde_json::to_value(&view).unwrap();
+        assert!(
+            json["favorites"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(serde_json::Value::is_string)
+        );
+        let back: ViewSettings = serde_json::from_value(json).unwrap();
+        assert_eq!(back.favorites, view.favorites);
+        assert_eq!(favorites_serde::parse("x:1"), None);
+        assert_eq!(favorites_serde::parse("a:nope"), None);
+    }
+
+    #[test]
+    fn browsing_shows_one_folder_and_a_breadcrumb_trail() {
+        let f = fixture();
+        let doc = f.h.current();
+        let mut view = ViewSettings {
+            mode: ViewMode::Grid,
+            expanded: [f.clips].into(),
+            ..ViewSettings::default()
+        };
+        // Root: folders first, nothing expanded even though Clips is.
+        let root = rows(&f, &view);
+        assert!(root.iter().all(|r| r.depth == 0 && !r.expandable));
+        assert!(root.iter().any(|r| r.item == PoolItem::Folder(f.clips)));
+        assert!(!root.iter().any(|r| r.item == PoolItem::Asset(f.movie)));
+        assert_eq!(
+            breadcrumbs(doc, view.current_in(doc)),
+            vec![(None, "Project".to_owned())]
+        );
+        // Inside Clips: its direct children only.
+        view.current = Some(f.clips);
+        let inside = rows(&f, &view);
+        assert!(inside.iter().any(|r| r.item == PoolItem::Asset(f.movie)));
+        assert!(inside.iter().any(|r| r.item == PoolItem::Folder(f.inner)));
+        assert!(!inside.iter().any(|r| r.item == PoolItem::Asset(f.nested)));
+        view.current = Some(f.inner);
+        let trail = breadcrumbs(doc, view.current_in(doc));
+        let names: Vec<_> = trail.iter().map(|(_, n)| n.as_str()).collect();
+        assert_eq!(names, ["Project", "Clips", "Inner"]);
+        assert_eq!(trail[1].0, Some(f.clips));
+        // List mode still ignores `current`.
+        view.mode = ViewMode::List;
+        assert!(
+            rows(&f, &view)
+                .iter()
+                .any(|r| r.item == PoolItem::Folder(f.clips))
+        );
+        // A deleted folder falls back to the root.
+        view.mode = ViewMode::Grid;
+        view.current = Some(FolderId::from(9999));
+        assert_eq!(view.current_in(doc), None);
     }
 
     fn rows(f: &Fixture, view: &ViewSettings) -> Vec<Row> {

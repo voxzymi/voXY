@@ -1191,12 +1191,73 @@ PR (not merged).
 - Unifying the bespoke-painted accents (the `const ACCENT` call sites) so the
   accent preference recolours the whole interface, not just the egui visuals.
 
+## U-G — project-panel views and navigation
+
+Plan (small steps, each pushed): (1) view-mode setting + Compact view;
+(2) Grid view with painted-icon tiles; (3) thumbnail size; (4) breadcrumbs /
+folder navigation; (5) favorites; (6) smart bins; (7) hover preview and
+extended details strip. View state only — no project-format change (the mode
+rides in the existing per-project `ui_state`).
+
+- **U-G step 1: view mode + Compact.** `ViewMode { List, Grid, Compact }` in
+  `ViewSettings` (saved in `ui_state`; missing or unknown values load as
+  List). A "mode" selector in the Project toolbar; Compact drops the header
+  and columns for a name-only list. Grid exists in the enum but is not offered
+  until step 2. Test: mode round-trips, old / bad `ui_state` default to List.
+  `fmt`, `clippy -D warnings` clean; 318 `voxy-ui` tests pass.
+- **U-G step 2: Grid view.** Fixed-size tiles (painted icon, name below),
+  wrapping to the panel width, virtualised by tile line. Selection, drag,
+  folder drop, rename, context menu and double-click are the same code as the
+  list rows (extracted into `row_drops` / `row_interaction`). Grid is now in
+  the selector. Interim: expanded folders still list their children as more
+  tiles until folder navigation (step 4). Test: tiles-per-row.
+  `clippy -D warnings` clean; 319 tests pass.
+- **U-G step 3: tile size.** `ViewSettings.tile_size` (64–160, default 96,
+  clamped on load, saved in `ui_state`); a size slider shows in Grid mode and
+  icon size scales with the tile. Tests: tiles-per-row at other sizes, clamp
+  on load. `clippy -D warnings` clean; 319 tests pass.
+- **U-G step 4: folder navigation + breadcrumbs.** In Grid / Compact the panel
+  shows one folder at a time (`ViewSettings.current`, saved in `ui_state`; a
+  deleted folder falls back to the root). Double-click a folder enters it; a
+  breadcrumb bar (`Project › Clips › Inner`) jumps back up; reveal-in-project
+  browses to the item's folder; New Folder / Import land in the folder being
+  viewed. List stays a tree and ignores `current`. Search / filter still flatten
+  the view as before. This replaces step 2's interim expanded-children tiles.
+  Test: one-level rows, trail, fallback, List unaffected, round trip.
+  `clippy -D warnings` clean; 320 tests pass.
+- **U-G step 5: favorites.** Star items from the context menu (Add to /
+  Remove from Favorites, on the selection); a gold ★ marks them in list rows
+  and grid tiles; a ★ toggle in the toolbar shows only favorites (flat view,
+  like a filter). Stored per project in `ui_state` as `"a:3"` / `"c:1"` /
+  `"f:2"` keys (not in the global prefs: pool ids belong to one project), so no
+  project-format change; unreadable keys are dropped. Test: toggle semantics,
+  filter, save / load. `clippy -D warnings` clean; 321 tests pass.
+- **U-G step 6: smart bins.** A "Bins" toolbar menu: click a bin to restore
+  its search / type filter / favorites-only toggle, × deletes, and a name field
+  saves the current search or filter (same name replaces; blank names and an
+  empty search are refused). Stored per project in `ui_state` rather than the
+  global prefs sketched in design-ux §5 (the favorites reasoning: bins sit with
+  the project's own browsing state; no format change). Test: save / replace /
+  apply / out-of-range / reload. `clippy -D warnings` clean; 322 tests pass.
+- **U-G step 7: details strip + hover info.** The info header now also shows
+  audio (`Stereo, 48 kHz`) and where the item lives (`Project / Clips /
+  Inner`); the row / tile hover tooltip (shared by all three views) gains the
+  same location and audio lines. A hover *image* preview needs the preview
+  renderer, which stays in `deferred.md` (thumbnails); the painted icon keeps
+  standing in. Test: location and audio text. `clippy -D warnings` clean; 323
+  tests pass.
+
+**U-G complete** (steps 1–7): List / Grid / Compact views with a tile-size
+slider, folder navigation with breadcrumbs, favorites, smart bins, and the
+extended details / hover info. All view state lives in the project's
+`ui_state`; no project-format change.
+
 ## Next, in order (UX overhaul)
 
 1. **U-E — preferences foundation** — **complete** (see the U-E section above;
    pending the per-job CI report and a PR into `main`).
-2. **U-F — customizable layout** — next, not started (plan above). Then
-   **U-G … U-I** browsing (project-panel views and navigation, command palette),
+2. **U-F — customizable layout** — complete (merged, #10). **U-G … U-I**
+   browsing (U-G complete; U-H next) (project-panel views and navigation, command palette),
    in that order.
 3. **Shape layer milestone** — its own milestone *after* U-D. Needs a short
    design note (new `LayerKind`, rendering, project-format bump written only

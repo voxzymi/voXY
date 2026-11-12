@@ -17,13 +17,16 @@ use voxy_core::{AssetId, Document, FolderId, PoolItem};
 use crate::actions::Action;
 use crate::menu::{action_item, action_item_labelled};
 use crate::project_view::{
-    Column, ItemKind, Row, SortKey, TypeFilter, duration_text, fitting_columns, folder_len,
-    item_raw, rate_text, settings_summary, size_text,
+    Column, ItemKind, Row, SortKey, TILE_SIZES, TypeFilter, ViewMode, audio_text, breadcrumbs,
+    duration_text, fitting_columns, folder_len, item_raw, location_text, rate_text,
+    settings_summary, size_text,
 };
 use crate::state::EditorState;
 use crate::theme::ACCENT;
 
 const ROW_H: f32 = 22.0;
+/// Gap between grid tiles (the tile edge is a view setting).
+const TILE_GAP: f32 = 6.0;
 const INDENT: f32 = 14.0;
 const FONT: f32 = 12.5;
 
@@ -108,6 +111,10 @@ fn toolbar(ui: &mut Ui, state: &mut EditorState) {
             })
             .response
             .on_hover_text("Show only one kind of item");
+        bins_menu(ui, &mut state.project);
+        let view = &mut state.project.view;
+        ui.toggle_value(&mut view.favorites_only, "★")
+            .on_hover_text("Show only favorites");
         ui.menu_button(format!("Sort: {}", view.sort.label()), |ui| {
             for k in SortKey::ALL {
                 ui.radio_value(&mut view.sort, k, k.label());
@@ -117,8 +124,79 @@ fn toolbar(ui: &mut Ui, state: &mut EditorState) {
         })
         .response
         .on_hover_text("Sort by Type to group compositions together");
-        ui.menu_button("Columns", |ui| columns_menu(ui, view));
+        match view.mode {
+            ViewMode::List => {
+                ui.menu_button("Columns", |ui| columns_menu(ui, view));
+            }
+            ViewMode::Grid => {
+                ui.add(
+                    egui::Slider::new(&mut view.tile_size, TILE_SIZES)
+                        .show_value(false)
+                        .text("Size"),
+                )
+                .on_hover_text("Tile size");
+            }
+            ViewMode::Compact => {}
+        }
+        egui::ComboBox::from_id_salt("project-mode")
+            .selected_text(view.mode.label())
+            .show_ui(ui, |ui| {
+                for m in ViewMode::ALL {
+                    ui.selectable_value(&mut view.mode, m, m.label());
+                }
+            })
+            .response
+            .on_hover_text("How items are laid out");
     });
+}
+
+/// The Bins menu: apply, delete, or save the current search as a smart bin.
+fn bins_menu(ui: &mut Ui, project: &mut crate::project_view::ProjectState) {
+    ui.menu_button("Bins", |ui| {
+        let mut remove = None;
+        for i in 0..project.view.smart_bins.len() {
+            ui.horizontal(|ui| {
+                if ui.button(&project.view.smart_bins[i].name).clicked() {
+                    project.view.apply_smart_bin(i);
+                    ui.close();
+                }
+                if ui
+                    .small_button("×")
+                    .on_hover_text("Delete this bin")
+                    .clicked()
+                {
+                    remove = Some(i);
+                }
+            });
+        }
+        if let Some(i) = remove {
+            project.view.smart_bins.remove(i);
+        }
+        if !project.view.smart_bins.is_empty() {
+            ui.separator();
+        }
+        let can_save = project.view.is_flat();
+        ui.add_enabled_ui(can_save, |ui| {
+            ui.label("Save the current search / filter as:");
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut project.new_bin_name)
+                        .hint_text("Bin name")
+                        .desired_width(110.0),
+                );
+                if ui.button("Save").clicked() && project.view.save_smart_bin(&project.new_bin_name)
+                {
+                    project.new_bin_name.clear();
+                    ui.close();
+                }
+            });
+        });
+        if !can_save {
+            ui.weak("Type a search or pick a filter first.");
+        }
+    })
+    .response
+    .on_hover_text("Saved searches");
 }
 
 fn columns_menu(ui: &mut Ui, view: &mut crate::project_view::ViewSettings) {
@@ -191,6 +269,12 @@ fn info_header(ui: &mut Ui, state: &mut EditorState, doc: &Document) {
                         }
                         PoolItem::Comp(_) => {}
                     }
+                    if let PoolItem::Asset(a) = item
+                        && let Some(audio) = doc.assets.get(a).and_then(|a| audio_text(a.audio))
+                    {
+                        ui.colored_label(weak, format!("Audio {audio}"));
+                    }
+                    ui.colored_label(weak, format!("In {}", location_text(doc, item)));
                     if row.duration.is_some() {
                         ui.colored_label(
                             weak,
@@ -225,6 +309,7 @@ struct ListCx<'a> {
     name_w: f32,
     problems: &'a HashMap<AssetId, String>,
     mods: Modifiers,
+    warn: Color32,
 }
 
 fn list(
@@ -248,8 +333,16 @@ fn list(
     }
     bg.context_menu(|ui| empty_menu(ui, state));
 
+    if state.project.view.browses_folders() && !state.project.view.is_flat() {
+        breadcrumb_bar(ui, state, doc);
+    }
     let width = rect.width();
-    let cols = fitting_columns(&state.project.view.columns, width);
+    let compact = state.project.view.mode != ViewMode::List;
+    let cols = if compact {
+        Vec::new()
+    } else {
+        fitting_columns(&state.project.view.columns, width)
+    };
     let name_w = width - cols.iter().map(|c| c.width()).sum::<f32>();
     let cx = ListCx {
         doc,
@@ -258,8 +351,11 @@ fn list(
         name_w,
         problems,
         mods: ui.input(|i| i.modifiers),
+        warn: ui.visuals().warn_fg_color,
     };
-    header_row(ui, state, &cx);
+    if !compact {
+        header_row(ui, state, &cx);
+    }
 
     if doc.assets.iter().next().is_none() && doc.comps.is_empty() && doc.folders.is_empty() {
         empty_hint(ui, state);
@@ -274,16 +370,30 @@ fn list(
         });
     }
 
+    let grid = state.project.view.mode == ViewMode::Grid;
+    let tile = state.project.view.tile_size;
+    let per_row = if grid { tiles_per_row(width, tile) } else { 1 };
+    let line_h = if grid { tile + TILE_GAP } else { ROW_H };
     let mut area = egui::ScrollArea::vertical().auto_shrink([false, false]);
     if let Some(item) = state.project.scroll_to.take()
         && let Some(i) = rows.iter().position(|r| r.item == item)
     {
-        let offset = (i as f32 * ROW_H - ui.available_height() / 2.0 + ROW_H / 2.0).max(0.0);
+        let line = (i / per_row) as f32;
+        let offset = (line * line_h - ui.available_height() / 2.0 + line_h / 2.0).max(0.0);
         area = area.vertical_scroll_offset(offset);
     }
-    area.show_rows(ui, ROW_H, rows.len(), |ui, range| {
-        for i in range {
-            draw_row(ui, state, &cx, i);
+    area.show_rows(ui, line_h, rows.len().div_ceil(per_row), |ui, range| {
+        for line in range {
+            if grid {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing = vec2(TILE_GAP, TILE_GAP);
+                    for i in line * per_row..((line + 1) * per_row).min(rows.len()) {
+                        draw_tile(ui, state, &cx, i, tile);
+                    }
+                });
+            } else {
+                draw_row(ui, state, &cx, line);
+            }
         }
     });
 
@@ -396,30 +506,7 @@ fn draw_row(ui: &mut Ui, state: &mut EditorState, cx: &ListCx<'_>, i: usize) {
         painter.rect_filled(rect, 0.0, ui.visuals().faint_bg_color);
     }
 
-    // Folders accept drops.
-    if let PoolItem::Folder(f) = row.item {
-        if let Some(p) = resp.dnd_hover_payload::<Vec<PoolItem>>() {
-            let ok = can_drop(cx.doc, &p, Some(f));
-            let color = if ok { ACCENT } else { warn };
-            painter.rect_stroke(
-                rect.shrink(1.0),
-                3.0,
-                Stroke::new(1.5, color),
-                egui::StrokeKind::Inside,
-            );
-        }
-        if let Some(p) = resp.dnd_release_payload::<Vec<PoolItem>>()
-            && can_drop(cx.doc, &p, Some(f))
-        {
-            state.move_items((*p).clone(), Some(f));
-        }
-    } else if let Some(p) = resp.dnd_release_payload::<Vec<PoolItem>>() {
-        // Dropped on an item: into the folder that item is in.
-        let into = cx.doc.item_folder(row.item);
-        if can_drop(cx.doc, &p, into) {
-            state.move_items((*p).clone(), into);
-        }
-    }
+    row_drops(state, cx, row, &resp, &painter, rect);
 
     // Disclosure arrow, icon, name.
     let mut x = rect.left() + 6.0 + row.depth as f32 * INDENT;
@@ -460,6 +547,13 @@ fn draw_row(ui: &mut Ui, state: &mut EditorState, cx: &ListCx<'_>, i: usize) {
         );
     }
 
+    if state.project.view.favorites.contains(&row.item) && !renaming {
+        paint_star(
+            &painter,
+            pos2(rect.left() + cx.name_w - 12.0, rect.center().y),
+        );
+    }
+
     let mut cx_left = rect.left() + cx.name_w;
     for c in &cx.cols {
         let value = match c {
@@ -481,7 +575,83 @@ fn draw_row(ui: &mut Ui, state: &mut EditorState, cx: &ListCx<'_>, i: usize) {
         cx_left += c.width();
     }
 
-    // Interaction.
+    row_interaction(ui, state, cx, i, resp, renaming, problem);
+}
+
+/// How many tiles fit across `width` (always at least one).
+fn tiles_per_row(width: f32, tile: f32) -> usize {
+    ((width / (tile + TILE_GAP)).floor() as usize).max(1)
+}
+
+/// One grid tile: a large painted icon (thumbnails come later) and the name.
+fn draw_tile(ui: &mut Ui, state: &mut EditorState, cx: &ListCx<'_>, i: usize, tile: f32) {
+    let row = &cx.rows[i];
+    let (rect, _) = ui.allocate_exact_size(vec2(tile, tile), Sense::hover());
+    let resp = ui.interact(
+        rect,
+        Id::new(("project-row", row.item)),
+        Sense::click_and_drag(),
+    );
+    let selected = state.project.selection.items.contains(&row.item);
+    let text = ui.visuals().text_color();
+    let warn = cx.warn;
+    let problem = match row.item {
+        PoolItem::Asset(a) => cx.problems.get(&a),
+        _ => None,
+    };
+    let bad = row.missing || problem.is_some();
+
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, 4.0, ui.visuals().faint_bg_color);
+    if selected {
+        painter.rect_filled(rect, 4.0, ACCENT.linear_multiply(0.28));
+    } else if resp.hovered() {
+        painter.rect_filled(rect, 4.0, ui.visuals().widgets.hovered.weak_bg_fill);
+    }
+    row_drops(state, cx, row, &resp, &painter, rect);
+    if state.project.view.favorites.contains(&row.item) {
+        paint_star(&painter, rect.right_top() + vec2(-9.0, 9.0));
+    }
+
+    let icon = Rect::from_center_size(
+        pos2(rect.center().x, rect.top() + (tile - 22.0) / 2.0),
+        egui::Vec2::splat(tile * 0.42),
+    );
+    paint_icon(&painter, icon, row.kind, if bad { warn } else { text }, bad);
+
+    let label = Rect::from_min_max(pos2(rect.left() + 3.0, rect.bottom() - 20.0), rect.max);
+    let renaming = state
+        .project
+        .rename
+        .as_ref()
+        .is_some_and(|r| r.item == row.item);
+    if renaming {
+        rename_field(ui, state, label);
+    } else {
+        painter.with_clip_rect(label).text(
+            pos2(rect.center().x, label.center().y),
+            Align2::CENTER_CENTER,
+            &row.name,
+            FontId::proportional(FONT),
+            if bad { warn } else { text },
+        );
+    }
+    row_interaction(ui, state, cx, i, resp, renaming, problem);
+}
+
+/// Tooltip, selection, open, drag and context menu, shared by list rows and
+/// grid tiles.
+fn row_interaction(
+    ui: &mut Ui,
+    state: &mut EditorState,
+    cx: &ListCx<'_>,
+    i: usize,
+    resp: egui::Response,
+    renaming: bool,
+    problem: Option<&String>,
+) {
+    let row = &cx.rows[i];
+    let selected = state.project.selection.items.contains(&row.item);
     let resp = if renaming {
         resp
     } else {
@@ -497,6 +667,9 @@ fn draw_row(ui: &mut Ui, state: &mut EditorState, cx: &ListCx<'_>, i: usize) {
     if resp.double_clicked() {
         match row.item {
             PoolItem::Comp(c) => state.open_comp(c),
+            PoolItem::Folder(f) if state.project.view.browses_folders() => {
+                open_folder(state, Some(f));
+            }
             PoolItem::Folder(f) => toggle_folder(state, f),
             PoolItem::Asset(_) => {}
         }
@@ -520,6 +693,77 @@ fn draw_row(ui: &mut Ui, state: &mut EditorState, cx: &ListCx<'_>, i: usize) {
         ui.ctx().set_cursor_icon(CursorIcon::Grabbing);
     }
     resp.context_menu(|ui| item_menu(ui, state, row));
+}
+
+/// Folder highlight and move-on-drop, shared by list rows and grid tiles.
+fn row_drops(
+    state: &mut EditorState,
+    cx: &ListCx<'_>,
+    row: &Row,
+    resp: &egui::Response,
+    painter: &Painter,
+    rect: Rect,
+) {
+    let warn = cx.warn;
+    // Folders accept drops.
+    if let PoolItem::Folder(f) = row.item {
+        if let Some(p) = resp.dnd_hover_payload::<Vec<PoolItem>>() {
+            let ok = can_drop(cx.doc, &p, Some(f));
+            let color = if ok { ACCENT } else { warn };
+            painter.rect_stroke(
+                rect.shrink(1.0),
+                3.0,
+                Stroke::new(1.5, color),
+                egui::StrokeKind::Inside,
+            );
+        }
+        if let Some(p) = resp.dnd_release_payload::<Vec<PoolItem>>()
+            && can_drop(cx.doc, &p, Some(f))
+        {
+            state.move_items((*p).clone(), Some(f));
+        }
+    } else if let Some(p) = resp.dnd_release_payload::<Vec<PoolItem>>() {
+        // Dropped on an item: into the folder that item is in.
+        let into = cx.doc.item_folder(row.item);
+        if can_drop(cx.doc, &p, into) {
+            state.move_items((*p).clone(), into);
+        }
+    }
+}
+
+/// Browses into `folder` (`None` is the root) in Grid / Compact.
+fn open_folder(state: &mut EditorState, folder: Option<FolderId>) {
+    state.project.view.current = folder;
+    state.project.selection.clear();
+    state.project.scroll_to = None;
+}
+
+/// The path bar for folder browsing; each crumb is a button, and the last is
+/// the folder being shown.
+fn breadcrumb_bar(ui: &mut Ui, state: &mut EditorState, doc: &Document) {
+    let trail = breadcrumbs(doc, state.project.view.current_in(doc));
+    let mut go = None;
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = 2.0;
+        let last = trail.len() - 1;
+        for (n, (target, label)) in trail.iter().enumerate() {
+            if n > 0 {
+                ui.weak("›");
+            }
+            if n == last {
+                ui.strong(label);
+            } else if ui
+                .small_button(label)
+                .on_hover_text("Go to this folder")
+                .clicked()
+            {
+                go = Some(*target);
+            }
+        }
+    });
+    if let Some(target) = go {
+        open_folder(state, target);
+    }
 }
 
 fn toggle_folder(state: &mut EditorState, f: FolderId) {
@@ -555,6 +799,9 @@ fn row_tooltip(doc: &Document, row: &Row, problem: Option<&str>) -> String {
                 if let Some(r) = a.frame_rate {
                     let _ = write!(tip, ", {r}");
                 }
+                if let Some(audio) = audio_text(a.audio) {
+                    let _ = write!(tip, "\nAudio {audio}");
+                }
             }
             if row.missing {
                 tip.push_str("\nMissing: the file could not be found. Use Relink… to point to it.");
@@ -576,6 +823,7 @@ fn row_tooltip(doc: &Document, row: &Row, problem: Option<&str>) -> String {
             let _ = write!(tip, "{} items", folder_len(doc, f));
         }
     }
+    let _ = write!(tip, "\nIn {}", location_text(doc, row.item));
     tip
 }
 
@@ -631,6 +879,25 @@ fn item_menu(ui: &mut Ui, state: &mut EditorState, row: &Row) {
         action_item(ui, state, a);
     }
     ui.separator();
+    let targets = if state.project.selection.items.contains(&row.item) {
+        state.project.selection.items.iter().copied().collect()
+    } else {
+        vec![row.item]
+    };
+    let starred = targets
+        .iter()
+        .all(|i| state.project.view.favorites.contains(i));
+    if ui
+        .button(if starred {
+            "Remove from Favorites"
+        } else {
+            "Add to Favorites"
+        })
+        .clicked()
+    {
+        state.project.view.toggle_favorites(&targets);
+        ui.close();
+    }
     reveal_in_composition_menu(ui, state);
     action_item(ui, state, Action::RevealInFileManager);
     if let PoolItem::Asset(a) = row.item
@@ -829,6 +1096,17 @@ fn drag_label(ctx: &egui::Context, panel: Rect) {
 
 // ------------------------------------------------------------- icons
 
+/// The favorite marker.
+fn paint_star(p: &Painter, at: Pos2) {
+    p.text(
+        at,
+        Align2::CENTER_CENTER,
+        "★",
+        FontId::proportional(FONT),
+        Color32::from_rgb(240, 190, 60),
+    );
+}
+
 fn paint_arrow(p: &Painter, center: Pos2, open: bool, color: Color32) {
     let s = 3.5;
     let pts = if open {
@@ -997,6 +1275,16 @@ mod tests {
             &[PoolItem::Folder(outer), PoolItem::Folder(inner)],
             None
         ));
+    }
+
+    #[test]
+    fn grid_columns_follow_the_width() {
+        let t = 96.0;
+        assert_eq!(tiles_per_row(10.0, t), 1, "never zero columns");
+        assert_eq!(tiles_per_row(t + TILE_GAP, t), 1);
+        assert_eq!(tiles_per_row(3.0 * (t + TILE_GAP), t), 3);
+        assert_eq!(tiles_per_row(3.0 * (t + TILE_GAP) - 1.0, t), 2);
+        assert_eq!(tiles_per_row(300.0, 64.0), 4, "smaller tiles fit more");
     }
 
     #[test]

@@ -10,7 +10,7 @@ use serde_json::{Map, Value};
 use crate::comp_draft::Tab as DialogTab;
 use voxy_core::{CompId, LayerId, Time};
 
-use crate::project_view::{Column, SortKey, TypeFilter, ViewSettings};
+use crate::project_view::{Column, SortKey, TILE_SIZES, TypeFilter, ViewMode, ViewSettings};
 use crate::workspace::{NavStep, SavedTab};
 
 /// Version of the `ui_state` section this build writes. Version 1 stored
@@ -172,6 +172,30 @@ pub fn from_ui_state(state: &Value) -> ViewSettings {
     let mut view = ViewSettings::default();
     let Some(p) = panel else { return view };
     let field = |name: &str| p.get(name).cloned();
+    if let Some(v) = field("mode").and_then(|v| serde_json::from_value::<ViewMode>(v).ok()) {
+        view.mode = v;
+    }
+    if let Some(v) = field("current").and_then(|v| serde_json::from_value(v).ok()) {
+        view.current = v;
+    }
+    if let Some(Value::Array(keys)) = field("favorites") {
+        view.favorites = keys
+            .iter()
+            .filter_map(|k| k.as_str().and_then(crate::project_view::parse_favorite))
+            .collect();
+    }
+    if let Some(v) = field("favorites_only").and_then(|v| v.as_bool()) {
+        view.favorites_only = v;
+    }
+    if let Some(Value::Array(bins)) = field("smart_bins") {
+        view.smart_bins = bins
+            .into_iter()
+            .filter_map(|b| serde_json::from_value(b).ok())
+            .collect();
+    }
+    if let Some(v) = field("tile_size").and_then(|v| v.as_f64()) {
+        view.tile_size = (v as f32).clamp(*TILE_SIZES.start(), *TILE_SIZES.end());
+    }
     if let Some(v) = field("sort").and_then(|v| serde_json::from_value::<SortKey>(v).ok()) {
         view.sort = v;
     }
@@ -204,6 +228,24 @@ mod tests {
     use super::*;
     use serde_json::json;
     use voxy_core::FolderId;
+
+    #[test]
+    fn view_mode_round_trips_and_defaults() {
+        let mut v = ViewSettings::default();
+        assert_eq!(v.mode, ViewMode::List);
+        v.mode = ViewMode::Grid;
+        v.current = Some(FolderId::from(7));
+        let saved = to_ui_state(&v, DialogTab::Basic, &[], None, None);
+        assert_eq!(from_ui_state(&saved).mode, ViewMode::Grid);
+        assert_eq!(from_ui_state(&saved).current, Some(FolderId::from(7)));
+        // Older projects have no mode; a bad one is ignored.
+        let old = json!({ "project_panel": { "sort": "Name" } });
+        assert_eq!(from_ui_state(&old).mode, ViewMode::List);
+        let sized = json!({ "project_panel": { "tile_size": 9999.0 } });
+        assert_eq!(from_ui_state(&sized).tile_size, *TILE_SIZES.end());
+        let bad = json!({ "project_panel": { "mode": "Carousel" } });
+        assert_eq!(from_ui_state(&bad).mode, ViewMode::List);
+    }
 
     #[test]
     fn old_panel_names_load_as_the_project_panel() {
