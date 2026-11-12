@@ -110,6 +110,8 @@ fn toolbar(ui: &mut Ui, state: &mut EditorState) {
             })
             .response
             .on_hover_text("Show only one kind of item");
+        bins_menu(ui, &mut state.project);
+        let view = &mut state.project.view;
         ui.toggle_value(&mut view.favorites_only, "★")
             .on_hover_text("Show only favorites");
         ui.menu_button(format!("Sort: {}", view.sort.label()), |ui| {
@@ -145,6 +147,55 @@ fn toolbar(ui: &mut Ui, state: &mut EditorState) {
             .response
             .on_hover_text("How items are laid out");
     });
+}
+
+/// The Bins menu: apply, delete, or save the current search as a smart bin.
+fn bins_menu(ui: &mut Ui, project: &mut crate::project_view::ProjectState) {
+    ui.menu_button("Bins", |ui| {
+        let mut remove = None;
+        for i in 0..project.view.smart_bins.len() {
+            ui.horizontal(|ui| {
+                if ui.button(&project.view.smart_bins[i].name).clicked() {
+                    project.view.apply_smart_bin(i);
+                    ui.close();
+                }
+                if ui
+                    .small_button("×")
+                    .on_hover_text("Delete this bin")
+                    .clicked()
+                {
+                    remove = Some(i);
+                }
+            });
+        }
+        if let Some(i) = remove {
+            project.view.smart_bins.remove(i);
+        }
+        if !project.view.smart_bins.is_empty() {
+            ui.separator();
+        }
+        let can_save = project.view.is_flat();
+        ui.add_enabled_ui(can_save, |ui| {
+            ui.label("Save the current search / filter as:");
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut project.new_bin_name)
+                        .hint_text("Bin name")
+                        .desired_width(110.0),
+                );
+                if ui.button("Save").clicked() && project.view.save_smart_bin(&project.new_bin_name)
+                {
+                    project.new_bin_name.clear();
+                    ui.close();
+                }
+            });
+        });
+        if !can_save {
+            ui.weak("Type a search or pick a filter first.");
+        }
+    })
+    .response
+    .on_hover_text("Saved searches");
 }
 
 fn columns_menu(ui: &mut Ui, view: &mut crate::project_view::ViewSettings) {

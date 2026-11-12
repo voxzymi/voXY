@@ -1232,6 +1232,13 @@ rides in the existing per-project `ui_state`).
   `"f:2"` keys (not in the global prefs: pool ids belong to one project), so no
   project-format change; unreadable keys are dropped. Test: toggle semantics,
   filter, save / load. `clippy -D warnings` clean; 321 tests pass.
+- **U-G step 6: smart bins.** A "Bins" toolbar menu: click a bin to restore
+  its search / type filter / favorites-only toggle, × deletes, and a name field
+  saves the current search or filter (same name replaces; blank names and an
+  empty search are refused). Stored per project in `ui_state` rather than the
+  global prefs sketched in design-ux §5 (the favorites reasoning: bins sit with
+  the project's own browsing state; no format change). Test: save / replace /
+  apply / out-of-range / reload. `clippy -D warnings` clean; 322 tests pass.
 
 ## Next, in order (UX overhaul)
 

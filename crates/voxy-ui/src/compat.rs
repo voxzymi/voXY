@@ -187,6 +187,12 @@ pub fn from_ui_state(state: &Value) -> ViewSettings {
     if let Some(v) = field("favorites_only").and_then(|v| v.as_bool()) {
         view.favorites_only = v;
     }
+    if let Some(Value::Array(bins)) = field("smart_bins") {
+        view.smart_bins = bins
+            .into_iter()
+            .filter_map(|b| serde_json::from_value(b).ok())
+            .collect();
+    }
     if let Some(v) = field("tile_size").and_then(|v| v.as_f64()) {
         view.tile_size = (v as f32).clamp(*TILE_SIZES.start(), *TILE_SIZES.end());
     }

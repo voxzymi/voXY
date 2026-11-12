@@ -244,6 +244,18 @@ pub struct ViewSettings {
     pub favorites: BTreeSet<PoolItem>,
     /// Show only starred items.
     pub favorites_only: bool,
+    /// Saved searches, shown in the Bins menu.
+    pub smart_bins: Vec<SmartBin>,
+}
+
+/// A saved search: the filters it restores when applied. Per project (saved
+/// in `ui_state`), so no global preference or format change is involved.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SmartBin {
+    pub name: String,
+    pub search: String,
+    pub filter: TypeFilter,
+    pub favorites_only: bool,
 }
 
 /// Reads one saved favorite key (see [`favorites_serde`]).
@@ -308,6 +320,7 @@ impl Default for ViewSettings {
             expanded: BTreeSet::new(),
             favorites: BTreeSet::new(),
             favorites_only: false,
+            smart_bins: Vec::new(),
         }
     }
 }
@@ -321,6 +334,36 @@ impl ViewSettings {
     /// The folder being browsed, or the root if it no longer exists.
     pub fn current_in(&self, doc: &Document) -> Option<FolderId> {
         self.current.filter(|f| doc.folder(*f).is_some())
+    }
+
+    /// Saves the current search, filter and favorites toggle as a bin called
+    /// `name` (replacing a bin of the same name). Returns `false` for a blank
+    /// name, or when there is nothing to save (no search, filter or toggle).
+    pub fn save_smart_bin(&mut self, name: &str) -> bool {
+        let name = name.trim();
+        if name.is_empty() || !self.is_flat() {
+            return false;
+        }
+        let bin = SmartBin {
+            name: name.to_owned(),
+            search: self.search.clone(),
+            filter: self.filter,
+            favorites_only: self.favorites_only,
+        };
+        match self.smart_bins.iter_mut().find(|b| b.name == name) {
+            Some(existing) => *existing = bin,
+            None => self.smart_bins.push(bin),
+        }
+        true
+    }
+
+    /// Restores bin `index`'s filters.
+    pub fn apply_smart_bin(&mut self, index: usize) {
+        if let Some(b) = self.smart_bins.get(index).cloned() {
+            self.search = b.search;
+            self.filter = b.filter;
+            self.favorites_only = b.favorites_only;
+        }
     }
 
     /// Stars or un-stars every item in `items`: if all are starred they are
@@ -819,6 +862,8 @@ pub struct ProjectState {
     pub rename: Option<Rename>,
     pub missing: MissingCache,
     pub pending_remove: Option<PendingRemove>,
+    /// The name being typed in the Bins menu.
+    pub new_bin_name: String,
     /// The panel has keyboard focus (decides what Delete and Ctrl+A mean).
     pub focused: bool,
     usage: Option<(u64, HashMap<SourceRef, usize>)>,
@@ -1024,6 +1069,32 @@ mod tests {
             movie: ids[1],
             nested: ids[2],
         }
+    }
+
+    #[test]
+    fn smart_bins_save_apply_and_reload() {
+        let f = fixture();
+        let mut view = ViewSettings::default();
+        assert!(
+            !view.save_smart_bin("Nothing"),
+            "no filter, nothing to save"
+        );
+        view.search = "movie".into();
+        assert!(!view.save_smart_bin("  "), "blank names are refused");
+        assert!(view.save_smart_bin("Movies"));
+        view.filter = TypeFilter::Missing;
+        assert!(view.save_smart_bin("Movies"), "same name replaces");
+        assert_eq!(view.smart_bins.len(), 1);
+        view.search.clear();
+        view.filter = TypeFilter::All;
+        assert!(rows(&f, &view).len() > 3);
+        view.apply_smart_bin(0);
+        assert_eq!(view.search, "movie");
+        assert_eq!(view.filter, TypeFilter::Missing);
+        view.apply_smart_bin(9); // out of range: ignored
+        let back: ViewSettings =
+            serde_json::from_value(serde_json::to_value(&view).unwrap()).unwrap();
+        assert_eq!(back.smart_bins, view.smart_bins);
     }
 
     #[test]
