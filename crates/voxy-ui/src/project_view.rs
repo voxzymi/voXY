@@ -196,6 +196,10 @@ pub fn fitting_columns(wanted: &BTreeSet<Column>, width: f32) -> Vec<Column> {
     out
 }
 
+/// Smallest and largest grid tile edge.
+pub const TILE_SIZES: std::ops::RangeInclusive<f32> = 64.0..=160.0;
+pub const DEFAULT_TILE: f32 = 96.0;
+
 /// How the Project panel lays its items out.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum ViewMode {
@@ -224,6 +228,8 @@ impl ViewMode {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ViewSettings {
     pub mode: ViewMode,
+    /// Grid tile edge in points, kept within `TILE_SIZES`.
+    pub tile_size: f32,
     pub sort: SortKey,
     pub descending: bool,
     pub filter: TypeFilter,
@@ -236,6 +242,7 @@ impl Default for ViewSettings {
     fn default() -> Self {
         ViewSettings {
             mode: ViewMode::List,
+            tile_size: DEFAULT_TILE,
             sort: SortKey::Name,
             descending: false,
             filter: TypeFilter::All,

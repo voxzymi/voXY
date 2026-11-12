@@ -17,16 +17,14 @@ use voxy_core::{AssetId, Document, FolderId, PoolItem};
 use crate::actions::Action;
 use crate::menu::{action_item, action_item_labelled};
 use crate::project_view::{
-    Column, ItemKind, Row, SortKey, TypeFilter, ViewMode, duration_text, fitting_columns,
-    folder_len, item_raw, rate_text, settings_summary, size_text,
+    Column, ItemKind, Row, SortKey, TILE_SIZES, TypeFilter, ViewMode, duration_text,
+    fitting_columns, folder_len, item_raw, rate_text, settings_summary, size_text,
 };
 use crate::state::EditorState;
 use crate::theme::ACCENT;
 
 const ROW_H: f32 = 22.0;
-/// Grid tile: width, total height (thumbnail plus a one-line label), gap.
-const TILE_W: f32 = 96.0;
-const TILE_H: f32 = 96.0;
+/// Gap between grid tiles (the tile edge is a view setting).
 const TILE_GAP: f32 = 6.0;
 const INDENT: f32 = 14.0;
 const FONT: f32 = 12.5;
@@ -121,8 +119,19 @@ fn toolbar(ui: &mut Ui, state: &mut EditorState) {
         })
         .response
         .on_hover_text("Sort by Type to group compositions together");
-        if view.mode == ViewMode::List {
-            ui.menu_button("Columns", |ui| columns_menu(ui, view));
+        match view.mode {
+            ViewMode::List => {
+                ui.menu_button("Columns", |ui| columns_menu(ui, view));
+            }
+            ViewMode::Grid => {
+                ui.add(
+                    egui::Slider::new(&mut view.tile_size, TILE_SIZES)
+                        .show_value(false)
+                        .text("Size"),
+                )
+                .on_hover_text("Tile size");
+            }
+            ViewMode::Compact => {}
         }
         egui::ComboBox::from_id_salt("project-mode")
             .selected_text(view.mode.label())
@@ -299,8 +308,9 @@ fn list(
     }
 
     let grid = state.project.view.mode == ViewMode::Grid;
-    let per_row = if grid { tiles_per_row(width) } else { 1 };
-    let line_h = if grid { TILE_H + TILE_GAP } else { ROW_H };
+    let tile = state.project.view.tile_size;
+    let per_row = if grid { tiles_per_row(width, tile) } else { 1 };
+    let line_h = if grid { tile + TILE_GAP } else { ROW_H };
     let mut area = egui::ScrollArea::vertical().auto_shrink([false, false]);
     if let Some(item) = state.project.scroll_to.take()
         && let Some(i) = rows.iter().position(|r| r.item == item)
@@ -315,7 +325,7 @@ fn list(
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing = vec2(TILE_GAP, TILE_GAP);
                     for i in line * per_row..((line + 1) * per_row).min(rows.len()) {
-                        draw_tile(ui, state, &cx, i);
+                        draw_tile(ui, state, &cx, i, tile);
                     }
                 });
             } else {
@@ -499,14 +509,14 @@ fn draw_row(ui: &mut Ui, state: &mut EditorState, cx: &ListCx<'_>, i: usize) {
 }
 
 /// How many tiles fit across `width` (always at least one).
-fn tiles_per_row(width: f32) -> usize {
-    ((width / (TILE_W + TILE_GAP)).floor() as usize).max(1)
+fn tiles_per_row(width: f32, tile: f32) -> usize {
+    ((width / (tile + TILE_GAP)).floor() as usize).max(1)
 }
 
 /// One grid tile: a large painted icon (thumbnails come later) and the name.
-fn draw_tile(ui: &mut Ui, state: &mut EditorState, cx: &ListCx<'_>, i: usize) {
+fn draw_tile(ui: &mut Ui, state: &mut EditorState, cx: &ListCx<'_>, i: usize, tile: f32) {
     let row = &cx.rows[i];
-    let (rect, _) = ui.allocate_exact_size(vec2(TILE_W, TILE_H), Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(vec2(tile, tile), Sense::hover());
     let resp = ui.interact(
         rect,
         Id::new(("project-row", row.item)),
@@ -531,8 +541,8 @@ fn draw_tile(ui: &mut Ui, state: &mut EditorState, cx: &ListCx<'_>, i: usize) {
     row_drops(state, cx, row, &resp, &painter, rect);
 
     let icon = Rect::from_center_size(
-        pos2(rect.center().x, rect.top() + (TILE_H - 22.0) / 2.0),
-        vec2(40.0, 40.0),
+        pos2(rect.center().x, rect.top() + (tile - 22.0) / 2.0),
+        egui::Vec2::splat(tile * 0.42),
     );
     paint_icon(&painter, icon, row.kind, if bad { warn } else { text }, bad);
 
@@ -1124,10 +1134,12 @@ mod tests {
 
     #[test]
     fn grid_columns_follow_the_width() {
-        assert_eq!(tiles_per_row(10.0), 1, "never zero columns");
-        assert_eq!(tiles_per_row(TILE_W + TILE_GAP), 1);
-        assert_eq!(tiles_per_row(3.0 * (TILE_W + TILE_GAP)), 3);
-        assert_eq!(tiles_per_row(3.0 * (TILE_W + TILE_GAP) - 1.0), 2);
+        let t = 96.0;
+        assert_eq!(tiles_per_row(10.0, t), 1, "never zero columns");
+        assert_eq!(tiles_per_row(t + TILE_GAP, t), 1);
+        assert_eq!(tiles_per_row(3.0 * (t + TILE_GAP), t), 3);
+        assert_eq!(tiles_per_row(3.0 * (t + TILE_GAP) - 1.0, t), 2);
+        assert_eq!(tiles_per_row(300.0, 64.0), 4, "smaller tiles fit more");
     }
 
     #[test]

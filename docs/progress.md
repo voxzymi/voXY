@@ -1212,6 +1212,10 @@ rides in the existing per-project `ui_state`).
   the selector. Interim: expanded folders still list their children as more
   tiles until folder navigation (step 4). Test: tiles-per-row.
   `clippy -D warnings` clean; 319 tests pass.
+- **U-G step 3: tile size.** `ViewSettings.tile_size` (64–160, default 96,
+  clamped on load, saved in `ui_state`); a size slider shows in Grid mode and
+  icon size scales with the tile. Tests: tiles-per-row at other sizes, clamp
+  on load. `clippy -D warnings` clean; 319 tests pass.
 
 ## Next, in order (UX overhaul)
 

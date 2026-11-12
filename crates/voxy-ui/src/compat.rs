@@ -10,7 +10,7 @@ use serde_json::{Map, Value};
 use crate::comp_draft::Tab as DialogTab;
 use voxy_core::{CompId, LayerId, Time};
 
-use crate::project_view::{Column, SortKey, TypeFilter, ViewMode, ViewSettings};
+use crate::project_view::{Column, SortKey, TILE_SIZES, TypeFilter, ViewMode, ViewSettings};
 use crate::workspace::{NavStep, SavedTab};
 
 /// Version of the `ui_state` section this build writes. Version 1 stored
@@ -175,6 +175,9 @@ pub fn from_ui_state(state: &Value) -> ViewSettings {
     if let Some(v) = field("mode").and_then(|v| serde_json::from_value::<ViewMode>(v).ok()) {
         view.mode = v;
     }
+    if let Some(v) = field("tile_size").and_then(|v| v.as_f64()) {
+        view.tile_size = (v as f32).clamp(*TILE_SIZES.start(), *TILE_SIZES.end());
+    }
     if let Some(v) = field("sort").and_then(|v| serde_json::from_value::<SortKey>(v).ok()) {
         view.sort = v;
     }
@@ -218,6 +221,8 @@ mod tests {
         // Older projects have no mode; a bad one is ignored.
         let old = json!({ "project_panel": { "sort": "Name" } });
         assert_eq!(from_ui_state(&old).mode, ViewMode::List);
+        let sized = json!({ "project_panel": { "tile_size": 9999.0 } });
+        assert_eq!(from_ui_state(&sized).tile_size, *TILE_SIZES.end());
         let bad = json!({ "project_panel": { "mode": "Carousel" } });
         assert_eq!(from_ui_state(&bad).mode, ViewMode::List);
     }
