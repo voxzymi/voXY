@@ -17,8 +17,9 @@ use voxy_core::{AssetId, Document, FolderId, PoolItem};
 use crate::actions::Action;
 use crate::menu::{action_item, action_item_labelled};
 use crate::project_view::{
-    Column, ItemKind, Row, SortKey, TILE_SIZES, TypeFilter, ViewMode, breadcrumbs, duration_text,
-    fitting_columns, folder_len, item_raw, rate_text, settings_summary, size_text,
+    Column, ItemKind, Row, SortKey, TILE_SIZES, TypeFilter, ViewMode, audio_text, breadcrumbs,
+    duration_text, fitting_columns, folder_len, item_raw, location_text, rate_text,
+    settings_summary, size_text,
 };
 use crate::state::EditorState;
 use crate::theme::ACCENT;
@@ -268,6 +269,12 @@ fn info_header(ui: &mut Ui, state: &mut EditorState, doc: &Document) {
                         }
                         PoolItem::Comp(_) => {}
                     }
+                    if let PoolItem::Asset(a) = item
+                        && let Some(audio) = doc.assets.get(a).and_then(|a| audio_text(a.audio))
+                    {
+                        ui.colored_label(weak, format!("Audio {audio}"));
+                    }
+                    ui.colored_label(weak, format!("In {}", location_text(doc, item)));
                     if row.duration.is_some() {
                         ui.colored_label(
                             weak,
@@ -792,6 +799,9 @@ fn row_tooltip(doc: &Document, row: &Row, problem: Option<&str>) -> String {
                 if let Some(r) = a.frame_rate {
                     let _ = write!(tip, ", {r}");
                 }
+                if let Some(audio) = audio_text(a.audio) {
+                    let _ = write!(tip, "\nAudio {audio}");
+                }
             }
             if row.missing {
                 tip.push_str("\nMissing: the file could not be found. Use Relink… to point to it.");
@@ -813,6 +823,7 @@ fn row_tooltip(doc: &Document, row: &Row, problem: Option<&str>) -> String {
             let _ = write!(tip, "{} items", folder_len(doc, f));
         }
     }
+    let _ = write!(tip, "\nIn {}", location_text(doc, row.item));
     tip
 }
 

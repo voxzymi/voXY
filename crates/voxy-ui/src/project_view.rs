@@ -822,6 +822,29 @@ pub fn settings_summary(row: &Row) -> String {
     }
 }
 
+/// Where an item lives, as `Project / Clips / Inner`.
+pub fn location_text(doc: &Document, item: PoolItem) -> String {
+    let mut names: Vec<String> = ancestors(doc, item)
+        .iter()
+        .filter_map(|f| doc.folder(*f).map(|f| f.name.clone()))
+        .collect();
+    names.push("Project".to_owned());
+    names.reverse();
+    names.join(" / ")
+}
+
+/// Audio facts as `Stereo, 48 kHz`, or `None` without audio.
+pub fn audio_text(audio: Option<voxy_core::AudioInfo>) -> Option<String> {
+    let a = audio?;
+    let layout = match a.channels {
+        1 => "Mono".to_owned(),
+        2 => "Stereo".to_owned(),
+        n => format!("{n} channels"),
+    };
+    let khz = f64::from(a.sample_rate) / 1000.0;
+    Some(format!("{layout}, {khz} kHz"))
+}
+
 /// The id of a composition row, if it is one.
 pub fn comp_of(item: PoolItem) -> Option<CompId> {
     match item {
@@ -1069,6 +1092,38 @@ mod tests {
             movie: ids[1],
             nested: ids[2],
         }
+    }
+
+    #[test]
+    fn location_and_audio_text() {
+        let f = fixture();
+        let doc = f.h.current();
+        assert_eq!(location_text(doc, PoolItem::Asset(f.photo)), "Project");
+        assert_eq!(
+            location_text(doc, PoolItem::Asset(f.nested)),
+            "Project / Clips / Inner"
+        );
+        assert_eq!(
+            location_text(doc, PoolItem::Folder(f.inner)),
+            "Project / Clips"
+        );
+        assert_eq!(audio_text(None), None);
+        let a = |channels, sample_rate| voxy_core::AudioInfo {
+            channels,
+            sample_rate,
+        };
+        assert_eq!(
+            audio_text(Some(a(2, 48_000))).as_deref(),
+            Some("Stereo, 48 kHz")
+        );
+        assert_eq!(
+            audio_text(Some(a(1, 44_100))).as_deref(),
+            Some("Mono, 44.1 kHz")
+        );
+        assert_eq!(
+            audio_text(Some(a(6, 48_000))).as_deref(),
+            Some("6 channels, 48 kHz")
+        );
     }
 
     #[test]

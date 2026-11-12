@@ -1239,13 +1239,25 @@ rides in the existing per-project `ui_state`).
   global prefs sketched in design-ux §5 (the favorites reasoning: bins sit with
   the project's own browsing state; no format change). Test: save / replace /
   apply / out-of-range / reload. `clippy -D warnings` clean; 322 tests pass.
+- **U-G step 7: details strip + hover info.** The info header now also shows
+  audio (`Stereo, 48 kHz`) and where the item lives (`Project / Clips /
+  Inner`); the row / tile hover tooltip (shared by all three views) gains the
+  same location and audio lines. A hover *image* preview needs the preview
+  renderer, which stays in `deferred.md` (thumbnails); the painted icon keeps
+  standing in. Test: location and audio text. `clippy -D warnings` clean; 323
+  tests pass.
+
+**U-G complete** (steps 1–7): List / Grid / Compact views with a tile-size
+slider, folder navigation with breadcrumbs, favorites, smart bins, and the
+extended details / hover info. All view state lives in the project's
+`ui_state`; no project-format change.
 
 ## Next, in order (UX overhaul)
 
 1. **U-E — preferences foundation** — **complete** (see the U-E section above;
    pending the per-job CI report and a PR into `main`).
 2. **U-F — customizable layout** — complete (merged, #10). **U-G … U-I**
-   browsing (U-G in progress) (project-panel views and navigation, command palette),
+   browsing (U-G complete; U-H next) (project-panel views and navigation, command palette),
    in that order.
 3. **Shape layer milestone** — its own milestone *after* U-D. Needs a short
    design note (new `LayerKind`, rendering, project-format bump written only
