@@ -24,6 +24,10 @@ use crate::state::EditorState;
 use crate::theme::ACCENT;
 
 const ROW_H: f32 = 22.0;
+/// Grid tile: width, total height (thumbnail plus a one-line label), gap.
+const TILE_W: f32 = 96.0;
+const TILE_H: f32 = 96.0;
+const TILE_GAP: f32 = 6.0;
 const INDENT: f32 = 14.0;
 const FONT: f32 = 12.5;
 
@@ -236,6 +240,7 @@ struct ListCx<'a> {
     name_w: f32,
     problems: &'a HashMap<AssetId, String>,
     mods: Modifiers,
+    warn: Color32,
 }
 
 fn list(
@@ -274,6 +279,7 @@ fn list(
         name_w,
         problems,
         mods: ui.input(|i| i.modifiers),
+        warn: ui.visuals().warn_fg_color,
     };
     if !compact {
         header_row(ui, state, &cx);
@@ -292,16 +298,29 @@ fn list(
         });
     }
 
+    let grid = state.project.view.mode == ViewMode::Grid;
+    let per_row = if grid { tiles_per_row(width) } else { 1 };
+    let line_h = if grid { TILE_H + TILE_GAP } else { ROW_H };
     let mut area = egui::ScrollArea::vertical().auto_shrink([false, false]);
     if let Some(item) = state.project.scroll_to.take()
         && let Some(i) = rows.iter().position(|r| r.item == item)
     {
-        let offset = (i as f32 * ROW_H - ui.available_height() / 2.0 + ROW_H / 2.0).max(0.0);
+        let line = (i / per_row) as f32;
+        let offset = (line * line_h - ui.available_height() / 2.0 + line_h / 2.0).max(0.0);
         area = area.vertical_scroll_offset(offset);
     }
-    area.show_rows(ui, ROW_H, rows.len(), |ui, range| {
-        for i in range {
-            draw_row(ui, state, &cx, i);
+    area.show_rows(ui, line_h, rows.len().div_ceil(per_row), |ui, range| {
+        for line in range {
+            if grid {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing = vec2(TILE_GAP, TILE_GAP);
+                    for i in line * per_row..((line + 1) * per_row).min(rows.len()) {
+                        draw_tile(ui, state, &cx, i);
+                    }
+                });
+            } else {
+                draw_row(ui, state, &cx, line);
+            }
         }
     });
 
@@ -414,30 +433,7 @@ fn draw_row(ui: &mut Ui, state: &mut EditorState, cx: &ListCx<'_>, i: usize) {
         painter.rect_filled(rect, 0.0, ui.visuals().faint_bg_color);
     }
 
-    // Folders accept drops.
-    if let PoolItem::Folder(f) = row.item {
-        if let Some(p) = resp.dnd_hover_payload::<Vec<PoolItem>>() {
-            let ok = can_drop(cx.doc, &p, Some(f));
-            let color = if ok { ACCENT } else { warn };
-            painter.rect_stroke(
-                rect.shrink(1.0),
-                3.0,
-                Stroke::new(1.5, color),
-                egui::StrokeKind::Inside,
-            );
-        }
-        if let Some(p) = resp.dnd_release_payload::<Vec<PoolItem>>()
-            && can_drop(cx.doc, &p, Some(f))
-        {
-            state.move_items((*p).clone(), Some(f));
-        }
-    } else if let Some(p) = resp.dnd_release_payload::<Vec<PoolItem>>() {
-        // Dropped on an item: into the folder that item is in.
-        let into = cx.doc.item_folder(row.item);
-        if can_drop(cx.doc, &p, into) {
-            state.move_items((*p).clone(), into);
-        }
-    }
+    row_drops(state, cx, row, &resp, &painter, rect);
 
     // Disclosure arrow, icon, name.
     let mut x = rect.left() + 6.0 + row.depth as f32 * INDENT;
@@ -499,7 +495,80 @@ fn draw_row(ui: &mut Ui, state: &mut EditorState, cx: &ListCx<'_>, i: usize) {
         cx_left += c.width();
     }
 
-    // Interaction.
+    row_interaction(ui, state, cx, i, resp, renaming, problem);
+}
+
+/// How many tiles fit across `width` (always at least one).
+fn tiles_per_row(width: f32) -> usize {
+    ((width / (TILE_W + TILE_GAP)).floor() as usize).max(1)
+}
+
+/// One grid tile: a large painted icon (thumbnails come later) and the name.
+fn draw_tile(ui: &mut Ui, state: &mut EditorState, cx: &ListCx<'_>, i: usize) {
+    let row = &cx.rows[i];
+    let (rect, _) = ui.allocate_exact_size(vec2(TILE_W, TILE_H), Sense::hover());
+    let resp = ui.interact(
+        rect,
+        Id::new(("project-row", row.item)),
+        Sense::click_and_drag(),
+    );
+    let selected = state.project.selection.items.contains(&row.item);
+    let text = ui.visuals().text_color();
+    let warn = cx.warn;
+    let problem = match row.item {
+        PoolItem::Asset(a) => cx.problems.get(&a),
+        _ => None,
+    };
+    let bad = row.missing || problem.is_some();
+
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, 4.0, ui.visuals().faint_bg_color);
+    if selected {
+        painter.rect_filled(rect, 4.0, ACCENT.linear_multiply(0.28));
+    } else if resp.hovered() {
+        painter.rect_filled(rect, 4.0, ui.visuals().widgets.hovered.weak_bg_fill);
+    }
+    row_drops(state, cx, row, &resp, &painter, rect);
+
+    let icon = Rect::from_center_size(
+        pos2(rect.center().x, rect.top() + (TILE_H - 22.0) / 2.0),
+        vec2(40.0, 40.0),
+    );
+    paint_icon(&painter, icon, row.kind, if bad { warn } else { text }, bad);
+
+    let label = Rect::from_min_max(pos2(rect.left() + 3.0, rect.bottom() - 20.0), rect.max);
+    let renaming = state
+        .project
+        .rename
+        .as_ref()
+        .is_some_and(|r| r.item == row.item);
+    if renaming {
+        rename_field(ui, state, label);
+    } else {
+        painter.with_clip_rect(label).text(
+            pos2(rect.center().x, label.center().y),
+            Align2::CENTER_CENTER,
+            &row.name,
+            FontId::proportional(FONT),
+            if bad { warn } else { text },
+        );
+    }
+    row_interaction(ui, state, cx, i, resp, renaming, problem);
+}
+
+/// Tooltip, selection, open, drag and context menu, shared by list rows and
+/// grid tiles.
+fn row_interaction(
+    ui: &mut Ui,
+    state: &mut EditorState,
+    cx: &ListCx<'_>,
+    i: usize,
+    resp: egui::Response,
+    renaming: bool,
+    problem: Option<&String>,
+) {
+    let row = &cx.rows[i];
+    let selected = state.project.selection.items.contains(&row.item);
     let resp = if renaming {
         resp
     } else {
@@ -538,6 +607,42 @@ fn draw_row(ui: &mut Ui, state: &mut EditorState, cx: &ListCx<'_>, i: usize) {
         ui.ctx().set_cursor_icon(CursorIcon::Grabbing);
     }
     resp.context_menu(|ui| item_menu(ui, state, row));
+}
+
+/// Folder highlight and move-on-drop, shared by list rows and grid tiles.
+fn row_drops(
+    state: &mut EditorState,
+    cx: &ListCx<'_>,
+    row: &Row,
+    resp: &egui::Response,
+    painter: &Painter,
+    rect: Rect,
+) {
+    let warn = cx.warn;
+    // Folders accept drops.
+    if let PoolItem::Folder(f) = row.item {
+        if let Some(p) = resp.dnd_hover_payload::<Vec<PoolItem>>() {
+            let ok = can_drop(cx.doc, &p, Some(f));
+            let color = if ok { ACCENT } else { warn };
+            painter.rect_stroke(
+                rect.shrink(1.0),
+                3.0,
+                Stroke::new(1.5, color),
+                egui::StrokeKind::Inside,
+            );
+        }
+        if let Some(p) = resp.dnd_release_payload::<Vec<PoolItem>>()
+            && can_drop(cx.doc, &p, Some(f))
+        {
+            state.move_items((*p).clone(), Some(f));
+        }
+    } else if let Some(p) = resp.dnd_release_payload::<Vec<PoolItem>>() {
+        // Dropped on an item: into the folder that item is in.
+        let into = cx.doc.item_folder(row.item);
+        if can_drop(cx.doc, &p, into) {
+            state.move_items((*p).clone(), into);
+        }
+    }
 }
 
 fn toggle_folder(state: &mut EditorState, f: FolderId) {
@@ -1015,6 +1120,14 @@ mod tests {
             &[PoolItem::Folder(outer), PoolItem::Folder(inner)],
             None
         ));
+    }
+
+    #[test]
+    fn grid_columns_follow_the_width() {
+        assert_eq!(tiles_per_row(10.0), 1, "never zero columns");
+        assert_eq!(tiles_per_row(TILE_W + TILE_GAP), 1);
+        assert_eq!(tiles_per_row(3.0 * (TILE_W + TILE_GAP)), 3);
+        assert_eq!(tiles_per_row(3.0 * (TILE_W + TILE_GAP) - 1.0), 2);
     }
 
     #[test]

@@ -209,8 +209,7 @@ pub enum ViewMode {
 }
 
 impl ViewMode {
-    /// The modes the selector offers (Grid joins when its renderer lands).
-    pub const ALL: [ViewMode; 2] = [ViewMode::List, ViewMode::Compact];
+    pub const ALL: [ViewMode; 3] = [ViewMode::List, ViewMode::Grid, ViewMode::Compact];
 
     pub fn label(self) -> &'static str {
         match self {

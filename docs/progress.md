@@ -1205,6 +1205,13 @@ rides in the existing per-project `ui_state`).
   and columns for a name-only list. Grid exists in the enum but is not offered
   until step 2. Test: mode round-trips, old / bad `ui_state` default to List.
   `fmt`, `clippy -D warnings` clean; 318 `voxy-ui` tests pass.
+- **U-G step 2: Grid view.** Fixed-size tiles (painted icon, name below),
+  wrapping to the panel width, virtualised by tile line. Selection, drag,
+  folder drop, rename, context menu and double-click are the same code as the
+  list rows (extracted into `row_drops` / `row_interaction`). Grid is now in
+  the selector. Interim: expanded folders still list their children as more
+  tiles until folder navigation (step 4). Test: tiles-per-row.
+  `clippy -D warnings` clean; 319 tests pass.
 
 ## Next, in order (UX overhaul)
 
