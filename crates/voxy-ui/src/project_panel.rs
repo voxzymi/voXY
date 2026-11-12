@@ -17,7 +17,7 @@ use voxy_core::{AssetId, Document, FolderId, PoolItem};
 use crate::actions::Action;
 use crate::menu::{action_item, action_item_labelled};
 use crate::project_view::{
-    Column, ItemKind, Row, SortKey, TILE_SIZES, TypeFilter, ViewMode, duration_text,
+    Column, ItemKind, Row, SortKey, TILE_SIZES, TypeFilter, ViewMode, breadcrumbs, duration_text,
     fitting_columns, folder_len, item_raw, rate_text, settings_summary, size_text,
 };
 use crate::state::EditorState;
@@ -273,6 +273,9 @@ fn list(
     }
     bg.context_menu(|ui| empty_menu(ui, state));
 
+    if state.project.view.browses_folders() && !state.project.view.is_flat() {
+        breadcrumb_bar(ui, state, doc);
+    }
     let width = rect.width();
     let compact = state.project.view.mode != ViewMode::List;
     let cols = if compact {
@@ -594,6 +597,9 @@ fn row_interaction(
     if resp.double_clicked() {
         match row.item {
             PoolItem::Comp(c) => state.open_comp(c),
+            PoolItem::Folder(f) if state.project.view.browses_folders() => {
+                open_folder(state, Some(f));
+            }
             PoolItem::Folder(f) => toggle_folder(state, f),
             PoolItem::Asset(_) => {}
         }
@@ -652,6 +658,41 @@ fn row_drops(
         if can_drop(cx.doc, &p, into) {
             state.move_items((*p).clone(), into);
         }
+    }
+}
+
+/// Browses into `folder` (`None` is the root) in Grid / Compact.
+fn open_folder(state: &mut EditorState, folder: Option<FolderId>) {
+    state.project.view.current = folder;
+    state.project.selection.clear();
+    state.project.scroll_to = None;
+}
+
+/// The path bar for folder browsing; each crumb is a button, and the last is
+/// the folder being shown.
+fn breadcrumb_bar(ui: &mut Ui, state: &mut EditorState, doc: &Document) {
+    let trail = breadcrumbs(doc, state.project.view.current_in(doc));
+    let mut go = None;
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = 2.0;
+        let last = trail.len() - 1;
+        for (n, (target, label)) in trail.iter().enumerate() {
+            if n > 0 {
+                ui.weak("›");
+            }
+            if n == last {
+                ui.strong(label);
+            } else if ui
+                .small_button(label)
+                .on_hover_text("Go to this folder")
+                .clicked()
+            {
+                go = Some(*target);
+            }
+        }
+    });
+    if let Some(target) = go {
+        open_folder(state, target);
     }
 }
 

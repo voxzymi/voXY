@@ -230,6 +230,9 @@ pub struct ViewSettings {
     pub mode: ViewMode,
     /// Grid tile edge in points, kept within `TILE_SIZES`.
     pub tile_size: f32,
+    /// Grid / Compact show one folder at a time: the one being browsed
+    /// (`None` is the project root). Ignored by List, which is a tree.
+    pub current: Option<FolderId>,
     pub sort: SortKey,
     pub descending: bool,
     pub filter: TypeFilter,
@@ -243,6 +246,7 @@ impl Default for ViewSettings {
         ViewSettings {
             mode: ViewMode::List,
             tile_size: DEFAULT_TILE,
+            current: None,
             sort: SortKey::Name,
             descending: false,
             filter: TypeFilter::All,
@@ -261,6 +265,16 @@ impl Default for ViewSettings {
 }
 
 impl ViewSettings {
+    /// Whether the panel browses one folder at a time rather than a tree.
+    pub fn browses_folders(&self) -> bool {
+        self.mode != ViewMode::List
+    }
+
+    /// The folder being browsed, or the root if it no longer exists.
+    pub fn current_in(&self, doc: &Document) -> Option<FolderId> {
+        self.current.filter(|f| doc.folder(*f).is_some())
+    }
+
     /// Whether the tree is flattened into a list of matches.
     pub fn is_flat(&self) -> bool {
         !self.search.trim().is_empty() || self.filter != TypeFilter::All
@@ -448,8 +462,44 @@ pub fn build_rows(
         return rows;
     }
     let mut out = Vec::new();
-    push_children(doc, view, usage, missing, None, 0, &mut out);
+    if view.browses_folders() {
+        // One level only: nothing expands, so folders are entered, not opened.
+        let flat_view = ViewSettings {
+            expanded: BTreeSet::new(),
+            ..view.clone()
+        };
+        push_children(
+            doc,
+            &flat_view,
+            usage,
+            missing,
+            view.current_in(doc),
+            0,
+            &mut out,
+        );
+        for r in &mut out {
+            r.expandable = false;
+            r.expanded = false;
+        }
+    } else {
+        push_children(doc, view, usage, missing, None, 0, &mut out);
+    }
     out
+}
+
+/// The path shown above a browsed folder: the root, then each folder down to
+/// `current`, as `(target, label)`.
+pub fn breadcrumbs(doc: &Document, current: Option<FolderId>) -> Vec<(Option<FolderId>, String)> {
+    let mut trail = Vec::new();
+    let mut cur = current.filter(|f| doc.folder(*f).is_some());
+    while let Some(f) = cur {
+        let folder = doc.folder(f).expect("checked above");
+        trail.push((Some(f), folder.name.clone()));
+        cur = folder.parent;
+    }
+    trail.push((None, "Project".to_owned()));
+    trail.reverse();
+    trail
 }
 
 fn push_children(
@@ -760,6 +810,9 @@ impl ProjectState {
         for &i in &items {
             self.view.expanded.extend(ancestors(doc, i));
         }
+        if self.view.browses_folders() {
+            self.view.current = doc.item_folder(items[0]);
+        }
         let mut rows = self.rows(doc, revision);
         let mut message = None;
         if self.view.is_flat() && items.iter().any(|i| !rows.iter().any(|r| r.item == *i)) {
@@ -910,6 +963,48 @@ mod tests {
             movie: ids[1],
             nested: ids[2],
         }
+    }
+
+    #[test]
+    fn browsing_shows_one_folder_and_a_breadcrumb_trail() {
+        let f = fixture();
+        let doc = f.h.current();
+        let mut view = ViewSettings {
+            mode: ViewMode::Grid,
+            expanded: [f.clips].into(),
+            ..ViewSettings::default()
+        };
+        // Root: folders first, nothing expanded even though Clips is.
+        let root = rows(&f, &view);
+        assert!(root.iter().all(|r| r.depth == 0 && !r.expandable));
+        assert!(root.iter().any(|r| r.item == PoolItem::Folder(f.clips)));
+        assert!(!root.iter().any(|r| r.item == PoolItem::Asset(f.movie)));
+        assert_eq!(
+            breadcrumbs(doc, view.current_in(doc)),
+            vec![(None, "Project".to_owned())]
+        );
+        // Inside Clips: its direct children only.
+        view.current = Some(f.clips);
+        let inside = rows(&f, &view);
+        assert!(inside.iter().any(|r| r.item == PoolItem::Asset(f.movie)));
+        assert!(inside.iter().any(|r| r.item == PoolItem::Folder(f.inner)));
+        assert!(!inside.iter().any(|r| r.item == PoolItem::Asset(f.nested)));
+        view.current = Some(f.inner);
+        let trail = breadcrumbs(doc, view.current_in(doc));
+        let names: Vec<_> = trail.iter().map(|(_, n)| n.as_str()).collect();
+        assert_eq!(names, ["Project", "Clips", "Inner"]);
+        assert_eq!(trail[1].0, Some(f.clips));
+        // List mode still ignores `current`.
+        view.mode = ViewMode::List;
+        assert!(
+            rows(&f, &view)
+                .iter()
+                .any(|r| r.item == PoolItem::Folder(f.clips))
+        );
+        // A deleted folder falls back to the root.
+        view.mode = ViewMode::Grid;
+        view.current = Some(FolderId::from(9999));
+        assert_eq!(view.current_in(doc), None);
     }
 
     fn rows(f: &Fixture, view: &ViewSettings) -> Vec<Row> {

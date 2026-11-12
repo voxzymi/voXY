@@ -1216,6 +1216,15 @@ rides in the existing per-project `ui_state`).
   clamped on load, saved in `ui_state`); a size slider shows in Grid mode and
   icon size scales with the tile. Tests: tiles-per-row at other sizes, clamp
   on load. `clippy -D warnings` clean; 319 tests pass.
+- **U-G step 4: folder navigation + breadcrumbs.** In Grid / Compact the panel
+  shows one folder at a time (`ViewSettings.current`, saved in `ui_state`; a
+  deleted folder falls back to the root). Double-click a folder enters it; a
+  breadcrumb bar (`Project › Clips › Inner`) jumps back up; reveal-in-project
+  browses to the item's folder; New Folder / Import land in the folder being
+  viewed. List stays a tree and ignores `current`. Search / filter still flatten
+  the view as before. This replaces step 2's interim expanded-children tiles.
+  Test: one-level rows, trail, fallback, List unaffected, round trip.
+  `clippy -D warnings` clean; 320 tests pass.
 
 ## Next, in order (UX overhaul)
 

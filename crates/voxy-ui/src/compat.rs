@@ -175,6 +175,9 @@ pub fn from_ui_state(state: &Value) -> ViewSettings {
     if let Some(v) = field("mode").and_then(|v| serde_json::from_value::<ViewMode>(v).ok()) {
         view.mode = v;
     }
+    if let Some(v) = field("current").and_then(|v| serde_json::from_value(v).ok()) {
+        view.current = v;
+    }
     if let Some(v) = field("tile_size").and_then(|v| v.as_f64()) {
         view.tile_size = (v as f32).clamp(*TILE_SIZES.start(), *TILE_SIZES.end());
     }
@@ -216,8 +219,10 @@ mod tests {
         let mut v = ViewSettings::default();
         assert_eq!(v.mode, ViewMode::List);
         v.mode = ViewMode::Grid;
+        v.current = Some(FolderId::from(7));
         let saved = to_ui_state(&v, DialogTab::Basic, &[], None, None);
         assert_eq!(from_ui_state(&saved).mode, ViewMode::Grid);
+        assert_eq!(from_ui_state(&saved).current, Some(FolderId::from(7)));
         // Older projects have no mode; a bad one is ignored.
         let old = json!({ "project_panel": { "sort": "Name" } });
         assert_eq!(from_ui_state(&old).mode, ViewMode::List);

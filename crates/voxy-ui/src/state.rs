@@ -894,6 +894,10 @@ impl EditorState {
     /// one selected item, else the top level.
     pub fn target_folder(&self) -> Option<FolderId> {
         let doc = self.history.current();
+        if self.project.view.browses_folders() {
+            // Grid / Compact: new items go where the user is looking.
+            return self.project.view.current_in(doc);
+        }
         let mut it = self.project.selection.items.iter();
         match (it.next(), it.next()) {
             (Some(&PoolItem::Folder(f)), None) => Some(f),
