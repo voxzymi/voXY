@@ -147,7 +147,7 @@ fn move_attributes(
     let size = DVec2::new(f64::from(parent.width), f64::from(parent.height));
     let id: LayerId = doc.alloc_id();
     let transform = Transform::new(&mut || doc.alloc_id(), size / 2.0, size / 2.0);
-    let child_name = doc.comp(child).map(|c| c.name.clone()).unwrap_or_default();
+    let child_name = doc.comp(child).map_or_default(|c| c.name.clone());
     let precomp = new_layer(
         id,
         child_name,

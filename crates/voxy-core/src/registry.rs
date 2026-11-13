@@ -476,8 +476,7 @@ fn resolve_one(
 fn all_values(p: &Property) -> impl Iterator<Item = Value> + '_ {
     let keys = p
         .track()
-        .map(crate::keyframe::KeyframeTrack::keys)
-        .unwrap_or_default();
+        .map_or_default(crate::keyframe::KeyframeTrack::keys);
     let fixed = (!p.is_animated()).then(|| p.value_at(crate::time::Time::ZERO));
     keys.iter().map(|k| k.value.clone()).chain(fixed)
 }
