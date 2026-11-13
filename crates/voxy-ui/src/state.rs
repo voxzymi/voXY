@@ -2048,8 +2048,7 @@ impl EditorState {
     pub fn selected_layer_effects(&self) -> Vec<voxy_core::EffectInstance> {
         self.selection
             .and_then(|id| self.history.current().find_layer(id))
-            .map(|(_, l)| l.effects.clone())
-            .unwrap_or_default()
+            .map_or_default(|(_, l)| l.effects.clone())
     }
 
     /// The effect the effect actions act on: the selected effect, if it is

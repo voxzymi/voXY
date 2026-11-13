@@ -98,8 +98,7 @@ pub fn diff(a: &XmlDocument, b: &XmlDocument) -> Vec<Change> {
 
 fn value(e: &Element, name: &str) -> String {
     e.attribute(name)
-        .map(crate::xml::Attribute::value_lossy)
-        .unwrap_or_default()
+        .map_or_default(crate::xml::Attribute::value_lossy)
 }
 
 fn own_text(e: &Element) -> String {

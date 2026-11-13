@@ -108,8 +108,7 @@ fn key_times(l: &Layer) -> Vec<Vec<Time>> {
         .iter()
         .map(|p| {
             p.track()
-                .map(|t| t.keys().iter().map(|k| k.time).collect())
-                .unwrap_or_default()
+                .map_or_default(|t| t.keys().iter().map(|k| k.time).collect())
         })
         .collect()
 }

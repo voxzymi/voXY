@@ -416,14 +416,13 @@ impl Panels<'_> {
             let others: Vec<(LayerId, String)> = doc
                 .find_layer(layer.id)
                 .and_then(|(comp, _)| doc.comp(comp))
-                .map(|c| {
+                .map_or_default(|c| {
                     c.layers
                         .iter()
                         .filter(|l| l.id != layer.id)
                         .map(|l| (l.id, l.name.clone()))
                         .collect()
-                })
-                .unwrap_or_default();
+                });
             let refs = ParamRefs {
                 layers: others,
                 luts: doc
@@ -1003,10 +1002,8 @@ impl Panels<'_> {
 
     fn project_ui(&mut self, ui: &mut Ui) {
         // Footage the viewport could not decode, with the reason.
-        let problems: std::collections::HashMap<voxy_core::AssetId, String> = self
-            .viewport
-            .as_ref()
-            .map(|v| {
+        let problems: std::collections::HashMap<voxy_core::AssetId, String> =
+            self.viewport.as_ref().map_or_default(|v| {
                 self.state
                     .history
                     .current()
@@ -1014,8 +1011,7 @@ impl Panels<'_> {
                     .iter()
                     .filter_map(|a| v.media.failure(a.id).map(|e| (a.id, e.to_owned())))
                     .collect()
-            })
-            .unwrap_or_default();
+            });
         crate::project_panel::show(ui, self.state, &problems);
     }
 }
