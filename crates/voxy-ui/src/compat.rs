@@ -111,24 +111,24 @@ pub fn tabs_from_ui_state(state: &Value) -> Option<(Vec<SavedTab>, Option<usize>
     let mut tabs = Vec::new();
     let mut active = None;
     for (index, entry) in list.iter().enumerate() {
-        let path: Vec<NavStep> = entry
-            .get("path")
-            .and_then(Value::as_array)
-            .map(|steps| {
-                steps
-                    .iter()
-                    .filter_map(|s| {
-                        Some(NavStep {
-                            comp: CompId::from(s.get("comp")?.as_u64()?),
-                            via_layer: s
-                                .get("via_layer")
-                                .and_then(Value::as_u64)
-                                .map(LayerId::from),
+        let path: Vec<NavStep> =
+            entry
+                .get("path")
+                .and_then(Value::as_array)
+                .map_or_default(|steps| {
+                    steps
+                        .iter()
+                        .filter_map(|s| {
+                            Some(NavStep {
+                                comp: CompId::from(s.get("comp")?.as_u64()?),
+                                via_layer: s
+                                    .get("via_layer")
+                                    .and_then(Value::as_u64)
+                                    .map(LayerId::from),
+                            })
                         })
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+                        .collect()
+                });
         if path.is_empty() {
             continue;
         }

@@ -120,7 +120,7 @@ impl ParamValues for SnapshotValues {
 
     fn key_times(&self, name: &str) -> Vec<f64> {
         let v = self.values.lock().unwrap_or_else(PoisonError::into_inner);
-        v.get(name).map(|(_, k)| k.clone()).unwrap_or_default()
+        v.get(name).map_or_default(|(_, k)| k.clone())
     }
 
     fn set(&self, name: &str, time: Option<f64>, value: ParamValue) {

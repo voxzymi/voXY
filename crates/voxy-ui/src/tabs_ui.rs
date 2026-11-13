@@ -113,8 +113,8 @@ pub fn show(ui: &mut Ui, state: &mut EditorState) {
                     }
                     Crumb::Hidden { start, end } => {
                         ui.menu_button("…", |ui| {
-                            for i in start..end {
-                                if ui.button(name(tab.path[i].comp)).clicked() {
+                            for (i, step) in tab.path.iter().enumerate().take(end).skip(start) {
+                                if ui.button(name(step.comp)).clicked() {
                                     req.crumb = Some(i);
                                     ui.close();
                                 }

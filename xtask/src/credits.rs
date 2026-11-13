@@ -237,11 +237,7 @@ fn readme(credits: &[&Credit]) -> String {
          | Project | Authors | License | Used for |\n|---|---|---|---|\n",
     );
     for c in credits {
-        let version = c
-            .version
-            .as_ref()
-            .map(|v| format!(" ({v})"))
-            .unwrap_or_default();
+        let version = c.version.as_ref().map_or_default(|v| format!(" ({v})"));
         let _ = writeln!(
             s,
             "| [{}]({}){version} | {} | {} | {} |",
@@ -267,8 +263,7 @@ fn licensing(credits: &[&Credit]) -> String {
         let tag = c
             .version
             .as_ref()
-            .map(|v| format!("tag `{v}`, "))
-            .unwrap_or_default();
+            .map_or_default(|v| format!("tag `{v}`, "));
         let usage = match c.usage {
             Usage::HostApi => {
                 "voXY's host implements this API. The headers are vendored in\n\

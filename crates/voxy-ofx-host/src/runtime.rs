@@ -322,9 +322,8 @@ pub struct InstanceChange {
 
 fn entry(bundle: &Path, p: &PluginDesc) -> PluginEntry {
     let ctx = mapped_context(p);
-    let clips: Vec<String> = ctx
-        .map(|c| c.clips.iter().map(|k| k.name.clone()).collect())
-        .unwrap_or_default();
+    let clips: Vec<String> =
+        ctx.map_or_default(|c| c.clips.iter().map(|k| k.name.clone()).collect());
     let main = [SOURCE, SOURCE_FROM]
         .into_iter()
         .find(|m| clips.iter().any(|c| c == m))
@@ -332,24 +331,18 @@ fn entry(bundle: &Path, p: &PluginDesc) -> PluginEntry {
     PluginEntry {
         bundle: bundle.to_path_buf(),
         identifier: p.identifier.clone(),
-        context: ctx.map(|c| c.context.clone()).unwrap_or_default(),
-        extra: ctx
-            .map(|c| extra_clips(c).map(|k| k.name.clone()).collect())
-            .unwrap_or_default(),
+        context: ctx.map_or_default(|c| c.context.clone()),
+        extra: ctx.map_or_default(|c| extra_clips(c).map(|k| k.name.clone()).collect()),
         main,
         transition: ctx
             .is_some_and(|c| c.context == ofx_str(voxy_ofx_sys::kOfxImageEffectContextTransition)),
-        kinds: ctx
-            .map(|c| c.params.iter().map(|d| (d.name.clone(), d.kind)).collect())
-            .unwrap_or_default(),
-        normalised: ctx
-            .map(|c| {
-                c.params
-                    .iter()
-                    .filter_map(|d| Some((d.name.clone(), normalised_axes(&d.props)?)))
-                    .collect()
-            })
-            .unwrap_or_default(),
+        kinds: ctx.map_or_default(|c| c.params.iter().map(|d| (d.name.clone(), d.kind)).collect()),
+        normalised: ctx.map_or_default(|c| {
+            c.params
+                .iter()
+                .filter_map(|d| Some((d.name.clone(), normalised_axes(&d.props)?)))
+                .collect()
+        }),
     }
 }
 

@@ -145,11 +145,7 @@ impl EditorState {
         self.begin_from_footage(entries);
         if !failures.is_empty() || skipped > 0 {
             // After the success line: say what was left out.
-            let head = self
-                .status
-                .as_ref()
-                .map(|s| s.text.clone())
-                .unwrap_or_default();
+            let head = self.status.as_ref().map_or_default(|s| s.text.clone());
             let mut tail = String::new();
             if skipped > 0 {
                 let f = if skipped == 1 { "file" } else { "files" };

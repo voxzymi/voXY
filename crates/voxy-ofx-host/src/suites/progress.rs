@@ -31,9 +31,7 @@ unsafe fn start(fx: *mut c_void, label: *const c_char, id: *const c_char) -> ofx
         // SAFETY: the caller's contract.
         let (label, id) = unsafe { (c_str(label), c_str(id)) };
         fx.set_progress(Some(Progress {
-            label: label
-                .map(|s| s.to_string_lossy().into_owned())
-                .unwrap_or_default(),
+            label: label.map_or_default(|s| s.to_string_lossy().into_owned()),
             id: id.map(|s| s.to_string_lossy().into_owned()),
             fraction: 0.0,
         }));

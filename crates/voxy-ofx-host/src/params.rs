@@ -372,8 +372,7 @@ impl Param {
             (Shape::Doubles(_), Some(Values::Double(v))) => ParamValue::Doubles(v),
             (Shape::Text, Some(Values::String(v))) => ParamValue::Text(
                 v.first()
-                    .map(|s| s.to_string_lossy().into_owned())
-                    .unwrap_or_default(),
+                    .map_or_default(|s| s.to_string_lossy().into_owned()),
             ),
             // Bytes defaults are copied in when the plugin sets them.
             _ => ParamValue::zero(self.kind),
@@ -463,8 +462,7 @@ impl ParamSet {
                     bytes
                         .iter()
                         .find(|(n, _)| *n == p.name)
-                        .map(|(_, b)| b.clone())
-                        .unwrap_or_default(),
+                        .map_or_default(|(_, b)| b.clone()),
                 ),
                 _ => p.default_value(),
             };
